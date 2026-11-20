@@ -1,0 +1,394 @@
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 2aa4b5d..20f3bc3 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -692,3 +692,15 @@ config ARMSSE
+     select UNIMP
+     select SSE_COUNTER
+     select SSE_TIMER
++
++
++config SONY_A7C
++    bool
++    default y
++    depends on TCG && ARM
++    select DMP_SMAPH
++    select A9MPCORE
++    select ARM_MPTIMER
++    select PL011 # UART
++    select UNIMP
++    select CXD4115_TIMER
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index dc68391..c8f903d 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -85,3 +85,4 @@ arm_common_ss.add(files('boot.c'))
+ 
+ hw_arch += {'arm': arm_ss}
+ hw_common_arch += {'arm': arm_common_ss}
++arm_common_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('sony_a7c.c'))
+diff --git a/hw/char/pl011.c b/hw/char/pl011.c
+index 01335d9..4dfe47b 100644
+--- a/hw/char/pl011.c
++++ b/hw/char/pl011.c
+@@ -466,6 +466,15 @@ static void pl011_write(void *opaque, hwaddr offset,
+         break;
+     case 14: /* UARTIMSC */
+         s->int_enabled = value;
++        if (s->tx_level_irq) {
++            /*
++             * The TX FIFO is always empty here (writes go out at once), so
++             * it is at or below any trigger level: TXRIS is pending, as on
++             * hardware.  Sony's cxd900x0 console waits for it before
++             * writing the first byte.
++             */
++            s->int_level |= INT_TX;
++        }
+         pl011_update(s);
+         break;
+     case 17: /* UARTICR */
+@@ -621,6 +630,7 @@ static const VMStateDescription vmstate_pl011 = {
+ static const Property pl011_properties[] = {
+     DEFINE_PROP_CHR("chardev", PL011State, chr),
+     DEFINE_PROP_BOOL("migrate-clk", PL011State, migrate_clk, true),
++    DEFINE_PROP_BOOL("tx-level-irq", PL011State, tx_level_irq, false),
+ };
+ 
+ static void pl011_init(Object *obj)
+diff --git a/hw/cpu/a9mpcore.c b/hw/cpu/a9mpcore.c
+index 64bebbd..a245819 100644
+--- a/hw/cpu/a9mpcore.c
++++ b/hw/cpu/a9mpcore.c
+@@ -63,8 +63,9 @@ static void a9mp_priv_realize(DeviceState *dev, Error **errp)
+ 
+     cpu0 = qemu_get_cpu(0);
+     cpuobj = OBJECT(cpu0);
+-    if (strcmp(object_get_typename(cpuobj), ARM_CPU_TYPE_NAME("cortex-a9"))) {
+-        /* We might allow Cortex-A5 once we model it */
++    if (strcmp(object_get_typename(cpuobj), ARM_CPU_TYPE_NAME("cortex-a9")) &&
++        strcmp(object_get_typename(cpuobj), ARM_CPU_TYPE_NAME("cortex-a5"))) {
++        /* Allow Cortex-A5 MPCore with A9 MPCore private memory map */
+         error_setg(errp,
+                    "Cortex-A9MPCore peripheral can only use Cortex-A9 CPU");
+         return;
+diff --git a/hw/display/Kconfig b/hw/display/Kconfig
+index 1e95ab2..3b3e039 100644
+--- a/hw/display/Kconfig
++++ b/hw/display/Kconfig
+@@ -149,3 +149,6 @@ config MAC_PVG_PCI
+     bool
+     depends on MAC_PVG && PCI
+     default y if PCI_DEVICES
++
++config DMP_SMAPH
++    bool
+diff --git a/hw/display/meson.build b/hw/display/meson.build
+index 90e6c04..cc5ee6d 100644
+--- a/hw/display/meson.build
++++ b/hw/display/meson.build
+@@ -145,3 +145,4 @@ endif
+ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_lcdc.c'))
+ 
+ modules += { 'hw-display': hw_display_modules }
++system_ss.add(when: 'CONFIG_DMP_SMAPH', if_true: files('dmp_smaph.c', 'dmp_shader.c', 'sony_fbview.c', 'cxd90014_vph.c'))
+diff --git a/hw/display/trace-events b/hw/display/trace-events
+index 52786e6..25e9212 100644
+--- a/hw/display/trace-events
++++ b/hw/display/trace-events
+@@ -224,3 +224,6 @@ apple_gfx_iosfc_unmap_memory(void *a, void *b, void *c, void *d, void *e, void *
+ apple_gfx_iosfc_unmap_memory_region(void* mem, void *region) "unmapping @ %p from memory region %p"
+ apple_gfx_iosfc_raise_irq(uint32_t vector) "vector=0x%x"
+ 
++
++# dmp_smaph.c
++dmp_smaph_job(const char *what, uint64_t addr, uint64_t len) "%s 0x%" PRIx64 " len 0x%" PRIx64
+diff --git a/hw/gpio/meson.build b/hw/gpio/meson.build
+index 7484061..99e7ac3 100644
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -18,3 +18,4 @@ system_ss.add(when: 'CONFIG_STM32L4X5_SOC', if_true: files('stm32l4x5_gpio.c'))
+ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_gpio.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_GPIO', if_true: files('sifive_gpio.c'))
+ system_ss.add(when: 'CONFIG_PCF8574', if_true: files('pcf8574.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_gpio.c'))
+diff --git a/hw/gpio/trace-events b/hw/gpio/trace-events
+index cea896b..a58e3a3 100644
+--- a/hw/gpio/trace-events
++++ b/hw/gpio/trace-events
+@@ -46,3 +46,6 @@ stm32l4x5_gpio_read(char *gpio, uint64_t addr) "GPIO%s addr: 0x%" PRIx64 " "
+ stm32l4x5_gpio_write(char *gpio, uint64_t addr, uint64_t data) "GPIO%s addr: 0x%" PRIx64 " val: 0x%" PRIx64 ""
+ stm32l4x5_gpio_update_idr(char *gpio, uint32_t old_idr, uint32_t new_idr) "GPIO%s from: 0x%x to: 0x%x"
+ stm32l4x5_gpio_pins(char *gpio, uint16_t disconnected, uint16_t high) "GPIO%s disconnected pins: 0x%x levels: 0x%x"
++
++# cxd90014_gpio.c
++cxd90014_gpio_in(int port, uint32_t v) "p%d in 0x%08x"
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index b1d8d8e..62f0d2a 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -161,3 +161,8 @@ system_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa_ec.c'))
+ 
+ # HPPA devices
+ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_evsel.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_sio.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_adc.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_sa.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_p2s.c'))
+diff --git a/hw/misc/trace-events b/hw/misc/trace-events
+index e3f64c0..1821310 100644
+--- a/hw/misc/trace-events
++++ b/hw/misc/trace-events
+@@ -403,3 +403,9 @@ ivshmem_flat_interrupt_peer(uint16_t peer_id, uint16_t vector_id) "Interrupting
+ i2c_echo_event(const char *id, const char *event) "%s: %s"
+ i2c_echo_recv(const char *id, uint8_t data) "%s: recv 0x%02" PRIx8
+ i2c_echo_send(const char *id, uint8_t data) "%s: send 0x%02" PRIx8
++
++# cxd90014_sio.c
++cxd_sio_xfer(int ch, uint32_t len) "ch%d transfer (len-1 %u)"
++cxd_sio_data(int ch, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3) "ch%d fifo %08x %08x %08x %08x"
++cxd_sio_wr(int ch, uint32_t off, uint64_t v) "ch%d wr +0x%03x = 0x%08" PRIx64
++cxd_sio_rd(int ch, uint32_t off, uint32_t v) "ch%d rd +0x%03x -> 0x%08x"
+diff --git a/hw/sd/sd.c b/hw/sd/sd.c
+index 8c29059..3ede93e 100644
+--- a/hw/sd/sd.c
++++ b/hw/sd/sd.c
+@@ -150,6 +150,7 @@ struct SDState {
+     int32_t state;    /* current card state, one of SDCardStates */
+     uint32_t vhs;
+     bool wp_switch;
++    bool sector_addressing;  /* eMMC: sector mode at any capacity */
+     unsigned long *wp_group_bmap;
+     int32_t wp_group_bits;
+     uint64_t size;
+@@ -371,6 +372,17 @@ FIELD(OCR, CARD_POWER_UP,              31,  1)
+                                | R_OCR_CARD_CAPACITY_MASK \
+                                | R_OCR_CARD_POWER_UP_MASK)
+ 
++/*
++ * High-capacity addressing (block address = 512-byte sector).  SD cards
++ * use it above 2 GiB; an eMMC can be told to use it at any size (real
++ * eMMC parts boot in sector mode, and drivers such as Sony's ALFReD
++ * always send sector addresses).
++ */
++static bool sd_sector_addressed(SDState *sd)
++{
++    return sd->size > SDSC_MAX_CAPACITY || sd->sector_addressing;
++}
++
+ static void sd_ocr_powerup(void *opaque)
+ {
+     SDState *sd = opaque;
+@@ -381,7 +393,7 @@ static void sd_ocr_powerup(void *opaque)
+     /* card power-up OK */
+     sd->ocr = FIELD_DP32(sd->ocr, OCR, CARD_POWER_UP, 1);
+ 
+-    if (sd->size > SDSC_MAX_CAPACITY) {
++    if (sd_sector_addressed(sd)) {
+         sd->ocr = FIELD_DP32(sd->ocr, OCR, CARD_CAPACITY, 1);
+     }
+ }
+@@ -511,7 +523,7 @@ static void emmc_set_ext_csd(SDState *sd, uint64_t size)
+     sd->ext_csd[205] = 0x46; /* Min read perf for 4bit@26Mhz */
+     sd->ext_csd[EXT_CSD_CARD_TYPE] = 0b11;
+     sd->ext_csd[EXT_CSD_STRUCTURE] = 2;
+-    sd->ext_csd[EXT_CSD_REV] = 3;
++    sd->ext_csd[EXT_CSD_REV] = 7;
+ 
+     /* Mode segment (RW) */
+     sd->ext_csd[EXT_CSD_PART_CONFIG] = sd->boot_config;
+@@ -528,7 +540,7 @@ static void emmc_set_csd(SDState *sd, uint64_t size)
+     sd->csd[2] = 0x00;
+     sd->csd[3] = (1 << 3) | 3;; /* Maximum bus clock frequency: 100MHz */
+     sd->csd[4] = 0x0f;
+-    if (size <= 2 * GiB) {
++    if (size <= 2 * GiB && !sd->sector_addressing) {
+         /* use 1k blocks */
+         uint32_t csize1k = (size >> (CMULT_SHIFT + 10)) - 1;
+         sd->csd[5] = 0x5a;
+@@ -1781,7 +1793,7 @@ static sd_rsp_type_t sd_cmd_WRITE_SINGLE_BLOCK(SDState *sd, SDRequest req)
+         return sd_r1;
+     }
+ 
+-    if (sd->size <= SDSC_MAX_CAPACITY) {
++    if (!sd_sector_addressed(sd)) {
+         if (sd_wp_addr(sd, addr)) {
+             sd->card_status |= WP_VIOLATION;
+         }
+@@ -1811,7 +1823,7 @@ static sd_rsp_type_t sd_cmd_SET_CLR_WRITE_PROT(SDState *sd, SDRequest req,
+ {
+     uint64_t addr;
+ 
+-    if (sd->size > SDSC_MAX_CAPACITY) {
++    if (sd_sector_addressed(sd)) {
+         return sd_illegal;
+     }
+ 
+@@ -1854,7 +1866,7 @@ static sd_rsp_type_t sd_cmd_SEND_WRITE_PROT(SDState *sd, SDRequest req)
+     uint64_t addr;
+     uint32_t data;
+ 
+-    if (sd->size > SDSC_MAX_CAPACITY) {
++    if (sd_sector_addressed(sd)) {
+         return sd_illegal;
+     }
+ 
+@@ -2042,7 +2054,7 @@ static sd_rsp_type_t sd_cmd_SEND_OP_COND(SDState *sd, SDRequest req)
+         }
+     }
+ 
+-    if (FIELD_EX32(sd->ocr & req.arg, OCR, VDD_VOLTAGE_WINDOW)) {
++    if (FIELD_EX32(sd->ocr & req.arg, OCR, VDD_VOLTAGE_WINDOW) || (sd_is_emmc(sd) && (req.arg & 0x80))) {
+         /*
+          * We accept any voltage.  10000 V is nothing.
+          *
+@@ -2146,7 +2158,7 @@ static sd_rsp_type_t sd_normal_command(SDState *sd, SDRequest req)
+             sd->data_offset = 0;
+             sd->blk_written = 0;
+ 
+-            if (sd->size <= SDSC_MAX_CAPACITY) {
++            if (!sd_sector_addressed(sd)) {
+                 if (sd_wp_addr(sd, sd->data_start)) {
+                     sd->card_status |= WP_VIOLATION;
+                 }
+@@ -2424,7 +2436,7 @@ static void sd_write_byte(SDState *sd, uint8_t value)
+                                   sd->data_start, sd->blk_len)) {
+                 break;
+             }
+-            if (sd->size <= SDSC_MAX_CAPACITY) {
++            if (!sd_sector_addressed(sd)) {
+                 if (sd_wp_addr(sd, sd->data_start)) {
+                     sd->card_status |= WP_VIOLATION;
+                     break;
+@@ -2790,7 +2802,15 @@ static void sd_realize(DeviceState *dev, Error **errp)
+         }
+ 
+         blk_size = blk_getlength(sd->blk);
+-        if (blk_size > 0 && !is_power_of_2(blk_size)) {
++        if (sd_is_emmc(sd) && blk_size > 0) {
++            /* eMMC capacity is a sector count (EXT_CSD SEC_COUNT) */
++            if (blk_size % (1 << HWBLOCK_SHIFT) ||
++                blk_size <= 2 * sd->boot_part_size) {
++                error_setg(errp, "Invalid eMMC image size: must be a multiple "
++                           "of 512 bytes and larger than the boot partitions");
++                return;
++            }
++        } else if (blk_size > 0 && !is_power_of_2(blk_size)) {
+             int64_t blk_size_aligned = pow2ceil(blk_size);
+             char *blk_size_str;
+ 
+@@ -2841,6 +2861,7 @@ static const Property sd_properties[] = {
+ static const Property emmc_properties[] = {
+     DEFINE_PROP_UINT64("boot-partition-size", SDState, boot_part_size, 0),
+     DEFINE_PROP_UINT8("boot-config", SDState, boot_config, 0x0),
++    DEFINE_PROP_BOOL("sector-addressing", SDState, sector_addressing, false),
+ };
+ 
+ static void sdmmc_common_class_init(ObjectClass *klass, const void *data)
+diff --git a/hw/sd/sdhci.c b/hw/sd/sdhci.c
+index 3c897e5..edb05e7 100644
+--- a/hw/sd/sdhci.c
++++ b/hw/sd/sdhci.c
+@@ -993,7 +993,7 @@ static void sdhci_data_transfer(void *opaque)
+ 
+ static bool sdhci_can_issue_command(SDHCIState *s)
+ {
+-    if (!SDHC_CLOCK_IS_ON(s->clkcon) ||
++    if (!(s->clkcon & SDHC_CLOCK_SDCLK_EN) ||
+         (((s->prnsts & SDHC_DATA_INHIBIT) || s->stopped_state) &&
+         ((s->cmdreg & SDHC_CMD_DATA_PRESENT) ||
+         ((s->cmdreg & SDHC_CMD_RESPONSE) == SDHC_CMD_RSP_WITH_BUSY &&
+diff --git a/hw/timer/Kconfig b/hw/timer/Kconfig
+index b3d823c..44c8809 100644
+--- a/hw/timer/Kconfig
++++ b/hw/timer/Kconfig
+@@ -65,3 +65,6 @@ config STELLARIS_GPTM
+ 
+ config AVR_TIMER16
+     bool
++
++config CXD4115_TIMER
++    bool
+diff --git a/hw/timer/meson.build b/hw/timer/meson.build
+index 178321c..cd8a014 100644
+--- a/hw/timer/meson.build
++++ b/hw/timer/meson.build
+@@ -34,3 +34,4 @@ specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
+ 
+ specific_ss.add(when: 'CONFIG_AVR_TIMER16', if_true: files('avr_timer16.c'))
++system_ss.add(when: 'CONFIG_CXD4115_TIMER', if_true: files('cxd4115_timer.c'))
+diff --git a/include/hw/char/pl011.h b/include/hw/char/pl011.h
+index 299ca9b..6ebd117 100644
+--- a/include/hw/char/pl011.h
++++ b/include/hw/char/pl011.h
+@@ -51,6 +51,7 @@ struct PL011State {
+     qemu_irq irq[6];
+     Clock *clk;
+     bool migrate_clk;
++    bool tx_level_irq;
+     const unsigned char *id;
+     /*
+      * Since some users embed this struct directly, we must
+diff --git a/target/arm/tcg/cpu32.c b/target/arm/tcg/cpu32.c
+index a2a23ea..990bbe4 100644
+--- a/target/arm/tcg/cpu32.c
++++ b/target/arm/tcg/cpu32.c
+@@ -454,6 +454,49 @@ static void cortex_a9_initfn(Object *obj)
+     define_arm_cp_regs(cpu, cortexa9_cp_reginfo);
+ }
+ 
++/*
++ * Cortex-A5 MPCore with VFPv4-D16 (no NEON) for BIONZ X bring-up.
++ * Sony vfp_init requires D16 VFP identification.
++ */
++static void cortex_a5_initfn(Object *obj)
++{
++    ARMCPU *cpu = ARM_CPU(obj);
++    ARMISARegisters *isar = &cpu->isar;
++
++    cpu->dtb_compatible = "arm,cortex-a5";
++    set_feature(&cpu->env, ARM_FEATURE_V7);
++    set_feature(&cpu->env, ARM_FEATURE_THUMB2EE);
++    set_feature(&cpu->env, ARM_FEATURE_EL3);
++    set_feature(&cpu->env, ARM_FEATURE_PMU);
++    set_feature(&cpu->env, ARM_FEATURE_V7MP);
++    set_feature(&cpu->env, ARM_FEATURE_CBAR);
++    cpu->midr = 0x410fc051;          /* Cortex-A5 r0p1 */
++    cpu->reset_fpsid = 0x41023051;
++    cpu->isar.mvfr0 = 0x10110221;   /* VFPv4, 16 D-regs */
++    cpu->isar.mvfr1 = 0x01000011;   /* FPHP, no Advanced SIMD */
++    cpu->ctr = 0x80038003;
++    cpu->reset_sctlr = 0x00c50078;
++    SET_IDREG(isar, ID_PFR0, 0x1031);
++    SET_IDREG(isar, ID_PFR1, 0x11);
++    SET_IDREG(isar, ID_DFR0, 0x000);
++    SET_IDREG(isar, ID_AFR0, 0);
++    SET_IDREG(isar, ID_MMFR0, 0x00100103);
++    SET_IDREG(isar, ID_MMFR1, 0x40000000);
++    SET_IDREG(isar, ID_MMFR2, 0x01230000);
++    SET_IDREG(isar, ID_MMFR3, 0x00102111);
++    SET_IDREG(isar, ID_ISAR0, 0x00101111);
++    SET_IDREG(isar, ID_ISAR1, 0x13112111);
++    SET_IDREG(isar, ID_ISAR2, 0x21232041);
++    SET_IDREG(isar, ID_ISAR3, 0x11112131);
++    SET_IDREG(isar, ID_ISAR4, 0x00011142);
++    cpu->isar.dbgdidr = 0x1203f001;
++    SET_IDREG(isar, CLIDR, (1 << 27) | (1 << 24) | 3);
++    cpu->ccsidr[0] = 0xe01fe019; /* 32k L1 dcache. */
++    cpu->ccsidr[1] = 0x201fe019; /* 32k L1 icache. */
++    cpu->isar.reset_pmcr_el0 = 0x41051000;
++    define_arm_cp_regs(cpu, cortexa9_cp_reginfo);
++}
++
+ #ifndef CONFIG_USER_ONLY
+ static uint64_t a15_l2ctlr_read(CPUARMState *env, const ARMCPRegInfo *ri)
+ {
+@@ -1024,6 +1067,7 @@ static const ARMCPUInfo arm_tcg_cpus[] = {
+     { .name = "arm11mpcore", .initfn = arm11mpcore_initfn },
+     { .name = "cortex-a7",   .initfn = cortex_a7_initfn },
+     { .name = "cortex-a8",   .initfn = cortex_a8_initfn },
++    { .name = "cortex-a5",   .initfn = cortex_a5_initfn },
+     { .name = "cortex-a9",   .initfn = cortex_a9_initfn },
+     { .name = "cortex-a15",  .initfn = cortex_a15_initfn },
+     { .name = "cortex-r5",   .initfn = cortex_r5_initfn },

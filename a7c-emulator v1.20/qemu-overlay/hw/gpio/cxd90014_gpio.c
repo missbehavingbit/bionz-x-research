@@ -1,0 +1,285 @@
+/*
+ * CXD90014 GPIO, 18 ports (gpio_p0..p17) at PA 0xF2910000 + 0x100*n.
+ * Register triples (value / set / clear), from the kernel hw_gpio_* code
+ * (docs/RE_INPUT_I2C_POWER.md):
+ *   +0x00/04/08 direction (1 = output [?])   +0x10 pin input data
+ *   +0x20/24/28 input enable                  +0x30/34/38 mode/pull
+ *   +0x40/44/48 output latch
+ * Input data = output latch on output pins, external level on inputs.
+ * External levels are set through qdev GPIO inputs (32 per port, port-major)
+ * by board-level models (keys, sub-micro handshake).  Reset levels: P5.2,
+ * P10.10 and the shutter lines P0.1/P0.11/P0.13/P1.5 high (active-low keys
+ * released).
+ * P0.9 is the E-mount lens-detect line (active low, av-cam 439939C0); it
+ * idles high (empty mount) unless the "lens-attached" property is set
+ * (docs/RE_LENS_EMOUNT.md section 5.1).
+ * Named GPIO outputs "out" (32 per port, port-major) follow the output
+ * latch of each pin, so board models can react to firmware-driven lines
+ * (lens handshake).  The latch is used, not latch AND direction: av-cam
+ * drives the lens handshake P5.4 with the +0x00 direction bit clear
+ * (observed dir5 = 0x4000, out5 = 0x4010), so the direction semantics of
+ * +0x00 are not settled [?].
+ * Pin interrupts (gpiopin_to_irq): p0.0..15 -> GIC 121+pin, p0.16 -> 144,
+ * p1.0..6 -> 137+pin; pulsed on every edge of the pin.
+ *
+ * Origin: a5000-emulator (GPL-2.0-or-later).  sony-a7c: the same block sits
+ * at the same address on the CXD900X0 (kernel /proc/udm/devices: "gpio 18",
+ * 0xF2910000 + 0x100 * n), and the A7C registers the same pin IRQs (liro-129
+ * / 130 / 139 for its sub-micro lines p0.8 / p0.9 / p1.2).  Property
+ * "board" selects the reset levels of the external lines: "a5000" (default,
+ * the a5000 keys and lens detect below) or "a7c" (all low: on the A7C p0.9
+ * is a sub-micro line and its key wiring is not known yet [?]).
+ */
+#include "qemu/osdep.h"
+#include "hw/sysbus.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "qemu/log.h"
+#include "qemu/timer.h"
+#include "qemu/module.h"
+#include "qom/object.h"
+#include "qapi/error.h"
+#include "trace.h"
+
+#define TYPE_CXD_GPIO "cxd90014-gpio"
+OBJECT_DECLARE_SIMPLE_TYPE(GpioState, CXD_GPIO)
+
+#define NPORT 18
+#define NIRQ (17 + 7)
+
+struct GpioState {
+    SysBusDevice parent_obj;
+    MemoryRegion mr;
+    uint32_t dir[NPORT], ien[NPORT], mode[NPORT], out[NPORT], ext[NPORT];
+    uint32_t misc[NPORT][0x100 / 4];
+    qemu_irq irq[NIRQ];
+    qemu_irq out_line[NPORT * 32];
+    QEMUTimer *drop[NIRQ];
+    bool lens_attached;
+    char *board;
+};
+
+static void drop_cb(void *opaque);
+typedef struct { struct GpioState *s; int n; } DropArg;
+static DropArg drop_args[NIRQ];
+
+static uint32_t pin_in(GpioState *s, int p)
+{
+    return (s->out[p] & s->dir[p]) | (s->ext[p] & ~s->dir[p]);
+}
+
+static uint32_t *triple(GpioState *s, int p, hwaddr o)
+{
+    switch (o & 0xf0) {
+    case 0x00: return &s->dir[p];
+    case 0x20: return &s->ien[p];
+    case 0x30: return &s->mode[p];
+    case 0x40: return &s->out[p];
+    }
+    return NULL;
+}
+
+static void pulse(GpioState *s, int port, int pin)
+{
+    int n = -1;
+    if (port == 0 && pin <= 16) {
+        n = pin;                    /* irq[0..16] */
+    } else if (port == 1 && pin <= 6) {
+        n = 17 + pin;               /* irq[17..23] */
+    }
+    if (n >= 0) {
+        /* hold the line 1 ms so a level-configured GIC input sees it */
+        qemu_set_irq(s->irq[n], 1);
+        timer_mod(s->drop[n], qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SCALE_MS);
+    }
+}
+
+static void edges(GpioState *s, int p, uint32_t before)
+{
+    uint32_t ch = before ^ pin_in(s, p);
+    for (int b = 0; ch; b++, ch >>= 1) {
+        if (ch & 1) {
+            pulse(s, p, b);
+        }
+    }
+}
+
+/* report output latch changes on the "out" lines */
+static void drive_edges(GpioState *s, int p, uint32_t before)
+{
+    uint32_t now = s->out[p];
+    uint32_t ch = before ^ now;
+    for (int b = 0; ch; b++, ch >>= 1) {
+        if (ch & 1) {
+            qemu_set_irq(s->out_line[p * 32 + b], (now >> b) & 1);
+        }
+    }
+}
+
+static uint64_t gpio_read(void *opaque, hwaddr off, unsigned size)
+{
+    GpioState *s = opaque;
+    int p = off / 0x100;
+    hwaddr o = off % 0x100;
+    if (o == 0x10) {
+        trace_cxd90014_gpio_in(p, pin_in(s, p));
+        return pin_in(s, p);
+    }
+    uint32_t *t = triple(s, p, o);
+    if (t && (o & 0xf) == 0) {
+        return *t;
+    }
+    return s->misc[p][o / 4];
+}
+
+static void gpio_write(void *opaque, hwaddr off, uint64_t v, unsigned size)
+{
+    GpioState *s = opaque;
+    int p = off / 0x100;
+    hwaddr o = off % 0x100;
+    uint32_t *t = triple(s, p, o);
+    uint32_t before = pin_in(s, p);
+    uint32_t drv = s->out[p];
+    if (t) {
+        switch (o & 0xf) {
+        case 0x0: *t = v; break;
+        case 0x4: *t |= v; break;
+        case 0x8: *t &= ~v; break;
+        default: s->misc[p][o / 4] = v; return;
+        }
+        edges(s, p, before);
+        drive_edges(s, p, drv);
+        return;
+    }
+    s->misc[p][o / 4] = v;
+}
+
+static void drop_cb(void *opaque)
+{
+    DropArg *a = opaque;
+    qemu_set_irq(a->s->irq[a->n], 0);
+}
+
+static void gpio_set_ext(void *opaque, int line, int level)
+{
+    GpioState *s = opaque;
+    int p = line / 32, b = line % 32;
+    uint32_t before = pin_in(s, p);
+    s->ext[p] = (s->ext[p] & ~(1u << b)) | ((uint32_t)!!level << b);
+    edges(s, p, before);
+}
+
+static const MemoryRegionOps gpio_ops = {
+    .read = gpio_read, .write = gpio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+};
+
+static void gpio_reset(DeviceState *dev)
+{
+    GpioState *s = CXD_GPIO(dev);
+    memset(s->dir, 0, sizeof(s->dir)); memset(s->ien, 0, sizeof(s->ien));
+    memset(s->mode, 0, sizeof(s->mode)); memset(s->out, 0, sizeof(s->out));
+    memset(s->misc, 0, sizeof(s->misc));
+    memset(s->ext, 0, sizeof(s->ext));
+    if (s->board && !strcmp(s->board, "a7c")) {
+        /*
+         * A7C (v1.9): input levels of the switched-on camera, from the live
+         * capture live-mem-20261117-115416/hw/gpio_f2910000.bin (in & ~dir,
+         * camera on, shooting screen).  The power-micro lines p0.8 (strobe),
+         * p0.9 and p2.5 are low there and stay driven by the micro HLE.
+         * Opt-in (A7C_GPIO_LIVE=1): tried against the app's OFF_BY_KEY
+         * power-off (upm add_off_factor 0x7), which it did not change.
+         */
+        if (getenv("A7C_GPIO_LIVE")) {
+            s->ext[0] = 0x0000f4ce;
+            s->ext[1] = 0x0000002a;
+            s->ext[2] = 0x0188c000;
+            s->ext[5] = 0x00000510;
+            s->ext[6] = 0x00000006;
+            s->ext[9] = 0x00010000;
+        }
+        return;
+    }
+    s->ext[5] |= 1u << 2;           /* key (active low) released */
+    s->ext[10] |= 1u << 10;         /* key (active low) released */
+    /*
+     * Shutter release, active low (av-cam 436FC740 reads the level and
+     * inverts it): S1 (half press, key 0x1F1) on p0.1 with second interrupt
+     * line p0.11, S2 (full press, key 0xA7) on p1.5 with p0.13 (IRQ set
+     * chosen in 436FCA80: 122/142/132/134).  Idle = high; with these low the
+     * camera booted with the shutter held fully down.
+     */
+    s->ext[0] |= (1u << 1) | (1u << 11) | (1u << 13);
+    s->ext[1] |= 1u << 5;
+    /*
+     * E-mount lens detect P0.9 (Backup F9050C/0D), active low: av-cam
+     * 439939C0 returns !level.  Empty mount = high [hypothesis: board
+     * pull-up; the code only proves that low means "attached"].
+     */
+    if (!s->lens_attached) {
+        s->ext[0] |= 1u << 9;
+    }
+}
+
+/*
+ * Debug (v1.13): qom-set <gpio> poke "P.N=L" drives external input line
+ * pN of port P to level L (0/1), as a button or switch would.  HMP:
+ *   qom-set /machine/gpio poke 0.3=0
+ */
+static void gpio_set_poke(Object *obj, const char *v, Error **errp)
+{
+    unsigned port, pin, level;
+    if (sscanf(v, "%u.%u=%u", &port, &pin, &level) != 3 ||
+        port >= NPORT || pin >= 32) {
+        error_setg(errp, "poke: expected PORT.PIN=LEVEL");
+        return;
+    }
+    gpio_set_ext(obj, port * 32 + pin, level != 0);
+}
+
+static void gpio_instance_post(Object *obj)
+{
+    object_property_add_str(obj, "poke", NULL, gpio_set_poke);
+}
+
+static void gpio_init(Object *obj)
+{
+    GpioState *s = CXD_GPIO(obj);
+    memory_region_init_io(&s->mr, obj, &gpio_ops, s, "cxd-gpio", 0x100 * NPORT);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->mr);
+    for (int i = 0; i < NIRQ; i++) {
+        sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq[i]);
+        drop_args[i].s = s;
+        drop_args[i].n = i;
+        s->drop[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL, drop_cb, &drop_args[i]);
+    }
+    qdev_init_gpio_in(DEVICE(obj), gpio_set_ext, NPORT * 32);
+    qdev_init_gpio_out_named(DEVICE(obj), s->out_line, "out", NPORT * 32);
+    gpio_instance_post(obj);
+}
+
+static const Property gpio_props[] = {
+    DEFINE_PROP_BOOL("lens-attached", GpioState, lens_attached, false),
+    DEFINE_PROP_STRING("board", GpioState, board),
+};
+
+static void gpio_class_init(ObjectClass *klass, const void *data)
+{
+    device_class_set_legacy_reset(DEVICE_CLASS(klass), gpio_reset);
+    device_class_set_props(DEVICE_CLASS(klass), gpio_props);
+}
+
+static const TypeInfo gpio_info = {
+    .name = TYPE_CXD_GPIO,
+    .parent = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(GpioState),
+    .instance_init = gpio_init,
+    .class_init = gpio_class_init,
+};
+
+static void gpio_register(void)
+{
+    type_register_static(&gpio_info);
+}
+type_init(gpio_register)
