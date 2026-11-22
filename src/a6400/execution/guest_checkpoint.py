@@ -184,6 +184,7 @@ def save_checkpoint(probe, filepath: Path) -> int:
         } if hasattr(probe, 'mmap') and probe.mmap else None,
         'stream_mappings': list(probe.stream.mappings) if hasattr(probe, 'stream') and hasattr(probe.stream, 'mappings') else None,
         'stream': probe.stream.to_state() if getattr(probe, 'stream', None) is not None else None,
+        'physical_ram': probe.physical_ram.to_state() if getattr(probe, 'physical_ram', None) is not None else None,
         'display': probe.display.to_state() if getattr(probe, 'display', None) is not None else None,
         'stat64': {
             'bytes': dict(probe.stat64.bytes),
@@ -367,6 +368,13 @@ def restore_checkpoint(probe, filepath: Path, *, exact=False) -> None:
 
     if sub.get('stream') and getattr(probe, 'stream', None) is not None:
         probe.stream.from_state(sub['stream'])
+    if sub.get('physical_ram'):
+        from src.a6400.execution.guest_physical_ram import GuestPhysicalRam
+        ram = GuestPhysicalRam()
+        ram.from_state(probe.mu, sub['physical_ram'])
+        probe.physical_ram = ram
+        if getattr(probe, 'stream', None) is not None:
+            probe.stream.physical_ram = probe.physical_ram
     if sub.get('display') and getattr(probe, 'display', None) is not None:
         probe.display.from_state(sub['display'])
         if not probe.display.installed_ranges:
@@ -405,6 +413,24 @@ def restore_checkpoint(probe, filepath: Path, *, exact=False) -> None:
             getattr(probe, 'nflash_dumps', {}).update(pickle.loads(dev_bytes))
             continue
         setattr(probe, dev_attr, pickle.loads(dev_bytes))
+
+    gles_restored = getattr(probe, 'gles', None)
+    if (gles_restored is not None
+            and getattr(gles_restored, '_shared_backing', None) is not None
+            and getattr(gles_restored, 'shared_mapping', None) is not None):
+        import ctypes
+        s_len = int(gles_restored.shared_mapping['length'])
+        s_ptr = ctypes.addressof(gles_restored._shared_backing)
+        for alias_va in gles_restored.shared_mapping.get(
+                'aliases', [gles_restored.shared_mapping['virtual']]):
+            try:
+                probe.mu.mem_unmap(int(alias_va), s_len)
+            except unicorn.UcError:
+                pass
+            probe.mu.mem_map_ptr(
+                int(alias_va), s_len,
+                unicorn.UC_PROT_READ | unicorn.UC_PROT_WRITE, s_ptr
+            )
 
     if getattr(probe, 'null_page_policy', None) == 'read-zero':
         try:

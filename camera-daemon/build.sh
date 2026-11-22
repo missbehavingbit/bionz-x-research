@@ -27,7 +27,7 @@ mkdir -p build
 
 # Every source in src/ is part of the daemon; there are no optional objects.
 # shellcheck disable=SC2086
-"$CC" $CFLAGS -o "$OUT" src/*.c -static
+"$CC" $CFLAGS -o "$OUT" src/*.c -static -lpthread
 
 chmod 0755 "$OUT"
 

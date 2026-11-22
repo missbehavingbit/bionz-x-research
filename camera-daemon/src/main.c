@@ -45,6 +45,8 @@
 #include "a6400_recovery.h"
 #include "a6400_sdlog.h"
 #include "a6400_uvc.h"
+#include "a6400_uyvy_jpeg.h"
+#include "a6400_wifi.h"
 
 #define A6400_EXIT_CLEAN    0
 #define A6400_EXIT_STAGE    2
@@ -53,7 +55,7 @@
 
 #define A6400_GET_JPEG_TIMEOUT_MS 50u
 #define A6400_MAX_CONSECUTIVE_ERRORS 30u
-#define A6400_PREFIX_MAX 64u
+#define A6400_PREFIX_MAX 2048u
 #define A6400_PATH_MAX 200u
 
 /* ---- process state ------------------------------------------------------- */
@@ -107,6 +109,25 @@ static int g_dmesg_sd;
 static uint32_t g_wait_bound_ms = 1000u;
 static int g_read_prefix;
 static int g_arm_transport;
+static int g_wifi_stream;
+static int g_use_liveview_cmd;
+static int g_probe_pins;
+static int g_splice_scalar;
+static uint8_t g_splice_pin_no = 0xffu; /* 0xff = pin 0 */
+static uint32_t g_splice_downstream_qid;
+static int g_splice_active;
+static int g_probe_yuv;
+static uint32_t g_yuv_stream_type;
+static int g_feed_liveview;
+static uint32_t g_feed_liveview_max;
+static uint16_t g_feed_last_handle;
+static uint32_t g_feed_pushed;
+static uint32_t g_connect_pin_qid;
+static uint32_t g_connect_pin_no;
+static uint32_t g_connect_dst_pin;
+static uint16_t g_wifi_stream_port = A6400_WIFI_DEFAULT_STREAM;
+static uint16_t g_wifi_http_port = A6400_WIFI_DEFAULT_HTTP;
+static uint16_t g_wifi_ctrl_port = A6400_WIFI_DEFAULT_CTRL;
 /* E0358: bounded recovery after a failed stop attestation. On by default
  * because the alternative is a guaranteed battery pull; --no-park-recovery
  * restores the old fail-closed park for a conservative run. */
@@ -121,6 +142,8 @@ struct daemon_rt {
     struct a6400_frame_queue q;
     struct a6400_uvc_dma_meta meta;
     struct a6400_control_ctx *ctl;
+    struct a6400_wifi_server wifi;
+    int wifi_open;
     int uvc_open;
     int uipc_open;
     int init_attempted;
@@ -688,8 +711,16 @@ static int stream_tick(struct daemon_rt *rt, const struct a6400_daemon_config *c
         return 0;
     }
     if (rc == 1) {
+        static uint32_t last_err = 0xFFFFFFFFu;
+        if (jr.err != last_err || g_stats.get_jpeg_empty == 0u ||
+            (g_stats.get_jpeg_empty % 300u) == 0u) {
+            last_err = jr.err;
+            a6400_logf(&g_log, A6400_LOG_INFO,
+                       "get_jpeg_empty count=%u err=%u ready=%u",
+                       g_stats.get_jpeg_empty + 1u, jr.err, (unsigned)jr.ready);
+        }
         g_stats.get_jpeg_empty++;
-        return 0;
+        return 2;
     }
     rt->consecutive_errors = 0;
 
@@ -700,6 +731,28 @@ static int stream_tick(struct daemon_rt *rt, const struct a6400_daemon_config *c
         release_units(rt, 0, jr.handle2);
         g_stats.frames_rejected++;
         return 0;
+    }
+
+    if (g_wifi_stream) {
+        /* Drain any older frames queued inside ScalarInfra so we always send
+         * the freshest possible hardware JPEG (zero FIFO backlog). */
+        int drain;
+        for (drain = 0; drain < 4; drain++) {
+            struct a6400_jpeg_result newer;
+            int drc = a6400_scalar_get_jpeg(&rt->dmm, 5, &newer);
+            if (drc != 0 || !newer.handle1 || newer.handle1 == 0xffffu ||
+                !newer.size_upper_bound) {
+                if (drc == 0) {
+                    (void)a6400_dmm_free_unit(&rt->dmm, newer.handle1);
+                    (void)a6400_dmm_free_unit(&rt->dmm, newer.handle2);
+                }
+                break;
+            }
+            (void)a6400_dmm_free_unit(&rt->dmm, jr.handle1);
+            (void)a6400_dmm_free_unit(&rt->dmm, jr.handle2);
+            jr = newer;
+            g_stats.frames_dropped++;
+        }
     }
 
     rc = a6400_dmm_open_unit(&rt->dmm, jr.handle1, &phys, &mapped);
@@ -737,7 +790,9 @@ static int stream_tick(struct daemon_rt *rt, const struct a6400_daemon_config *c
     cand.prefix = prefix_len ? prefix : NULL;
     cand.prefix_len = prefix_len;
 
-    slot = a6400_frame_admit(&rt->q, &cand, &rt->meta, rt->exp_w, rt->exp_h);
+    slot = a6400_frame_admit(&rt->q, &cand, &rt->meta,
+                             g_wifi_stream ? 0u : rt->exp_w,
+                             g_wifi_stream ? 0u : rt->exp_h);
     g_stats.frames_dropped = rt->q.dropped;
     g_stats.frames_rejected = rt->q.rejected;
     if (slot < 0) {
@@ -750,8 +805,11 @@ static int stream_tick(struct daemon_rt *rt, const struct a6400_daemon_config *c
                            slot, cand.frame_seq);
             else
                 a6400_logf(&g_log, A6400_LOG_WARN,
-                           "admit_rejected rc=%d seq=%u size_bound=%u phys=%u mapped=%u",
-                           slot, cand.frame_seq, jr.size_upper_bound, phys, mapped);
+                           "admit_rejected rc=%d seq=%u size_bound=%u phys=0x%08x mapped=%u "
+                           "p0=%02x%02x%02x%02x%02x%02x%02x%02x",
+                           slot, cand.frame_seq, jr.size_upper_bound, phys, mapped,
+                           prefix[0], prefix[1], prefix[2], prefix[3],
+                           prefix[4], prefix[5], prefix[6], prefix[7]);
         }
         release_units(rt, jr.handle1, jr.handle2);
         return 0;
@@ -762,9 +820,9 @@ static int stream_tick(struct daemon_rt *rt, const struct a6400_daemon_config *c
         a6400_jpeg_parse_dimensions(prefix, prefix_len, &dims) == 0) {
         g_stats.last_width = dims.width;
         g_stats.last_height = dims.height;
-        if (!rt->exp_w) {
-            /* Geometry is discovered from the first real frame, never assumed
-             * from the SET_PATH request (LIVEVIEW_DMA.md:691-697). */
+        if (!rt->exp_w || (g_wifi_stream && (rt->exp_w != dims.width || rt->exp_h != dims.height))) {
+            /* Geometry is discovered from the first real frame, and updated on
+             * photo/movie aspect ratio switches (e.g. 1024x680 <-> 1024x576). */
             rt->exp_w = dims.width;
             rt->exp_h = dims.height;
             g_stats.accept_geometry = 1u;
@@ -772,6 +830,61 @@ static int stream_tick(struct daemon_rt *rt, const struct a6400_daemon_config *c
             log_event("geometry_discovered", "\"width\":%u,\"height\":%u",
                       dims.width, dims.height);
         }
+    }
+
+    if (g_wifi_stream) {
+        static uint8_t wifi_jpg_buf[262144];
+        uint32_t frame_len = jr.size_upper_bound;
+        uint64_t t_start = (uint64_t)a6400_now_ns();
+        uint64_t t_copy = t_start, t_send = t_start;
+        uint32_t actual_len = 0;
+        if (!frame_len || frame_len > mapped)
+            frame_len = mapped;
+        if (frame_len > sizeof wifi_jpg_buf)
+            frame_len = (uint32_t)sizeof wifi_jpg_buf;
+        if (rt->mem_fd >= 0 && frame_len >= 4u) {
+            uint32_t page_off = phys & 0xfffu;
+            uint32_t map_len = (page_off + frame_len + 0xfffu) & ~0xfffu;
+            void *map = mmap(NULL, map_len, PROT_READ, MAP_SHARED,
+                             rt->mem_fd, (off_t)(phys & ~0xfffu));
+            if (map != MAP_FAILED) {
+                uint32_t k;
+                actual_len = frame_len;
+                /* Burst-copy from uncached /dev/mem into cached RAM once. */
+                memcpy(wifi_jpg_buf, (const uint8_t *)map + page_off, frame_len);
+                munmap(map, map_len);
+                for (k = frame_len; k >= 2u; k--) {
+                    if (wifi_jpg_buf[k - 2u] == 0xffu &&
+                        wifi_jpg_buf[k - 1u] == 0xd9u) {
+                        actual_len = k;
+                        break;
+                    }
+                }
+                t_copy = (uint64_t)a6400_now_ns();
+                (void)a6400_wifi_server_send_frame(&rt->wifi, cand.frame_seq,
+                                                   cand.capture_ns, wifi_jpg_buf,
+                                                   actual_len, 1u);
+                t_send = (uint64_t)a6400_now_ns();
+                g_stats.frames_submitted++;
+                g_stats.last_frame_size = actual_len;
+                g_stats.last_frame_seq = cand.frame_seq;
+                g_stats.frames_dropped = (uint32_t)(rt->wifi.stream_dropped + rt->wifi.http_dropped);
+            } else {
+                g_stats.transport_errors++;
+            }
+        }
+        a6400_frame_release(&rt->q, (uint32_t)slot);
+        release_units(rt, jr.handle1, jr.handle2);
+        if (cand.frame_seq >= 20u && cand.frame_seq <= 25u) {
+            uint64_t t_rel = (uint64_t)a6400_now_ns();
+            a6400_logf(&g_log, A6400_LOG_INFO,
+                       "wifi_timing seq=%u bytes=%u copy_us=%llu send_us=%llu rel_us=%llu",
+                       cand.frame_seq, actual_len,
+                       (unsigned long long)((t_copy - t_start) / 1000ull),
+                       (unsigned long long)((t_send - t_copy) / 1000ull),
+                       (unsigned long long)((t_rel - t_send) / 1000ull));
+        }
+        return 0;
     }
 
     {
@@ -874,12 +987,73 @@ static void handle_stream_config(struct daemon_rt *rt,
               (unsigned)cfg->quality);
 }
 
-static int poll_control(struct daemon_rt *rt)
+static void rearm_scalar_pipeline(struct daemon_rt *rt,
+                                  const struct a6400_daemon_config *cfg)
+{
+    int rc;
+    struct a6400_scalar_path_cfg sc;
+
+    if (!rt->uipc_open || !cfg)
+        return;
+    rc = a6400_dmm_set_rule(&rt->dmm, 5, 0);
+    a6400_logf(&g_log, A6400_LOG_INFO, "rearm_dmm_rule_5 status=%d", rc);
+    memset(&sc, 0, sizeof sc);
+    sc.timeout_ms = 1500;
+    rc = a6400_scalar_set_path(&rt->dmm, &sc);
+    a6400_logf(&g_log, A6400_LOG_INFO, "rearm_set_path_reset status=%d", rc);
+    memset(&sc, 0, sizeof sc);
+    sc.enable = 2; /* PinConnect (payload+8 = 6) */
+    sc.rate_fps = (uint32_t)cfg->fps;
+    sc.width = (uint32_t)cfg->path_width;
+    sc.comp_level = (uint32_t)cfg->comp_level;
+    sc.param_val = 50;
+    sc.timeout_ms = 5000;
+    rc = a6400_scalar_set_path(&rt->dmm, &sc);
+    a6400_logf(&g_log, A6400_LOG_INFO,
+               "rearm_set_path_pinconnect status=%d rate=%u width=%u",
+               rc, sc.rate_fps, sc.width);
+    memset(&sc, 0, sizeof sc);
+    sc.enable = 1;
+    sc.rate_fps = (uint32_t)cfg->fps;
+    sc.width = (uint32_t)cfg->path_width;
+    sc.comp_level = (uint32_t)cfg->comp_level;
+    sc.param_val = 50;
+    sc.timeout_ms = 5000;
+    sc.pin_no = g_splice_scalar ? 0xffu : 0u;
+    rc = a6400_scalar_set_path(&rt->dmm, &sc);
+    a6400_logf(&g_log, A6400_LOG_INFO,
+               "rearm_set_path_start status=%d rate=%u width=%u comp=%u",
+               rc, sc.rate_fps, sc.width, sc.comp_level);
+    log_event("rearm_scalar_pipeline", "\"status\":%d,\"rate\":%u,\"width\":%u",
+              rc, sc.rate_fps, sc.width);
+}
+
+static int poll_control(struct daemon_rt *rt,
+                        const struct a6400_daemon_config *cfg)
 {
     int i;
 
     if (!rt->ctl)
         return 0;
+    if (g_wifi_stream && rt->wifi_open) {
+        struct a6400_ctl_action wact;
+        memset(&wact, 0, sizeof wact);
+        (void)a6400_wifi_server_poll(&rt->wifi, rt->ctl, &wact);
+        if (wact.kind == A6400_CTL_ACTION_STREAM_STOP ||
+            wact.kind == A6400_CTL_ACTION_SHUTDOWN_REQUEST) {
+            a6400_logf(&g_log, A6400_LOG_INFO, "wifi_control_stop kind=%d",
+                       (int)wact.kind);
+            g_stop = 1;
+            return 0;
+        }
+        if (wact.kind == A6400_CTL_ACTION_STREAM_START) {
+            log_event("control_stream_start", NULL);
+            if (!g_yuv_stream_type && !g_splice_scalar)
+                rearm_scalar_pipeline(rt, cfg);
+        } else if (wact.kind == A6400_CTL_ACTION_STREAM_CONFIG) {
+            handle_stream_config(rt, &wact.config);
+        }
+    }
     for (i = 0; i < 4; i++) {
         struct a6400_ctl_action act;
         int rc = a6400_control_poll(rt->ctl, &act);
@@ -907,12 +1081,327 @@ static int poll_control(struct daemon_rt *rt)
     return 0;
 }
 
+static const uint8_t *yc_find_section(const uint8_t *base, uint32_t len,
+                                      uint32_t wanted_id)
+{
+    uint32_t count = 0, off = 0, i;
+
+    if (!base || len < 24u)
+        return NULL;
+    memcpy(&count, base + 12, sizeof count);
+    memcpy(&off, base + 16, sizeof off);
+    if (count > 64u)
+        return NULL;
+    for (i = 0; i < count; i++) {
+        uint32_t id = 0, sec_off = 0, next_off = 0;
+
+        if (off > len - 24u)
+            return NULL;
+        memcpy(&id, base + off + 4, sizeof id);
+        if (id == wanted_id) {
+            memcpy(&sec_off, base + off + 12, sizeof sec_off);
+            if (sec_off >= len)
+                return NULL;
+            return base + sec_off;
+        }
+        memcpy(&next_off, base + off + 20, sizeof next_off);
+        off = next_off;
+    }
+    return NULL;
+}
+
+static int find_dmm_handles_by_type(uint32_t want_type, uint16_t *out, int max_n)
+{
+    static char buf[32768];
+    int fd = open("/proc/udm/dmm_units", O_RDONLY);
+    size_t total = 0;
+    int count = 0;
+    char *p, *end;
+
+    if (fd < 0 || !out || max_n <= 0)
+        return 0;
+    while (total + 1u < sizeof buf) {
+        size_t chunk = sizeof buf - 1u - total;
+        ssize_t r;
+
+        if (chunk > 4096u)
+            chunk = 4096u;
+        r = read(fd, buf + total, chunk);
+        if (r <= 0)
+            break;
+        total += (size_t)r;
+    }
+    close(fd);
+    buf[total] = '\0';
+
+    p = buf;
+    end = buf + total;
+    while (p < end && count < max_n) {
+        char *nl = memchr(p, '\n', (size_t)(end - p));
+        unsigned int handle = 0, utype = 0, st = 0, alloc = 0, op = 0;
+        unsigned int rdv = 0, ser = 0, rel = 0, addr = 0, sz = 0;
+        int n;
+
+        if (nl)
+            *nl = '\0';
+        n = sscanf(p, "%x %x %x %x %x %x %x %x %x %x",
+                   &handle, &utype, &st, &alloc, &op,
+                   &rdv, &ser, &rel, &addr, &sz);
+        if (n >= 10 && utype == want_type &&
+            addr >= 0x10000000u && addr < 0x40000000u &&
+            sz >= 4096u && handle >= 1u && handle <= 0xfffeu) {
+            out[count++] = (uint16_t)handle;
+        }
+        if (!nl)
+            break;
+        p = nl + 1;
+    }
+    return count;
+}
+
+static uint16_t find_latest_yc_handle(void)
+{
+    static char buf[32768];
+    int fd = open("/proc/udm/dmm_units", O_RDONLY);
+    size_t total = 0;
+    uint16_t best_handle = 0;
+    uint32_t best_rel = 0;
+    int found = 0;
+    char *p, *end;
+
+    if (fd < 0)
+        return 0;
+    while (total + 1u < sizeof buf) {
+        size_t chunk = sizeof buf - 1u - total;
+        ssize_t r;
+
+        if (chunk > 4096u)
+            chunk = 4096u;
+        r = read(fd, buf + total, chunk);
+        if (r <= 0)
+            break;
+        total += (size_t)r;
+    }
+    close(fd);
+    buf[total] = '\0';
+
+    p = buf;
+    end = buf + total;
+    while (p < end) {
+        char *nl = memchr(p, '\n', (size_t)(end - p));
+        unsigned int handle = 0, utype = 0, st = 0, alloc = 0, op = 0;
+        unsigned int rdv = 0, ser = 0, rel = 0, addr = 0, sz = 0;
+        int n;
+
+        if (nl)
+            *nl = '\0';
+        n = sscanf(p, "%x %x %x %x %x %x %x %x %x %x",
+                   &handle, &utype, &st, &alloc, &op,
+                   &rdv, &ser, &rel, &addr, &sz);
+        if (n >= 10 && utype == 0x000e0b00u && sz >= 0x1000u &&
+            handle >= 1u && handle <= 0xfffeu) {
+            if (!found || (int32_t)(rel - best_rel) > 0) {
+                best_rel = rel;
+                best_handle = (uint16_t)handle;
+                found = 1;
+            }
+        }
+        if (!nl)
+            break;
+        p = nl + 1;
+    }
+    return best_handle;
+}
+
+static void feed_one_liveview_yc(struct daemon_rt *rt)
+{
+    uint16_t handle;
+    uint32_t phys = 0, mapped = 0;
+    uint32_t page, offset, map_len;
+    void *m;
+    const uint8_t *base, *sec0, *sec6;
+    uint8_t flag0 = 0, flag2c = 0;
+    uint32_t yuv_type = 0;
+    uint16_t yuv_handle = 0xffffu, sec6_handle = 0xffffu;
+    uint16_t w = 0, h = 0;
+    int yuv_need_ref = 0, sec6_valid = 0;
+    uint16_t ref_out = 0, yuv_ref_out = 0;
+    int rc;
+
+    if (!rt || !rt->uipc_open || rt->mem_fd < 0)
+        return;
+    if (g_feed_liveview_max && g_feed_pushed >= g_feed_liveview_max)
+        return;
+
+    handle = find_latest_yc_handle();
+    if (!handle) {
+        static int logged_no_yc;
+        if (!logged_no_yc) {
+            logged_no_yc = 1;
+            a6400_logf(&g_log, A6400_LOG_WARN, "feed_yc_no_handle_in_dmm_units");
+        }
+        return;
+    }
+    if (handle == g_feed_last_handle)
+        return;
+
+    rc = a6400_dmm_open_unit(&rt->dmm, handle, &phys, &mapped);
+    if (rc != 0 || !phys || mapped < 0x1000u) {
+        if (g_feed_pushed < 3u)
+            a6400_logf(&g_log, A6400_LOG_WARN,
+                       "feed_yc_open_failed handle=0x%04x rc=%d mapped=%u",
+                       handle, rc, mapped);
+        return;
+    }
+
+    page = phys & ~4095u;
+    offset = phys - page;
+    map_len = (offset + 0x1000u + 4095u) & ~4095u;
+    m = mmap(NULL, map_len, PROT_READ, MAP_SHARED, rt->mem_fd, (off_t)page);
+    if (m == MAP_FAILED) {
+        static int logged_mmap_err;
+        if (!logged_mmap_err) {
+            logged_mmap_err = 1;
+            a6400_logf(&g_log, A6400_LOG_WARN,
+                       "feed_yc_mmap_failed handle=0x%04x phys=0x%08x errno=%d",
+                       handle, phys, errno);
+        }
+        (void)a6400_dmm_close_unit(&rt->dmm, handle);
+        return;
+    }
+
+    base = (const uint8_t *)m + offset;
+    sec0 = yc_find_section(base, 0x1000u, 0u);
+    if (sec0 && (size_t)(sec0 - base) + 48u <= 0x1000u) {
+        flag0 = sec0[0];
+        flag2c = sec0[0x2c];
+        memcpy(&yuv_type, sec0 + 4, sizeof yuv_type);
+        memcpy(&yuv_handle, sec0 + 8, sizeof yuv_handle);
+        memcpy(&w, sec0 + 28, sizeof w);
+        memcpy(&h, sec0 + 32, sizeof h);
+        if (flag2c != 3u && flag0 == 1u &&
+            yuv_handle >= 1u && yuv_handle <= 0xfffeu)
+            yuv_need_ref = 1;
+    }
+    sec6 = yc_find_section(base, 0x1000u, 6u);
+    if (sec6 && (size_t)(sec6 - base) + 0xb0u <= 0x1000u) {
+        memcpy(&sec6_handle, sec6 + 0xac, sizeof sec6_handle);
+        if (sec6_handle >= 1u && sec6_handle <= 0xfffeu)
+            sec6_valid = 1;
+    }
+
+    munmap(m, map_len);
+    (void)a6400_dmm_close_unit(&rt->dmm, handle);
+
+    if (g_feed_pushed < 3u) {
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "feed_yc_desc handle=0x%04x phys=0x%08x %ux%u "
+                   "flag0=%u flag2c=%u yuv_type=0x%08x yuv_h=0x%04x "
+                   "need_ref=%d sec6_h=0x%04x",
+                   handle, phys, w, h, flag0, flag2c, yuv_type, yuv_handle,
+                   yuv_need_ref, sec6_handle);
+    }
+    if (!sec0 || sec6_valid) {
+        if (g_feed_pushed < 3u)
+            a6400_logf(&g_log, A6400_LOG_WARN,
+                       "feed_yc_skip handle=0x%04x sec0=%d sec6_valid=%d",
+                       handle, sec0 ? 1 : 0, sec6_valid);
+        g_feed_last_handle = handle;
+        return;
+    }
+
+    rc = a6400_dmm_ref_unit(&rt->dmm, 0x000e0b00u, handle, &ref_out);
+    if (rc != 0) {
+        a6400_logf(&g_log, A6400_LOG_WARN,
+                   "feed_yc_ref_desc_failed handle=0x%04x rc=%d", handle, rc);
+        return;
+    }
+    if (yuv_need_ref) {
+        rc = a6400_dmm_ref_unit(&rt->dmm, yuv_type, yuv_handle, &yuv_ref_out);
+        if (rc != 0) {
+            a6400_logf(&g_log, A6400_LOG_WARN,
+                       "feed_yc_ref_yuv_failed type=0x%08x h=0x%04x rc=%d",
+                       yuv_type, yuv_handle, rc);
+            (void)a6400_dmm_free_unit(&rt->dmm, handle);
+            return;
+        }
+    }
+
+    rc = a6400_scalar_push_yc(&rt->dmm, handle, 0x000e0b00u);
+    if (rc != 0) {
+        a6400_logf(&g_log, A6400_LOG_WARN,
+                   "feed_yc_push_failed handle=0x%04x rc=%d", handle, rc);
+        if (yuv_need_ref)
+            (void)a6400_dmm_free_unit(&rt->dmm, yuv_handle);
+        (void)a6400_dmm_free_unit(&rt->dmm, handle);
+        return;
+    }
+
+    g_feed_last_handle = handle;
+    g_feed_pushed++;
+    if (g_feed_pushed <= 3u) {
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "feed_yc_pushed n=%u handle=0x%04x ref_out=0x%04x yuv_ref_out=0x%04x",
+                   g_feed_pushed, handle, ref_out, yuv_ref_out);
+    }
+}
+
+static int apply_scalar_splice(struct daemon_rt *rt,
+                               const struct a6400_daemon_config *cfg,
+                               const char *reason)
+{
+    uint32_t w[8];
+    uint32_t down_qid = 0x005a0048u;
+    uint32_t i;
+    uint8_t pno = (g_splice_pin_no == 0xffu) ? 0u : g_splice_pin_no;
+    int rc;
+
+    /* Check which downstream display queue is connected (w[5] == 0 means connected).
+     * Prefer 0x005a0048:2 (LiveView Display) when connected; fall back to 0x00b201aa:0. */
+    memset(w, 0, sizeof w);
+    if (a6400_df_get_pin_info(&rt->uipc, 0x005a0048u, 0u, 1u, 2u, w, 500) == 0 &&
+        w[5] == 0u) {
+        down_qid = 0x005a0048u;
+    } else if (a6400_df_get_pin_info(&rt->uipc, 0x00b201aau, 0u, 1u, 0u, w, 500) == 0 &&
+               w[5] == 0u) {
+        down_qid = 0x00b201aau;
+    }
+    g_splice_downstream_qid = down_qid;
+    for (i = 0; i < 2u; i++) {
+        uint32_t dst_pin_no = (down_qid == 0x00b201aau) ? i : (i == 0u ? 0u : 2u);
+        uint32_t src_isp[4]    = { 0u, 2u, i, 0x00050004u };
+        uint32_t dst_scalar[4] = { 0u, 1u, i, 0x01670464u };
+        uint32_t src_scalar[4] = { 0u, 2u, i, 0x01670464u };
+        uint32_t dst_disp[4]   = { 0u, 1u, dst_pin_no, down_qid };
+        uint32_t st1 = 0xffffffffu, st2 = 0xffffffffu, st3 = 0xffffffffu;
+        int rc1 = a6400_df_pin_disconnect(&rt->uipc, down_qid, 0u, 1u, dst_pin_no, &st1, 1500);
+        int rc2 = a6400_df_pin_connect(&rt->uipc, 0x00050004u, src_isp, dst_scalar, &st2, 1500);
+        int rc3 = a6400_df_pin_connect(&rt->uipc, 0x01670464u, src_scalar, dst_disp, &st3, 1500);
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "splice_scalar reason=%s pin=%u dst=0x%08x:%u dis=(%d,0x%x) isp2sc=(%d,0x%x) sc2disp=(%d,0x%x)",
+                   reason ? reason : "init", i, down_qid, dst_pin_no,
+                   rc1, st1, rc2, st2, rc3, st3);
+    }
+    g_splice_active = 1;
+    rc = a6400_scalar_set_mode_0464(&rt->dmm, 0x20u,
+                                    (uint32_t)cfg->fps,
+                                    (uint32_t)cfg->path_width,
+                                    (uint8_t)cfg->comp_level,
+                                    pno, 3000);
+    a6400_logf(&g_log, A6400_LOG_INFO,
+               "scalar_mode_0464 reason=%s mode=0x20 width=%u comp=%u pin=%u rc=%d",
+               reason ? reason : "init", cfg->path_width, cfg->comp_level, pno, rc);
+    return rc;
+}
+
 static int stream_loop(struct daemon_rt *rt, const struct a6400_daemon_config *cfg)
 {
     uint64_t period_ns = 1000000000ull / (uint64_t)cfg->fps;
     uint64_t deadline = (uint64_t)a6400_now_ns();
     uint64_t end_ns = 0;
     uint64_t next_report = 0;
+    uint64_t last_resplice_ns = deadline;
+    uint32_t empty_streak = 0;
 
     if (cfg->duration_s > 0)
         end_ns = deadline + (uint64_t)cfg->duration_s * 1000000000ull;
@@ -927,42 +1416,71 @@ static int stream_loop(struct daemon_rt *rt, const struct a6400_daemon_config *c
         if (end_ns && (uint64_t)a6400_now_ns() >= end_ns)
             break;
 
-        if (stream_tick(rt, cfg))
-            return 1;
-        (void)poll_control(rt);
-        g_loop_ticks++;
-        /* E0356: mirror the kernel [a6400_*] trace to the SD card every ~150
-         * ticks (about 5 s at 30 fps) so a later hang/power cycle cannot lose
-         * the CLASS/START evidence. Bounded; failures are counted. */
-        if (g_dmesg_sd && g_sd.mounted && (g_loop_ticks % 150u) == 0u)
-            (void)a6400_sd_flush_kernel_trace(&g_sd);
-
-        if (g_stats_interval_s && (uint64_t)a6400_now_ns() >= next_report) {
-            log_event("stats",
-                      "\"captured\":%u,\"submitted\":%u,\"dropped\":%u,"
-                      "\"rejected\":%u,\"transport_errors\":%u,\"polls\":%u,"
-                      "\"empty\":%u,\"wait_max_ms\":%u",
-                      g_stats.frames_captured, g_stats.frames_submitted,
-                      g_stats.frames_dropped, g_stats.frames_rejected,
-                      g_stats.transport_errors, g_stats.get_jpeg_polls,
-                      g_stats.get_jpeg_empty, g_stats.wait_ms_max);
-            if (g_dmesg_sd && g_sd.mounted)
-                (void)a6400_sd_flush_kernel_trace(&g_sd);
-            (void)write_receipt();
-            next_report += (uint64_t)g_stats_interval_s * 1000000000ull;
-        }
-
-        /* Absolute CLOCK_MONOTONIC deadlines only; never a relative sleep. */
-        deadline += period_ns;
+        if (g_feed_liveview)
+            feed_one_liveview_yc(rt);
         {
-            uint64_t now = (uint64_t)a6400_now_ns();
+            int tick_rc = stream_tick(rt, cfg);
+            if (tick_rc == 1)
+                return 1;
+            if (tick_rc == 2) {
+                empty_streak++;
+                /* Auto-recover after Photo <-> Movie <-> Playback mode switches
+                 * that rebuild the DataflowInfra graph and detach our splice. */
+                if (g_splice_scalar && empty_streak >= 400u) {
+                    uint64_t now = (uint64_t)a6400_now_ns();
+                    if (now - last_resplice_ns >= 2000000000ull) {
+                        last_resplice_ns = now;
+                        empty_streak = 0;
+                        (void)apply_scalar_splice(rt, cfg, "auto_resplice");
+                    }
+                }
+            } else {
+                empty_streak = 0;
+            }
+            (void)poll_control(rt, cfg);
+            g_loop_ticks++;
+            /* E0356: mirror the kernel [a6400_*] trace to the SD card every ~150
+             * ticks (about 5 s at 30 fps) so a later hang/power cycle cannot lose
+             * the CLASS/START evidence. Bounded; failures are counted. */
+            if (g_dmesg_sd && g_sd.mounted && (g_loop_ticks % 150u) == 0u)
+                (void)a6400_sd_flush_kernel_trace(&g_sd);
 
-            if (now >= deadline) {
-                uint64_t missed = 1u + (now - deadline) / period_ns;
-                uint32_t add = missed > 0xffffffffu ? 0xffffffffu : (uint32_t)missed;
+            if (g_stats_interval_s && (uint64_t)a6400_now_ns() >= next_report) {
+                log_event("stats",
+                          "\"captured\":%u,\"submitted\":%u,\"dropped\":%u,"
+                          "\"rejected\":%u,\"transport_errors\":%u,\"polls\":%u,"
+                          "\"empty\":%u,\"wait_max_ms\":%u",
+                          g_stats.frames_captured, g_stats.frames_submitted,
+                          g_stats.frames_dropped, g_stats.frames_rejected,
+                          g_stats.transport_errors, g_stats.get_jpeg_polls,
+                          g_stats.get_jpeg_empty, g_stats.wait_ms_max);
+                if (g_dmesg_sd && g_sd.mounted)
+                    (void)a6400_sd_flush_kernel_trace(&g_sd);
+                (void)write_receipt();
+                next_report += (uint64_t)g_stats_interval_s * 1000000000ull;
+            }
 
-                g_deadline_misses += add;
-                deadline = now; /* re-base instead of bursting to catch up */
+            if (g_wifi_stream) {
+                /* GET_JPEG is non-blocking: sleeping a full 33 ms on empty causes
+                 * 29.97 Hz / 30 Hz aliasing (15 FPS). Poll every 2 ms on empty and
+                 * 4 ms after a delivered frame so every hardware JPEG is captured
+                 * within <2 ms of arrival. */
+                uint64_t now = (uint64_t)a6400_now_ns();
+                deadline = now + (tick_rc == 2 ? 1000000ull : 2000000ull);
+            } else {
+                /* Absolute CLOCK_MONOTONIC deadlines only; never a relative sleep. */
+                deadline += period_ns;
+                {
+                    uint64_t now = (uint64_t)a6400_now_ns();
+
+                    if (now >= deadline) {
+                        uint64_t missed = 1u + (now - deadline) / period_ns;
+                        uint32_t add = missed > 0xffffffffu ? 0xffffffffu : (uint32_t)missed;
+
+                        g_deadline_misses += add;
+                        deadline = now; /* re-base instead of bursting to catch up */
+                    }
+                }
             }
         }
         ts.tv_sec = (time_t)(deadline / 1000000000ull);
@@ -1081,6 +1599,10 @@ static void usage(const char *argv0)
         "  --control-ack PATH    ack file (default /tmp_bt/a6400_ctrl.ack)\n"
         "  --dry-run             discovery/validation only; no destructive step\n"
         "  --arm-transport       REQUIRED for freeze/INIT/REG_BUF/ENABLE/UPDATE/SET_PATH\n"
+        "  --wifi-stream         stream 720p30 MJPEG + controls over TCP/HTTP (no USB UVC)\n"
+        "  --wifi-stream-port N  TCP binary frame port (default 9640, 0=off)\n"
+        "  --wifi-http-port N    HTTP MJPEG port (default 8080, 0=off)\n"
+        "  --wifi-ctrl-port N    TCP control port (default 9641, 0=off)\n"
         "  --verbose             debug logging\n"
         "\n"
         "Session:\n"
@@ -1135,6 +1657,42 @@ static int parse_argv(int argc, char **argv, struct a6400_daemon_config *cfg)
             cfg->dry_run = 1;
         } else if (!strcmp(a, "--arm-transport")) {
             g_arm_transport = 1;
+        } else if (!strcmp(a, "--wifi-stream")) {
+            g_wifi_stream = 1;
+        } else if (!strcmp(a, "--use-liveview-cmd")) {
+            g_use_liveview_cmd = 1;
+        } else if (!strcmp(a, "--probe-pins")) {
+            g_probe_pins = 1;
+        } else if (!strcmp(a, "--splice-scalar")) {
+            g_splice_scalar = 1;
+            g_read_prefix = 1;
+            g_splice_pin_no = 1u;
+        } else if (!strcmp(a, "--pin-no") && i + 1 < argc) {
+            int pv = atoi(argv[++i]);
+            g_splice_pin_no = (pv == 0) ? 0xffu : (uint8_t)pv;
+        } else if (!strcmp(a, "--probe-yuv")) {
+            g_probe_yuv = 1;
+        } else if (!strcmp(a, "--yuv-stream") && i + 1 < argc) {
+            g_yuv_stream_type = (uint32_t)strtoul(argv[++i], NULL, 0);
+            g_wifi_stream = 1;
+        } else if (!strcmp(a, "--feed-liveview")) {
+            g_feed_liveview = 1;
+        } else if (!strcmp(a, "--feed-liveview-max") && i + 1 < argc) {
+            g_feed_liveview = 1;
+            g_feed_liveview_max = (uint32_t)strtoul(argv[++i], NULL, 0);
+        } else if (!strcmp(a, "--connect-pin") && i + 1 < argc) {
+            const char *spec = argv[++i];
+            const char *c1 = strchr(spec, ':');
+            const char *c2 = c1 ? strchr(c1 + 1, ':') : NULL;
+            g_connect_pin_qid = (uint32_t)strtoul(spec, NULL, 0);
+            g_connect_pin_no = c1 ? (uint32_t)strtoul(c1 + 1, NULL, 0) : 0u;
+            g_connect_dst_pin = c2 ? (uint32_t)strtoul(c2 + 1, NULL, 0) : 0u;
+        } else if (!strcmp(a, "--wifi-stream-port") && i + 1 < argc) {
+            g_wifi_stream_port = (uint16_t)atoi(argv[++i]);
+        } else if (!strcmp(a, "--wifi-http-port") && i + 1 < argc) {
+            g_wifi_http_port = (uint16_t)atoi(argv[++i]);
+        } else if (!strcmp(a, "--wifi-ctrl-port") && i + 1 < argc) {
+            g_wifi_ctrl_port = (uint16_t)atoi(argv[++i]);
         } else if (!strcmp(a, "--wait-pcremote")) {
             cfg->wait_pcremote = 1;
         } else if (!strcmp(a, "--read-prefix")) {
@@ -1306,6 +1864,24 @@ static void recovery_close(struct daemon_rt *rt)
         rt->mem_fd = -1;
     }
     if (rt->uipc_open) {
+        if (g_splice_active && g_splice_downstream_qid) {
+            uint32_t i;
+            int mrc = a6400_scalar_set_mode_0464(&rt->dmm, 0x01u, 30u, 1024u, 5u, 1u, 1500);
+            a6400_logf(&g_log, A6400_LOG_INFO, "scalar_mode_0464_stop rc=%d", mrc);
+            for (i = 0; i < 2u; i++) {
+                uint32_t dst_pin_no = (g_splice_downstream_qid == 0x00b201aau) ? i : (i == 0u ? 0u : 2u);
+                uint32_t src_isp[4] = { 0u, 2u, i, 0x00050004u };
+                uint32_t dst_disp[4] = { 0u, 1u, dst_pin_no, g_splice_downstream_qid };
+                uint32_t st1 = 0, st2 = 0, st3 = 0;
+                (void)a6400_df_pin_disconnect(&rt->uipc, g_splice_downstream_qid, 0u, 1u, dst_pin_no, &st1, 1500);
+                (void)a6400_df_pin_disconnect(&rt->uipc, 0x01670464u, 0u, 1u, i, &st2, 1500);
+                (void)a6400_df_pin_connect(&rt->uipc, 0x00050004u, src_isp, dst_disp, &st3, 1500);
+                a6400_logf(&g_log, A6400_LOG_INFO,
+                           "splice_restore pin=%u dst=0x%08x:%u st1=0x%x st2=0x%x st3=0x%x",
+                           i, g_splice_downstream_qid, dst_pin_no, st1, st2, st3);
+            }
+            g_splice_active = 0;
+        }
         a6400_uipc_close(&rt->uipc);
         rt->uipc_open = 0;
     }
@@ -1438,6 +2014,13 @@ static void teardown(struct daemon_rt *rt, const struct a6400_daemon_config *cfg
         stop_cfg.timeout_ms = 1500;
         rc = a6400_scalar_set_path(&rt->dmm, &stop_cfg);
         a6400_logf(&g_log, A6400_LOG_INFO, "set_path_stop status=%d", rc);
+        if (g_connect_pin_qid) {
+            uint32_t st1 = 0, st2 = 0;
+            (void)a6400_df_pin_disconnect(&rt->uipc, g_connect_pin_qid, 0u, 2u, g_connect_pin_no, &st1, 1000);
+            (void)a6400_df_pin_disconnect(&rt->uipc, 0x01670464u, 0u, 1u, g_connect_dst_pin, &st2, 1000);
+            a6400_logf(&g_log, A6400_LOG_INFO, "pin_disconnect q=0x%08x st1=0x%x st2=0x%x",
+                       g_connect_pin_qid, st1, st2);
+        }
 
         /* 2. Restore the default DMM allocation rule. */
         log_destructive("dmm_rule_0");
@@ -1449,6 +2032,12 @@ static void teardown(struct daemon_rt *rt, const struct a6400_daemon_config *cfg
         log_destructive("uvc_unreg");
         rc = a6400_uvc_unreg(&rt->uvc);
         a6400_logf(&g_log, A6400_LOG_INFO, "uvc_unreg rc=%d", rc);
+    }
+
+    if (rt->wifi_open) {
+        a6400_wifi_server_close(&rt->wifi);
+        rt->wifi_open = 0;
+        a6400_logf(&g_log, A6400_LOG_INFO, "wifi_server_closed");
     }
 
     /* 3. STOP plus the all-zero session-state attestation. This is the gate
@@ -1607,6 +2196,24 @@ static void teardown(struct daemon_rt *rt, const struct a6400_daemon_config *cfg
         rt->mem_fd = -1;
     }
     if (rt->uipc_open) {
+        if (g_splice_active && g_splice_downstream_qid) {
+            uint32_t i;
+            int mrc = a6400_scalar_set_mode_0464(&rt->dmm, 0x01u, 30u, 1024u, 5u, 1u, 1500);
+            a6400_logf(&g_log, A6400_LOG_INFO, "scalar_mode_0464_stop rc=%d", mrc);
+            for (i = 0; i < 2u; i++) {
+                uint32_t dst_pin_no = (g_splice_downstream_qid == 0x00b201aau) ? i : (i == 0u ? 0u : 2u);
+                uint32_t src_isp[4] = { 0u, 2u, i, 0x00050004u };
+                uint32_t dst_disp[4] = { 0u, 1u, dst_pin_no, g_splice_downstream_qid };
+                uint32_t st1 = 0, st2 = 0, st3 = 0;
+                (void)a6400_df_pin_disconnect(&rt->uipc, g_splice_downstream_qid, 0u, 1u, dst_pin_no, &st1, 1500);
+                (void)a6400_df_pin_disconnect(&rt->uipc, 0x01670464u, 0u, 1u, i, &st2, 1500);
+                (void)a6400_df_pin_connect(&rt->uipc, 0x00050004u, src_isp, dst_disp, &st3, 1500);
+                a6400_logf(&g_log, A6400_LOG_INFO,
+                           "splice_restore pin=%u dst=0x%08x:%u st1=0x%x st2=0x%x st3=0x%x",
+                           i, g_splice_downstream_qid, dst_pin_no, st1, st2, st3);
+            }
+            g_splice_active = 0;
+        }
         a6400_uipc_close(&rt->uipc);
         rt->uipc_open = 0;
     }
@@ -1789,6 +2396,35 @@ int a6400_daemon_run(const struct a6400_daemon_config *cfg)
         (void)sigaction(SIGINT, &sa, NULL);
         (void)sigaction(SIGTERM, &sa, NULL);
         (void)signal(SIGPIPE, SIG_IGN);
+    }
+
+    if (g_wifi_stream) {
+        if (cfg->dry_run || !g_arm_transport) {
+            code = stage_fail("wifi_stream", A6400_EXIT_REFUSED,
+                              "wifi-stream requires --arm-transport (and not --dry-run)");
+            goto finish;
+        }
+        rc = a6400_wifi_server_open(&rt.wifi, g_wifi_stream_port,
+                                    g_wifi_http_port, g_wifi_ctrl_port);
+        if (rc != 0) {
+            code = stage_fail("wifi_open", A6400_EXIT_STAGE,
+                              "wifi server open failed rc=%d", rc);
+            goto finish;
+        }
+        rt.wifi_open = 1;
+        rt.meta.slot_size = 262144u;
+        rt.meta.max_frame_payload = 262144u - A6400_UVC_HEADER_SIZE;
+        rt.meta.total_size = 262144u * 2u;
+        /* Non-zero, non-wrapping, disjoint from System RAM DMM frames. */
+        rt.meta.phys_addr = 0xf0000000u;
+        g_stats.slot_size = rt.meta.slot_size;
+        g_stats.max_frame_payload = rt.meta.max_frame_payload;
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "wifi_server_open stream=%u http=%u ctrl=%u",
+                   (unsigned)rt.wifi.bound_stream_port,
+                   (unsigned)rt.wifi.bound_http_port,
+                   (unsigned)rt.wifi.bound_ctrl_port);
+        goto wifi_after_uvc;
     }
 
     /* --- device open (always; read-only discovery is the whole point of
@@ -2008,6 +2644,7 @@ int a6400_daemon_run(const struct a6400_daemon_config *cfg)
     }
     rt.enable_ok = 1;
 
+wifi_after_uvc:
     /* --- control FIFO ----------------------------------------------------- */
     g_stage = "control";
     if (open_control(&rt, cfg) != 0) {
@@ -2027,6 +2664,257 @@ int a6400_daemon_run(const struct a6400_daemon_config *cfg)
     rt.uipc_open = 1;
     rt.dmm.uipc = &rt.uipc;
 
+    if (g_probe_pins) {
+        static const uint32_t qs[] = {
+            0x00050004u, 0x0058003fu, 0x0059000eu,
+            0x005700f9u, 0x005a0048u, 0x00b201aau
+        };
+        uint32_t w[8];
+        uint32_t pin, qi;
+        for (pin = 0; pin < 3; pin++) {
+            rc = a6400_df_get_pin_info(&rt.uipc, 0x01670464u, 0, 1, pin, w, 300);
+            printf("PIN_INFO q=0x01670464 dir=1 pin=%u rc=%d w=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                   pin, rc, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+        }
+        for (pin = 0; pin < 3; pin++) {
+            rc = a6400_df_get_pin_info(&rt.uipc, 0x01670464u, 0, 2, pin, w, 300);
+            printf("PIN_INFO q=0x01670464 dir=2 pin=%u rc=%d w=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                   pin, rc, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+        }
+        for (qi = 0; qi < sizeof(qs) / sizeof(qs[0]); qi++) {
+            uint32_t dir;
+            for (dir = 1; dir <= 2; dir++) {
+                for (pin = 0; pin < 3; pin++) {
+                    rc = a6400_df_get_pin_info(&rt.uipc, qs[qi], 0, dir, pin, w, 300);
+                    if (rc == 0)
+                        printf("PIN_INFO q=0x%08x dir=%u pin=%u rc=%d w=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                               qs[qi], dir, pin, rc, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                }
+            }
+        }
+        fflush(stdout);
+        a6400_uipc_close(&rt.uipc);
+        rt.uipc_open = 0;
+        if (rt.wifi_open) {
+            a6400_wifi_server_close(&rt.wifi);
+            rt.wifi_open = 0;
+        }
+        return 0;
+    }
+
+    if (g_probe_yuv) {
+        static const uint32_t types[] = {
+            0x000002c5u, 0x00030700u, 0x00000298u, 0x000001b9u, 0x00000296u
+        };
+        uint32_t ti;
+        rt.mem_fd = open("/dev/mem", O_RDONLY | O_CLOEXEC);
+        for (ti = 0; ti < sizeof(types) / sizeof(types[0]); ti++) {
+            uint16_t hs[8];
+            int cnt = find_dmm_handles_by_type(types[ti], hs, 8);
+            if (cnt <= 0) {
+                printf("YUV_PROBE type=0x%08x count=0\n", types[ti]);
+                continue;
+            }
+            {
+                uint32_t phys = 0, mapped = 0;
+                int orc = a6400_dmm_open_unit(&rt.dmm, hs[0], &phys, &mapped);
+                if (orc != 0 || !phys || mapped < 4096u || rt.mem_fd < 0) {
+                    printf("YUV_PROBE type=0x%08x count=%d h=0x%04x open_rc=%d\n",
+                           types[ti], cnt, hs[0], orc);
+                    continue;
+                }
+                {
+                    uint32_t page = phys & ~4095u;
+                    uint32_t off = phys - page;
+                    uint32_t mlen = (off + mapped + 4095u) & ~4095u;
+                    void *m = mmap(NULL, mlen, PROT_READ, MAP_SHARED,
+                                   rt.mem_fd, (off_t)page);
+                    if (m != MAP_FAILED) {
+                        const uint8_t *b = (const uint8_t *)m + off;
+                        uint8_t s1[4096], s2[4096];
+                        uint32_t mid = mapped / 2u;
+                        uint32_t k, diff = 0, nonzero = 0;
+                        struct timespec ts = { 0, 150000000L };
+                        if (mid + 4096u > mapped)
+                            mid = 0;
+                        memcpy(s1, b + mid, sizeof s1);
+                        nanosleep(&ts, NULL);
+                        memcpy(s2, b + mid, sizeof s2);
+                        for (k = 0; k < sizeof s1; k++) {
+                            if (s1[k] != s2[k])
+                                diff++;
+                            if (s2[k] != 0)
+                                nonzero++;
+                        }
+                        printf("YUV_PROBE type=0x%08x count=%d h=0x%04x phys=0x%08x "
+                               "size=%u diff=%u/4096 nz=%u/4096 "
+                               "b0=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                               types[ti], cnt, hs[0], phys, mapped, diff, nonzero,
+                               s2[0], s2[1], s2[2], s2[3], s2[4], s2[5], s2[6], s2[7]);
+                        munmap(m, mlen);
+                    }
+                    (void)a6400_dmm_close_unit(&rt.dmm, hs[0]);
+                }
+            }
+        }
+        fflush(stdout);
+        if (rt.mem_fd >= 0) {
+            close(rt.mem_fd);
+            rt.mem_fd = -1;
+        }
+        a6400_uipc_close(&rt.uipc);
+        rt.uipc_open = 0;
+        if (rt.wifi_open) {
+            a6400_wifi_server_close(&rt.wifi);
+            rt.wifi_open = 0;
+        }
+        return 0;
+    }
+
+    if (g_yuv_stream_type) {
+        uint16_t hs[8];
+        void *maps[8];
+        uint32_t mlens[8], offs[8], sizes[8];
+        uint8_t prev_fp[8][64];
+        int cnt, k, mapped_cnt = 0;
+        uint32_t seq = 0;
+        uint64_t period_ns = 1000000000ull / (uint64_t)cfg->fps;
+        uint64_t deadline = (uint64_t)a6400_now_ns();
+        uint64_t end_ns = cfg->duration_s > 0
+            ? deadline + (uint64_t)cfg->duration_s * 1000000000ull : 0;
+
+        memset(maps, 0, sizeof maps);
+        memset(prev_fp, 0, sizeof prev_fp);
+        rt.mem_fd = open("/dev/mem", O_RDONLY | O_CLOEXEC);
+        cnt = find_dmm_handles_by_type(g_yuv_stream_type, hs, 8);
+        for (k = 0; k < cnt; k++) {
+            uint32_t phys = 0, mapped = 0;
+            if (a6400_dmm_open_unit(&rt.dmm, hs[k], &phys, &mapped) == 0 &&
+                phys && mapped >= 4096u && rt.mem_fd >= 0) {
+                uint32_t page = phys & ~4095u;
+                uint32_t off = phys - page;
+                uint32_t mlen = (off + mapped + 4095u) & ~4095u;
+                void *m = mmap(NULL, mlen, PROT_READ, MAP_SHARED,
+                               rt.mem_fd, (off_t)page);
+                if (m != MAP_FAILED) {
+                    maps[mapped_cnt] = m;
+                    mlens[mapped_cnt] = mlen;
+                    offs[mapped_cnt] = off;
+                    sizes[mapped_cnt] = mapped;
+                    hs[mapped_cnt] = hs[k];
+                    mapped_cnt++;
+                } else {
+                    (void)a6400_dmm_close_unit(&rt.dmm, hs[k]);
+                }
+            }
+        }
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "yuv_stream_open type=0x%08x buffers=%d size=%u fps=%d",
+                   g_yuv_stream_type, mapped_cnt,
+                   mapped_cnt > 0 ? sizes[0] : 0u, cfg->fps);
+        if (mapped_cnt > 0) {
+            int last_idx = 0;
+            while (!g_stop) {
+                struct timespec ts;
+                int pick = -1;
+                uint64_t now;
+
+                if (end_ns && (uint64_t)a6400_now_ns() >= end_ns)
+                    break;
+                (void)poll_control(&rt, cfg);
+                if (g_stop)
+                    break;
+                for (k = 0; k < mapped_cnt; k++) {
+                    const uint8_t *b = (const uint8_t *)maps[k] + offs[k];
+                    uint32_t mid = sizes[k] / 2u;
+                    if (mid + 64u > sizes[k])
+                        mid = 0;
+                    if (memcmp(prev_fp[k], b + mid, 64u) != 0) {
+                        memcpy(prev_fp[k], b + mid, 64u);
+                        pick = k;
+                    }
+                }
+                if (pick < 0)
+                    pick = last_idx;
+                else
+                    last_idx = pick;
+
+                seq++;
+                g_stats.frames_captured++;
+                {
+                    static uint8_t uyvy_cached[545280];
+                    static uint8_t jpeg_buf[131072];
+                    uint32_t jpeg_len = 0;
+                    const uint8_t *src = (const uint8_t *)maps[pick] + offs[pick];
+
+                    if (g_yuv_stream_type == 0x00030700u && sizes[pick] >= 545280u) {
+                        uint64_t t0 = (uint64_t)a6400_now_ns();
+                        uint64_t t1, t2, t3;
+                        /* Burst-copy from uncached /dev/mem into cached RAM once
+                         * so the JPEG encoder runs entirely out of L1/L2 cache. */
+                        memcpy(uyvy_cached, src, 545280u);
+                        t1 = (uint64_t)a6400_now_ns();
+                        if (a6400_uyvy_to_jpeg_mt(uyvy_cached, 640u, 426u, 1280u, 75,
+                                                  jpeg_buf, sizeof jpeg_buf, &jpeg_len) == 0 &&
+                            jpeg_len > 0) {
+                            t2 = (uint64_t)a6400_now_ns();
+                            (void)a6400_wifi_server_send_frame(
+                                &rt.wifi, seq, a6400_now_ns(),
+                                jpeg_buf, jpeg_len, 1u);
+                            t3 = (uint64_t)a6400_now_ns();
+                            if (seq <= 5u) {
+                                a6400_logf(&g_log, A6400_LOG_INFO,
+                                           "yuv_timing seq=%u copy_us=%llu enc_us=%llu send_us=%llu jpg=%u",
+                                           seq,
+                                           (unsigned long long)((t1 - t0) / 1000ull),
+                                           (unsigned long long)((t2 - t1) / 1000ull),
+                                           (unsigned long long)((t3 - t2) / 1000ull),
+                                           jpeg_len);
+                            }
+                        }
+                    } else {
+                        (void)a6400_wifi_server_send_frame(
+                            &rt.wifi, seq, a6400_now_ns(),
+                            src, sizes[pick], 0x10u);
+                    }
+                }
+                g_stats.frames_submitted = (uint32_t)rt.wifi.stream_sent;
+                g_stats.frames_dropped = (uint32_t)rt.wifi.stream_dropped;
+
+                deadline += period_ns;
+                now = (uint64_t)a6400_now_ns();
+                if (now >= deadline)
+                    deadline = now;
+                ts.tv_sec = (time_t)(deadline / 1000000000ull);
+                ts.tv_nsec = (long)(deadline % 1000000000ull);
+                while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {
+                    if (g_stop)
+                        break;
+                }
+            }
+            for (k = 0; k < mapped_cnt; k++) {
+                munmap(maps[k], mlens[k]);
+                (void)a6400_dmm_close_unit(&rt.dmm, hs[k]);
+            }
+        }
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "yuv_stream_closed captured=%u sent=%llu dropped=%llu",
+                   g_stats.frames_captured,
+                   (unsigned long long)rt.wifi.stream_sent,
+                   (unsigned long long)rt.wifi.stream_dropped);
+        if (rt.mem_fd >= 0) {
+            close(rt.mem_fd);
+            rt.mem_fd = -1;
+        }
+        a6400_uipc_close(&rt.uipc);
+        rt.uipc_open = 0;
+        if (rt.wifi_open) {
+            a6400_wifi_server_close(&rt.wifi);
+            rt.wifi_open = 0;
+        }
+        return 0;
+    }
+
     g_stage = "dmm_rule";
     log_destructive("dmm_rule_5");
     rc = a6400_dmm_set_rule(&rt.dmm, 5, 0);
@@ -2043,26 +2931,56 @@ int a6400_daemon_run(const struct a6400_daemon_config *cfg)
         struct a6400_scalar_path_cfg sc;
 
         log_destructive("set_path_reset");
+        (void)a6400_scalar_set_liveview(&rt.dmm, 0, 1500);
         memset(&sc, 0, sizeof sc);
         sc.timeout_ms = 1500;
         rc = a6400_scalar_set_path(&rt.dmm, &sc);
         a6400_logf(&g_log, A6400_LOG_INFO, "set_path_reset status=%d", rc);
     }
+    if (g_connect_pin_qid) {
+        uint32_t src_pin[4] = { 0u, 2u, g_connect_pin_no, g_connect_pin_qid };
+        uint32_t dst_pin[4] = { 0u, 1u, g_connect_dst_pin, 0x01670464u };
+        uint32_t st1 = 0xffffffffu;
+        int rc1 = a6400_df_pin_connect(&rt.uipc, g_connect_pin_qid, src_pin, dst_pin, &st1, 1500);
+        a6400_logf(&g_log, A6400_LOG_INFO,
+                   "pin_connect q=0x%08x pin=%u dst=%u src_rc=%d src_st=0x%x",
+                   g_connect_pin_qid, g_connect_pin_no, g_connect_dst_pin, rc1, st1);
+    }
     {
         struct a6400_scalar_path_cfg sc;
 
-        log_destructive("set_path_start");
-        memset(&sc, 0, sizeof sc);
-        sc.enable = 1;
-        sc.rate_fps = (uint32_t)cfg->fps;
-        sc.width = (uint32_t)cfg->path_width;
-        sc.comp_level = (uint32_t)cfg->comp_level;
-        sc.param_val = 300; /* feeder:465 */
-        sc.timeout_ms = 5000;
-        rc = a6400_scalar_set_path(&rt.dmm, &sc);
-        a6400_logf(&g_log, A6400_LOG_INFO,
-                   "set_path_start status=%d rate=%u width=%u comp=%u",
-                   rc, sc.rate_fps, sc.width, sc.comp_level);
+        if (g_use_liveview_cmd) {
+            rc = a6400_scalar_set_liveview(&rt.dmm, 1, 5000);
+            a6400_logf(&g_log, A6400_LOG_INFO, "set_liveview_start status=%d", rc);
+        } else if (g_splice_scalar) {
+            rc = apply_scalar_splice(&rt, cfg, "init");
+        } else {
+                memset(&sc, 0, sizeof sc);
+                sc.enable = 2; /* PinConnect (payload+8 = 6) */
+                sc.rate_fps = (uint32_t)cfg->fps;
+                sc.width = (uint32_t)cfg->path_width;
+                sc.comp_level = (uint32_t)cfg->comp_level;
+                sc.param_val = 50;
+                sc.timeout_ms = 5000;
+                rc = a6400_scalar_set_path(&rt.dmm, &sc);
+                a6400_logf(&g_log, A6400_LOG_INFO,
+                           "set_path_pinconnect status=%d rate=%u width=%u",
+                           rc, sc.rate_fps, sc.width);
+
+                log_destructive("set_path_start");
+                memset(&sc, 0, sizeof sc);
+                sc.enable = 1;
+                sc.rate_fps = (uint32_t)cfg->fps;
+                sc.width = (uint32_t)cfg->path_width;
+                sc.comp_level = (uint32_t)cfg->comp_level;
+                sc.param_val = 50; /* libInfraStreamingServer: 50 */
+                sc.timeout_ms = 5000;
+                sc.pin_no = 0u;
+                rc = a6400_scalar_set_path(&rt.dmm, &sc);
+                a6400_logf(&g_log, A6400_LOG_INFO,
+                           "set_path_start status=%d rate=%u width=%u comp=%u",
+                           rc, sc.rate_fps, sc.width, sc.comp_level);
+        }
     }
     if (rc != 0) {
         code = stage_fail("set_path", A6400_EXIT_STAGE,

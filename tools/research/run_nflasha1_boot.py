@@ -32,6 +32,8 @@ OUT = ROOT / 'artifacts/analysis/e0421-ttyam0-init'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--limit', type=int, default=40_000_000)
+    parser.add_argument('--progress-every', type=int, default=5_000_000,
+                        help='print the instruction count every N instructions (0 disables)')
     parser.add_argument('--cmdline-extra', default='',
                         help='runner-side cmdline addition (e.g. an observed lpj=)')
     parser.add_argument('--lpj-preset', type=int, default=0,
@@ -77,7 +79,7 @@ def main():
     parser.add_argument('--qemu-cpu-parity', action='store_true',
                         help='enable QEMU Cortex-A5 CPU parity (async-abort masks, non-secure A/F writes, VFPv3-D16 MVFR0)')
     parser.add_argument('--qemu-peripherals', action='store_true',
-                        help='enable ported QEMU CXD90045 peripheral models (F2A, Leo, XDMAC, LDEC, rw stubs)')
+                        help='enable ported QEMU CXD90045 peripherals, including SYSV/VPH, evsel, SIO, and GPIO')
     parser.add_argument('--oracle-mmio-trace', type=Path, default=None,
                         help='QEMU Oracle JSONL trace supplying recorded MMIO read sequences')
     parser.add_argument('--emmc-image', type=Path, default=None,
@@ -262,6 +264,7 @@ def main():
         trace_points=trace_points,
         instruction_limit=args.limit,
         symbols=symbols)
+    machine.progress_every = args.progress_every
     if args.trace_thumb_boundary:
         boundary = capture_unicorn(machine, args.thumb_loader_entry, args.thumb_stop)
     report = machine.run()
@@ -326,7 +329,7 @@ def main():
     needles = [b'Booting Linux', b'Linux version', b'Kernel command line',
                b'Calibrating delay', b'Memory:', b'GIC', b'ttyAM', b'cramfs',
                b'Freeing', b'initcall', b'sched_clock', b'console', b'timer',
-               b'rootfs', b'init/sbin', b'initramfs', b'VFS', b'PID hash']
+               b'rootfs', b'init/sbin',                b'initramfs', b'VFS', b'PID hash']
     found = []
     for base in (0x00000000, 0x80000000):
         data = b''

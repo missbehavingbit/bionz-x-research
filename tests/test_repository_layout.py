@@ -29,6 +29,7 @@ MOVED_LAUNCHERS = {
     "launch_cinema_mpv.bat": ("scripts", "%~dp0..\\artifacts"),
     "launch_cinemahud_android.ps1": ("scripts", "Split-Path -Parent $PSScriptRoot"),
     "launch_cinemahud_ptp.bat": ("scripts", 'cd /d "%~dp0.."'),
+    "run_film_sim_studio.bat": ("scripts", "%~dp0..\\tools\\film_sim_studio.py"),
     "start_camera_shell.bat": ("scripts", '%~dp0..\\tools\\cam_live_terminal.py'),
 }
 
@@ -134,8 +135,9 @@ class TestDocumentationEntryPoints(unittest.TestCase):
 
     def test_ci_workflow_runs_the_structural_checks(self):
         workflow = _read(ROOT / ".github" / "workflows" / "ci.yml")
+        ci_runner = _read(ROOT / "tools" / "research" / "ci_check.py")
+        self.assertIn("tools.research.ci_check", workflow)
         for test_module in (
-            "tools.research.ci_check",
             "tests.test_repository_layout",
             "tests.test_target_profiles",
             "tests.test_research_status_sync",
@@ -143,7 +145,7 @@ class TestDocumentationEntryPoints(unittest.TestCase):
             "tests.test_agents_md_archive_integrity",
             "tests.test_ci_check",
         ):
-            self.assertIn(test_module, workflow)
+            self.assertIn(test_module, ci_runner)
 
     def test_ci_templates_and_runner_exist(self):
         for relative in (

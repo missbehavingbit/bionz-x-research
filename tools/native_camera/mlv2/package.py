@@ -9,7 +9,7 @@ root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(root))
 from tools.research.pack_mod import extract_elf_text, fnv1a_32  # noqa: E402
 
-SHIM_ADDR, SHIM_CAP = 0x05662760, 2208
+SHIM_ADDR, SHIM_CAP = 0x05662800, 2048
 SHIM_MOVE, VIEW_MOVE = 0x1000, 0x10000      # shim-reloc.elf: shim and view base moved by these
 CORE_MAGIC, CORE_VERSION, CORE_MAX = 0x52434C4D, 2, 64 * 1024
 

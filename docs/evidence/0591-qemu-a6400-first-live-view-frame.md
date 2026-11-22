@@ -93,7 +93,7 @@ buffer handoff above were checked against this ILCE-6400 firmware.
 | --- | --- |
 | Captured ORIL (`av-cam.bin`) | `dd8f8d0cc74ad4b70100e5728cf8b159b5155e7fb50eaf1147b99c9054740209` |
 | E0524 boot manifest | `bf12cfa60d64560d6db6327e42e81fd5d81b96c883c90879228ed67364cdde6d` |
-| Powered WBI sub-micro fixture (explicit replay assumption) | `3385ec340e931aa7b7dbb954da99e5b6239174ba90441eb2c905f01bcf5bbda9` |
+| [E0651](0651-qemu-a6400-stock-finder-monitor-rear-lcd.md) powered WBI sub-micro fixture (explicit replay assumption) | `3385ec340e931aa7b7dbb954da99e5b6239174ba90441eb2c905f01bcf5bbda9` |
 | 8×5 binary PGM chart | `01ebbeff1124611ee8e0e439226aaf840dd92b9ae9f24d0655b44d84dba5cbe` |
 | QEMU 11.1.3 frozen causal-v2 binary | `d3a61aa0d8af83cf96d9c3d8fa0b5f585a83f61733b0808f6e9986fe8941bf64` |
 | Frozen causal-v2 QEMU source patch | `e1b4d607d6deb865eebc7a8a5af028c6f26a42e28bfbd956342550e76cfc1bad` |
@@ -173,3 +173,100 @@ exit 0 and still reported step 26.
 The publication build passed all 11 native `test_qemu_liveview` and
 `test_qemu_emmc` cases. Guarded Windows discovery on the isolated checkout
 ran 2,021 tests with 177 skips and no failures or errors.
+
+### Separate sequencer replays (2026-11-19)
+
+The captured replay still stops at step **26**, request/report `0x0323/0x0320`.
+The original `0x63BC2A74` guard ran 173 times without accepting the request.
+The sampled `0x63BA7448` load copied byte `0x64319046` into the object at
+`0x6440A278+0xD46`; all sampled values were zero. The other direct writer
+at `0x63B929F8` did not run. A second passive replay found the ARM copy at
+`0x63AC79A4` writing the first word of the selected `0x4E8`-byte buffer
+and `0x63854B52` selecting slot 0. Both statically resolved callers of
+`0x63854B44` pass `0x6431A854`, so byte `0x6431A856` is the upstream
+field. The native producer at `0x63874FD4` writes it from three original
+predicates and a separate global byte. A further replay observed the
+body lens-detect port/pin `1/4`, zero at `0x6431B57C`, state `0x13`
+at `0x6431B594` on the `0x6386C29C` path, and zero at `0x644A8C3E`.
+`0x13` does not satisfy the original `0`, `0xF2`, `0xF4` checks on that
+path. The boot reached the store of byte `0x6431A856` 226 times; sampled
+stores were zero. A write watch within original ORIL found
+`0xF0 -> 0x03 -> 0x13` at `0x6431B594`, written by `0x6386BDA8`,
+`0x6386D3B2` and `0x6386D274` respectively. The last writer is the
+literal `0x13` store in the original lens state machine, followed by
+`0x6386ED6A`. The unresolved boundary is which original input and
+completion should move that state forward, not missing Ydet data.
+
+The captured ORIL with only the packaged preset substituted is a
+diagnostic contrast, not a fix. Its sampled lens state was zero and
+the native producer stored 1 at `0x6431A856`. However, the sequencer
+never started (`step_count=0`) and the rear LCD stayed black in that
+replay. Replacing the captured settings is not a proven way to boot
+the captured firmware.
+
+The reconstructed **packaged** replay uses the E0561 ORIL (`90d515cf…`)
+and the original `CX62600_UC2` preset (`241c8521…`) both on disk and in
+the bootloader preload. It retains the captured kernel, initrd, system
+files and eMMC layout. This is not a byte-identical copy of the historical
+disk. The E0651 powered WBI fixture, 500 us event delay, CamPig enable
+readback and Sgc1 event-A policy were held fixed. The same QEMU 11.1.3
+binary (`0a9b08341486dd3d9248a1cc9e6cf99e0b2d3bd52c25f8fd029ef963cb657ae7`)
+and a fresh overlay were used on each run:
+
+| Packaged ORIL with original preset | Phase-only control | `LIVEVIEW_SOURCE=bars` |
+| --- | --- | --- |
+| Original `0x032E` guard at `0x63BB3914` | 102 reads, sampled byte 0 | five reads: `0, 0, 0, 0, 1` |
+| Native Ydet producer at `0x63BEE670` | 0 hits | 117 hits |
+| Final sequencer state | step 32, `0x032E/0x0326` | step 42 of 43 |
+
+Both runs exited 0 through QMP. The negative control stayed at step 32
+across another 102 SYSV ticks. The packaged ORIL on the **captured**
+preset and filesystem stayed at step 26 with either source and never
+executed the `0x032E` guard. The original state transition with bars
+therefore qualifies the older **step-32 predicate** in the reconstructed
+boot; it does not release the stock captured settings' step-26 gate.
+No sequencer variables, guest code, or Ready flags were changed.
+
+Private receipts and bounded, instruction-anchored observers:
+`artifacts/qemu-a6400/bringup-step26-01/`, `bringup-ready-source-01/`,
+`bringup-captured-ready-predicate-01/`, `bringup-lens-state-owner-01/`,
+`bringup-captured-package-preset-01/`,
+`bringup-package-oril-{control,bars}-01/`,
+`bringup-package-preset-control-02/`, `bringup-package-preset-bars-01/`
+and `first-liveview-validation/{bringup_observe.py,observe_steps.c,
+observe_ready_source.c,prepare_package_replay.py}`.
+
+### Captured step 26: sub-micro lens rail acknowledgement
+
+The captured lens state machine has a path that clears state `0x13`:
+at `0x6386E200` it checks the rail status through `0x6386BA5C`, and when
+that returns zero its original continuation can store state zero at
+`0x6386ECCA`. When this profile uses sub-micro power control, firmware
+puts the rail request in TX slot B TLV `0x0A` data byte 1 bit 0
+(`0x6386ACDA`) and reads the reported state from RX TLV `0x03` data
+byte 3 bit 0 (`0x6386AC28`/`0x6386AC2E`). The powered replay fixture
+fixed this status bit high, including when firmware requested off.
+
+`SUBMICRO_LENS_POWER=1` (`submicro-lens-power=on`) lets only that status
+bit follow the request and recomputes the CRC. Instant settling at the
+SPI exchange is a model assumption; no attached lens, UART reply, Ready
+store, guest patch or completion event is supplied. The qtest checks
+both levels, missing/short TLVs, and the original reply's other bytes.
+
+`bringup-lens-rail-{on,off}-01` use captured ORIL and settings, the same
+powered fixture and bars source, QEMU
+`0af1091c82470adb5b5cf952e798f9c67d685871de7402faacfe0f3067635534`,
+fresh overlays and `-icount shift=0,sleep=on -net none -no-reboot`. Both
+take a first snapshot at 112 wall seconds and a second after 135 more
+display ticks; both quit via QMP with exit 0.
+
+| Captured ORIL/settings with bars | Frozen rail reply | Request-following rail reply |
+| --- | --- | --- |
+| Last Ydet register sample | `0x0051525C` | `0x0051525C` |
+| Native producer at `0x63874FD4` | Sampled zero | Sampled `0, 0, 1`, then `1` |
+| Original `0x0323` guard and accept store | 136 reads, sampled zero; no accept stores | Six reads of `1`; six stores of `0x0323` |
+| Final sequencer step | 26 (`0x0323` / `0x0320`) | 42 |
+
+This releases the captured step-26 gate; the earlier packaged
+step-32 Ydet comparison remains independent. Neither result alone
+demonstrates still playback, JPEG capture, or physical lens behavior.

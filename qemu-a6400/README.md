@@ -2,6 +2,9 @@
 
 Out-of-tree QEMU v11.1.3 overlay and patch for the Sony ILCE-6400 (`CXD90045` / `ARM-CXD900X0`), modeled after the clean `qemu-overlay/` + `patches/` pattern used by `Oein/a5000-emulator`. The previous 10.1.0 build and evidence remain preserved. See [verified tool versions, regression results and rollback](../docs/TOOLCHAIN.md).
 
+An explicit [adapted ZV-E10 menu experiment](../docs/ZVE10_ADAPTED_MENU.md)
+uses this board with a separate boot policy and checked private inputs.
+
 ## Prerequisites (WSL2 Ubuntu)
 
 Install the QEMU build dependencies in WSL2 Ubuntu:
@@ -38,8 +41,9 @@ wsl.exe --exec python3 -m unittest tests.test_qemu_emmc -v
 
 Run this command from the repository root. The ordinary Windows suite skips
 these eight native tests when the Linux QEMU build is unavailable. The additional
-constructed-board check exercises rear-key ADC/wheel state and both synchronous
-display callbacks; its PPM files are not original-firmware frame evidence.
+constructed-board check exercises debounce holds, immediate wheel and lever
+input, and both synchronous display callbacks. Its PPM files are not
+original-firmware frame evidence.
 
 ## Milestone 1: Initial Bring-Up
 
@@ -70,17 +74,176 @@ EVSEL_LATE_US=500 python3 qemu-a6400/tools/rear_panel.py --log a6400-panel.log
 Open [the local rear panel](http://127.0.0.1:8640/). The image is QEMU's
 VPH output. The buttons drive the emulated ADC ladders, GPIO lines or
 sub-micro link. Hover over the control wheel and scroll to rotate it, or
-use `[` and `]`. Press Ctrl+C in the launch terminal to stop the local run.
+use `[` and `]`. Wheel turns and AF/MF–AEL selector toggles are immediate
+edges; MENU, directional presses and the AF/MF–AEL button still use a hold
+for firmware debounce. Press Ctrl+C in the launch terminal to stop the local run.
 
-The panel enables the [E0572](../docs/evidence/0572-qemu-a6400-rear-lcd-layout-on-panel.md)
-LCD selection on the disposable overlay. Use `--stock` to exercise the
-original display selection. `A6400_QEMU_DIR` can point at an alternate
-QEMU build. This workflow uses the emulator's eMMC copy.
+A powered menu replay needs the [E0527](../docs/evidence/0527-qemu-a6400-real-submicro-frames-power-on-holds.md)
+fixture. Use `SUBMICRO_PAGE=/path/to/camera-page-0x03443000.bin` or
+`SUBMICRO_FRAMES=/path/to/submicro-frames.bin` for the verified 384-byte A/C/B
+extract. The launcher checks the original fixture digest before staging the
+overlay. An explicit empty `SUBMICRO_PAGE=` is useful for serial diagnostics,
+not for a powered menu test.
+
+For the captured boot, `SUBMICRO_LENS_POWER=1` opts in to the slot-B
+rail-status reply. The [matched replay](../docs/evidence/0591-qemu-a6400-first-live-view-frame.md#captured-step-26-sub-micro-lens-rail-acknowledgement)
+uses the explicitly qualified powered WBI fixture and `LIVEVIEW_SOURCE=bars`
+to release the original step-26 lens-state wait. The default frozen-reply
+behavior is unchanged. No attached lens is modeled.
+
+The panel uses stock firmware display selection by default ([E0651](../docs/evidence/0651-qemu-a6400-stock-finder-monitor-rear-lcd.md)):
+with `REAR_CONTROLS=1` holding GPIO `P0.2` (`KEY_OTHER_EYE_CONTACT`) idle high, stock `FINDER/MONITOR`
+(`Auto` and `Monitor(Manual)`) renders the rear-LCD layout without patching
+`viewUnified2.so` (`e` toggles the emulated eye sensor; `--diagnostic-lcd`
+retains the older [E0572](../docs/evidence/0572-qemu-a6400-rear-lcd-layout-on-panel.md)
+overlay edit). `A6400_QEMU_DIR` can point at an alternate QEMU build.
+
+One wheel turn advances the virtual TPU by four phase counts, moving the
+stock menu highlight in either direction. The AF/MF--AEL selector and
+button select separate stock actions: the tested AF/MF assignment
+opens Drive Mode, and AEL shows exposure lock while held. See the
+[control replays](../docs/evidence/0573-qemu-a6400-rear-panel-controls.md#follow-up-stock-wheel-detents-2026-11-19).
+
+With `REAR_CONTROLS=1`, the panel also exposes **Half-press shutter** (`s`)
+and **Full press shutter** (Space, QMP `spc`). Half-press drives body S1
+(`P0.1`); full press holds S1 and drives S2 (`P1.5`). These are hardware
+inputs, not wake or capture commands. Half-press wakes the stock OSD after
+Auto Power Save. `SHUTTER_EDGE_IRQ=1` opts in to latching just S1/S2
+in the virtual GIC. This avoids missed short pulses without making the
+pulses longer or changing the other controls. It is an emulated boot
+policy, not a measurement of the physical camera's GPIO circuitry.
+The latched **Power** lever changes the native sub-micro
+input, but automatic settings commit is not proven. See the [explicit
+native save and restart](../docs/evidence/0652-qemu-a6400-late-black-screen-scanout-capture.md#follow-up-settings-survive-an-explicit-native-commit-2026-11-19)
+for the verified settings-persistence path.
+
+For the captured boot only, set `IDT_CAM` to the unmodified
+`sabin/idt_cam.bin` from the matching `nflasha3` boot set. The launcher
+checks the original kernel, ORIL and image hashes, then preloads the
+auxiliary image at physical `0x20152000`. In the rail-enabled bars
+profile this releases the native final step-42 predicate; it does not
+provide autofocus, stock JPEG playback, or still recording. See the
+[native comparison and replay limits](../docs/evidence/0650-qemu-virtual-media-gates.md#the-original-idt-sidecar-releases-the-captured-step-42-predicate).
+With that profile, `DDRB_CONTROL=1` opts in to the narrow DDR-B
+idle-to-active transition used by the stock power manager. It restores
+the native EE reply and lets the mounted playback browser initialize.
+It does not emulate DDR timing or self-refresh and does not by itself
+prove that a JPEG was displayed or recorded.
+
+`DFS_CONTROL=1` independently enables the clock-switch status handshake
+used by the stock UPM driver. In the captured profile with DDR-B enabled,
+the original codec-idle request returns and Folder View (Still) lists the
+seeded SD entry. This models completion, not clock rates. Opening the
+entry reaches the original playback worker but still does not display
+the photo. See the [playback evidence](../docs/evidence/0650-qemu-virtual-media-gates.md#the-dfs-clock-switch-releases-the-separate-upm-rule-0-wait).
+
+`ZMA1_STARTUP=1` enables the captured startup-program interrupt on
+that accelerator. With it, `ZMA1_JPEG_FILL=1` also models the stock
+firmware's neutral playback-buffer fill and its accelerator result.
+The native fill now returns, but the stock LCD still says **Unable
+to display**. Neither operation decodes the JPEG.
 
 For the guarded ARM mod workflow (camera-captured inputs, Mod Loader v2 install and mod hot reload
 with `--inputs`, `--loader` and `--mod`), see [Developing camera mods in QEMU](MOD_DEVELOPMENT.md).
 Prepared inputs read from `/mnt/c` slow every guest disk access. The panel's `--inputs` copies them
 to the Linux filesystem once (boot to the menu 63 s → 35 s, E0577).
+
+## Offline SD and USB scenarios
+
+These are separate gates. The SD regression runs on `sony-a6400`. The USB
+regression uses an isolated virtual OHCI host and QEMU's Mass Storage device,
+not the Sony gadget. Neither accesses a physical card or USB port.
+
+```bash
+# From the repository root in WSL, with the current QEMU overlay built:
+python3 -m unittest tests.test_qemu_media.QemuRemovableSdTests \
+  tests.test_qemu_media.QemuUsbMassStorageTests tests.test_qemu_emmc -v
+```
+
+### SD insertion, playback and persistence
+
+Use a **writable raw image made for this experiment**, with a separately approved
+SHA-256. For playback, put a known JPEG under `DCIM/100MSDCF/DSC00001.JPG` on
+the image before boot. Do not select a physical device, a captured partition,
+or the emulator's eMMC. Do not write to the image from the host while QEMU owns
+it. In WSL, with prepared inputs configured as below:
+
+```bash
+export SD_IMAGE="$HOME/a6400-media/playback.img"
+export SD_SHA256='<approved raw-image SHA-256>'
+scratch=$(mktemp -d)
+export RUN_DIR="$scratch/guest"
+export QMP="$scratch/qmp.sock"
+REAR_CONTROLS=1 \
+QEMU_EXTRA="-icount shift=0,sleep=on -net none -qmp unix:$QMP,server=on,wait=off" \
+  bash qemu-a6400/run.sh
+```
+
+1. **Empty versus inserted:** The slot starts empty. With the guest ready, run
+   `python3 -m tools.research.qemu_media sd-event insert --qmp "$QMP"` in
+   a second terminal (set `QMP` to the same socket there). The slot drives
+   live card presence in the sub-micro reply and active-low SD0 detect at
+   `0xF2915010` bit 24; bit 16 reports no Memory Stick. Check guest
+   discovery of `mmca10`/`mmca10p1` on `/proc/partitions`; pre-existing
+   `/dev/mmca*` nodes or QMP success do not prove a mount. For the distinct
+   card-present-at-boot control, use `SD_IMAGE` and `SD_SHA256` with
+   `python3 -m tools.research.qemu_boot_probe --sd-at-boot --inputs "$A6400_QEMU_DATA_DIR" --report-dir artifacts/qemu-a6400/NEW-SD-BOOT --guest-command "cat /proc/partitions"`.
+2. **Playback:** Compare Play with the slot empty and with the fixture inserted.
+   Send QMP `send-key` with qcode `p` and `hold-time` 250, or use the rear
+   panel's Play button. Capture the original display on both heads with QMP
+   `screendump` (`device: "vph"`). Require the image to match the known
+   fixture; a changed or nonblack OSD is not proof of playback. For a
+   high-contrast fixture, `python -m tools.research.qemu_media verify-playback
+   --fixture DSC00001.JPG --empty empty.ppm --inserted playback.ppm` checks the
+   comparison in the repository Python environment. If the photo is drawn
+   within a smaller rectangle, declare `--image-box LEFT TOP RIGHT BOTTOM`
+   before the replay. The maximum mean error of any RGB channel at 64x48
+   must be at most 12 for the inserted case and greater than 12 for the empty
+   control. This is a fixture check, not a general image-quality metric.
+3. **Persistence:** Use `sd-event eject` only after guest I/O is quiescent.
+   The native test checks the card-present and remove bits, an SD ADMA2 write
+   and readback after a new QEMU process, plus an unchanged internal eMMC
+   digest. A firmware-level persistence test must separately prove that the
+   same guest-created file survives reinsertion with a fresh eMMC overlay.
+   Review the new card digest before reopening an intentionally modified image.
+
+For **capture**, do not count a preloaded JPEG or a rendered OSD. First verify
+fresh changing live frames from the firmware's image path. Use a separate card
+image and export its before/after `DCIM` trees from the virtual image after
+clean shutdown. Trigger the camera through an original input, not a host write
+or a guest shell file copy. For a photo, independently decode it in the
+repository Python environment (Pillow required):
+
+```bash
+python -m tools.research.qemu_media verify-photo \
+  --before path/to/before-export --after path/to/after-export \
+  --reopened path/to/reopened-export
+```
+
+Pass `--reopened` with a separate export from the restart replay. The
+tool requires the same new DCIM path and digest in that export; the
+replay receipts must separately prove it was the same card reopened
+in a fresh QEMU process. Current firmware playback and capture
+limits are in [E0650](../docs/evidence/0650-qemu-virtual-media-gates.md).
+
+### USB baseline before streaming
+
+The virtual USB test resets the root port, reads descriptors on EP0, assigns
+an address, sets the MSC configuration, and checks Bulk-Only Transport
+readiness, capacity and a known sector. It also checks cable removal and the
+unchanged read-only fixture image. For a USB-dependent Sony mod, repeat this
+gate on the **original Sony gadget** (MSC, or PTP `GetDeviceInfo` and a
+session/object read) before attempting UVC or PTP liveview. The QEMU USB
+fixture is not evidence that the Sony DWC3 device/OTG path enumerates.
+
+For the stock PC Remote gate, use `tools.research.qemu_usb_host_probe`
+with `--stock-attach before-first-view --stock-ptp-info` and the qualified
+inputs in [E0655](../docs/evidence/0655-qemu-first-view-ptp-and-native-dwc3-reset.md).
+The probe requires native UDC configuration and a validated Sony
+`GetDeviceInfo` data/response pair. Stock firmware currently suppresses the
+USB input before gadget start, even after Play restores `ModelCamera`
+readiness. Do not count diagnostic HID enumeration or native bulk OUT
+fixtures as a Sony PTP transfer.
 
 ## Milestone 2: Main firmware boot (E0521)
 
@@ -162,6 +325,26 @@ or semaphore is signalled by the observer.
 See [E0524](../docs/evidence/0524-reproducible-captured-qemu-boot-and-liro-waits.md)
 for the verified wait and the remaining producer boundary.
 
+### Inputs from the public updaters (E0665)
+
+No capture and no historical disk are needed. From the unpacked a6400 updater, plus
+`ulogio.bin` from the unpacked ZV-E10 updater:
+
+```bash
+python3 -m tools.research.qemu_packaged_inputs <a6400>/firmware.tar_unpacked qemu-a6400/data
+cd qemu-a6400
+ULOGIO=<zve10>/firmware.tar_unpacked/0800_appli/setting/ulogio.bin \
+SUBMICRO_FRAMES=data/submicro-frames-powered.bin \
+SUBMICRO_FRAMES_SHA=$(sha256sum data/submicro-frames-powered.bin | cut -d' ' -f1) \
+EVSEL_LATE_US=500 CAMPIG_ENABLE_READBACK=1 SGC1_EVENT_A=1 AVCAM=data/av-cam.bin bash run.sh
+```
+
+The builder needs `mkfs.fat` and `mcopy`. It records in `data/manifest.json` which bytes are
+packaged and which are constructed. Partitions the updater does not carry are zero-filled.
+Without `ulogio.bin`, `osal_ulogio` fails and the rear LCD stays black. To get a serial-only
+boot, set `SUBMICRO_PAGE=` instead of the two `SUBMICRO_*` variables. The step-32 wait can be
+read with QMP: `xp /1hx 0x04353570` (module 3 report) and `xp /1hx 0x04350f06` (its request).
+
 ### Historical input layout
 
 Without `A6400_QEMU_DATA_DIR`, the legacy launcher expects the locally prepared
@@ -220,9 +403,9 @@ workflow. The device work below uses the same boot.
 ## Milestone 5: Device models through the viewfinder console (E0525–E0541)
 
 `run.sh` can add `/setting/ulogio.bin` to the per-run overlay (E0525) and can
-replay a captured sub-micro page (E0527). Set `ULOGIO=` or `SUBMICRO_PAGE=` empty
-to skip either one. The default `ULOGIO` path is a local ZV-E10 stand-in, not an
-a6400 capture.
+replay the captured sub-micro page or its verified A/C/B extract (E0527).
+Set `ULOGIO=` to skip the overlay addition. The default `ULOGIO` path is a
+local ZV-E10 stand-in, not an a6400 capture.
 
 The overlay staging supports `RUN_DIR` paths with spaces. For panel captures,
 target VPH head 0 with `screendump /path/panel.ppm vph 0`. VPH head 1 is the
@@ -253,7 +436,8 @@ The CamPig/AIF overlay retains the a5000 model attribution and is licensed
 under GPL-2.0-or-later; see [COPYING](COPYING).
 
 From the repository root in WSL, with the rebuilt QEMU and verified
-captured boot inputs:
+captured boot inputs, use the powered 384-byte sub-micro fixture documented in
+[E0651](../docs/evidence/0651-qemu-a6400-stock-finder-monitor-rear-lcd.md):
 
 ```bash
 qemu=/path/to/pinned/qemu-checkout
@@ -264,7 +448,7 @@ cp -- "$micro" "$work/submicro.bin"
 printf '3385ec340e931aa7b7dbb954da99e5b6239174ba90441eb2c905f01bcf5bbda9  %s\n' \
     "$work/submicro.bin" | sha256sum --check &&
 A6400_QEMU_DIR="$qemu" A6400_QEMU_DATA_DIR="$inputs" RUN_DIR="$work/run" \
-    SUBMICRO_PAGE= ULOGIO= \
+    SUBMICRO_PAGE= SUBMICRO_FRAMES= ULOGIO= \
     EVSEL_LATE_US=500 REAR_CONTROLS=1 REAR_LCD_DIAGNOSTIC=0 LIVEVIEW_SOURCE=bars \
     QEMU_EXTRA="-icount shift=0,sleep=on -M submicro-frames=$work/submicro.bin -qmp unix:$work/qmp,server=on,wait=off" \
     bash qemu-a6400/run.sh
@@ -277,8 +461,9 @@ control (QMP `send-key` with qcode `ret`, 180 ms hold). Verify VPH head 0
 and its ch51 luma plane, not just the ch53 overlay.
 [E0591](../docs/evidence/0591-qemu-a6400-first-live-view-frame.md) records
 the matched control and chart, fixture provenance and model assumptions.
-A visible test image does not qualify the physical sensor, RAW/color ISP,
-or mode-sequencer completion.
+The RC0 test scaler writes through the guest-programmed DMA descriptor
+only after both reader and writer are armed. A visible test image does not
+qualify the physical sensor, RAW/color ISP, or mode-sequencer completion.
 
 `tools/a6400_probe.py` boots, waits until a checkpoint appears in
 `/proc/snsc_boot_time`, runs shell commands, and stops QEMU.

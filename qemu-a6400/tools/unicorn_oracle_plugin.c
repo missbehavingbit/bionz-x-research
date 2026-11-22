@@ -77,7 +77,11 @@ typedef struct {
 
 static PollTracker g_last_read[MAX_CPUS];
 
+#if QEMU_PLUGIN_VERSION >= 7
+static void on_vcpu_init(unsigned int cpu, void *userdata)
+#else
 static void on_vcpu_init(qemu_plugin_id_t id, unsigned int cpu)
+#endif
 {
     GArray *regs;
     if (cpu >= MAX_CPUS) {
@@ -108,7 +112,7 @@ static uint32_t read_u32_reg(unsigned cpu, int idx)
         return 0;
     }
     buf = g_byte_array_sized_new(4);
-    if (qemu_plugin_read_register(g_reg_handles[cpu][idx], buf) >= 4) {
+    if (qemu_plugin_read_register(g_reg_handles[cpu][idx], buf) && buf->len >= 4) {
         memcpy(&val, buf->data, 4);
     }
     g_byte_array_free(buf, TRUE);
@@ -324,7 +328,11 @@ static void on_insn_exec(unsigned cpu, void *opaque)
     }
 }
 
+#if QEMU_PLUGIN_VERSION >= 7
+static void on_tb_trans(struct qemu_plugin_tb *tb, void *userdata)
+#else
 static void on_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
+#endif
 {
     size_t n = qemu_plugin_tb_n_insns(tb);
     bool need_regs = g_regs || g_dump_pages || g_trigger_cpsr_mode >= 0;
@@ -360,7 +368,11 @@ static void on_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     }
 }
 
+#if QEMU_PLUGIN_VERSION >= 7
+static void on_plugin_exit(void *opaque)
+#else
 static void on_plugin_exit(qemu_plugin_id_t id, void *opaque)
+#endif
 {
     for (unsigned cpu = 0; cpu < MAX_CPUS; cpu++) {
         char buf[160];
@@ -453,8 +465,13 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
             }
         }
     }
+#if QEMU_PLUGIN_VERSION >= 7
+    qemu_plugin_register_vcpu_init_cb(id, on_vcpu_init, NULL);
+    qemu_plugin_register_vcpu_tb_trans_cb(id, on_tb_trans, NULL);
+#else
     qemu_plugin_register_vcpu_init_cb(id, on_vcpu_init);
     qemu_plugin_register_vcpu_tb_trans_cb(id, on_tb_trans);
+#endif
     qemu_plugin_register_atexit_cb(id, on_plugin_exit, NULL);
     qemu_plugin_outs("{\"type\":\"init\",\"status\":\"installed\",\"version\":3}\n");
     return 0;

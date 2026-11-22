@@ -82,74 +82,13 @@ def crypto_surface(path: Path) -> dict[str, object]:
     }
 
 
-def _thumb_literals(data: bytes, base: int) -> list[tuple[int, int]]:
-    """``(instruction address, literal address)`` for every Thumb ``ldr rX,[pc,#imm]``.
-
-    Only the PC-relative load form is needed: the AES wrapper loads both its ``ctx`` and its
-    ``key`` pointer that way, so the literals are what lead to the key.
-    """
-    out: list[tuple[int, int]] = []
-    for pos in range(0, len(data) - 4, 2):
-        first = data[pos] | (data[pos + 1] << 8)
-        # 16-bit ldr rX,[pc,#imm8] has opcode bits 15..11 = 01001.
-        if (first >> 11) == 0b01001:
-            imm8 = (first & 0xFF) * 4
-            address = base + pos
-            out.append((address, ((address + 4) & ~3) + imm8))
-            continue
-        # 32-bit ldr.w rX,[pc,#imm12]: first halfword 1111 1000 1101 1111.
-        second = data[pos + 2] | (data[pos + 3] << 8)
-        if (first & 0xFF7F) == 0xF85F:
-            imm12 = second & 0xFFF
-            address = base + pos
-            out.append((address, ((address + 4) & ~3) + imm12))
-    return out
-
-
-def _find_aes_wrapper(data: bytes) -> list[tuple[int, int]]:
-    """Locate the routine that sets up a 128-bit AES key.
-
-    The wrapper is identified by the argument, not by a symbol name: it is the code that passes
-    ``0x80`` (128 bits) as the key length. Both variants of the library share that shape, which
-    is why this survives the layout difference between them.
-    """
-    for pos in range(0, len(data) - 4, 2):
-        # movs r1,#0x80 is 0x2180 in Thumb little endian.
-        if data[pos:pos + 2] == b"\x80\x21":
-            return [(pos, pos)]
-    return []
-
-
-def _section_bytes(data: bytes) -> tuple[bytes, int] | None:
-    try:
-        from elftools.elf.elffile import ELFFile
-    except ImportError:  # pragma: no cover - dependency is pinned in requirements.txt
-        return None
-    import io
-
-    try:
-        elf = ELFFile(io.BytesIO(data))
-    except Exception:
-        return None
-    sec = elf.get_section_by_name(".text")
-    if sec is None:
-        return None
-    return sec.data(), sec["sh_addr"]
-
-
 def aes_key_block(path: Path) -> bytes | None:
-    """The 16 bytes the ``AES_set_decrypt_key`` caller passes, or ``None`` when absent.
+    """The first 16 bytes of the library's ``KeyArray`` object, or ``None`` when absent.
 
-    The chain is read from the ELF's own tables rather than guessed from code shape:
-
-    * ``.text`` holds the wrapper that passes ``0x80`` (128 bits) as the key length;
-    * the wrapper's ``ldr rX,[pc,#imm]`` literal plus the following ``add rX,pc`` forms the GOT
-      base, and the second literal is an offset into it (``KeyArray`` is such a slot);
-    * the GOT slot is filled at load time by an ``R_ARM_RELATIVE`` relocation whose addend is
-      the ``.data`` address of the key.
-
-    Using the relocation table means the result does not depend on the code layout that differs
-    between the two library variants. Any hop that does not resolve returns ``None``: a wrong
+    The object is found by its ``.dynsym`` entry and read from the section that holds its
+    address, so the result does not depend on the code layout, which differs between the two
+    library variants. The wrapper passes ``0x80`` (128 bits) as the key length, so only the first
+    half of the 32-byte object is used. An all-zero or unreadable block returns ``None``: a wrong
     key here would silently invalidate the record.
     """
     data = path.read_bytes()

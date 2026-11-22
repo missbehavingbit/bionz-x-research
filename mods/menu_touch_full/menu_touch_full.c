@@ -12,8 +12,8 @@
 
 #define MT_FULL_MAGIC 0x4d544632u /* "MTF2" */
 #define MT_FULL_VERSION 2u
-#define MT_SYSTEM_ADDR 0x956f0u
 #ifndef MT_SMOD_V2
+#define MT_SYSTEM_ADDR 0x956f0u
 #define MT_STATE_ADDR 0x7143920u
 #endif
 #define MT_EVENT_CAP 16u
@@ -86,6 +86,16 @@ static uint32_t rd32(uint32_t addr, unsigned off) {
 
 static unsigned rd8(uint32_t addr, unsigned off) {
     return *(const volatile uint8_t *)(addr + off);
+}
+
+static inline uint32_t primary_widget_system(void) {
+#ifdef MT_SMOD_V2
+    /* This libObj accessor returns the live singleton, whose heap address is not relocatable. */
+    uint32_t (*get_instance)(void) = (void *)0x06308d31u;
+    return get_instance();
+#else
+    return MT_SYSTEM_ADDR;
+#endif
 }
 
 static uint32_t get_tid(void) {
@@ -240,10 +250,10 @@ static void handle_popup_touch(volatile struct mt_full_state *s, uint32_t menu,
     }
 }
 
-static void handle_menu_touch(volatile struct mt_full_state *s, uint32_t mouse) {
+static void handle_menu_touch(volatile struct mt_full_state *s, uint32_t system, uint32_t mouse) {
     int16_t x = 0, y = 0;
     void (*get_pos)(uint32_t, unsigned, int16_t *, int16_t *) = (void *)0x6309019u;
-    get_pos(MT_SYSTEM_ADDR, mouse, &x, &y);
+    get_pos(system, mouse, &x, &y);
 
     int has_press = (s->press_valid != 0u);
     int dx = (int)x - s->press_x;
@@ -417,12 +427,12 @@ uint32_t mt_full_press(void *system, void *message) {
     }
     __sync_fetch_and_add(&s->inflight, 1u);
     uint32_t result = mt_original_press(system, message);
-    if (s->enabled && (uint32_t)system == MT_SYSTEM_ADDR && message) {
+    if (s->enabled && system && message && (uint32_t)system == primary_widget_system()) {
         unsigned mouse = ((const uint8_t *)message)[0x14];
         if (mouse < 4u) {
             int16_t px = 0, py = 0;
             void (*get_pos)(uint32_t, unsigned, int16_t *, int16_t *) = (void *)0x6309019u;
-            get_pos(MT_SYSTEM_ADDR, mouse, &px, &py);
+            get_pos((uint32_t)system, mouse, &px, &py);
             if (px != 32767 && py != 32767) {
                 s->press_x = px;
                 s->press_y = py;
@@ -441,10 +451,10 @@ uint32_t mt_full_release(void *system, void *message) {
     }
     __sync_fetch_and_add(&s->inflight, 1u);
     uint32_t result = mt_original_release(system, message);
-    if (s->enabled && (uint32_t)system == MT_SYSTEM_ADDR && message) {
+    if (s->enabled && system && message && (uint32_t)system == primary_widget_system()) {
         unsigned mouse = ((const uint8_t *)message)[0x14];
         if (mouse < 4u) {
-            handle_menu_touch(s, mouse);
+            handle_menu_touch(s, (uint32_t)system, mouse);
         } else {
             s->last_err = 99u;
         }

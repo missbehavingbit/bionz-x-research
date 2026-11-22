@@ -36,6 +36,42 @@ class DirectCallTests(unittest.TestCase):
         data = bytes.fromhex("00bf")         # nop
         self.assertEqual(direct_calls(data, 0x1000), [])
 
+    @staticmethod
+    def _encode_bl(address: int, target: int) -> bytes:
+        offset = target - (address + 4)
+        sign = (offset >> 24) & 1
+        i1, i2 = (offset >> 23) & 1, (offset >> 22) & 1
+        j1, j2 = (1 - i1) ^ sign, (1 - i2) ^ sign
+        first = 0xF000 | (sign << 10) | ((offset >> 12) & 0x3FF)
+        second = 0xD000 | (j1 << 13) | (j2 << 11) | ((offset >> 1) & 0x7FF)
+        return first.to_bytes(2, "little") + second.to_bytes(2, "little")
+
+    def test_a_bl_at_a_halfword_address_is_not_word_aligned(self) -> None:
+        # Only blx aligns its PC. Aligning for bl as well put 156,131 of 555,069 libObj.so
+        # targets two bytes low. Checked against capstone, which decodes the same bytes.
+        import capstone
+        md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB)
+        data = bytes.fromhex("00bf") + self._encode_bl(0x1002, 0x2002)
+        decoded = list(md.disasm(data[2:], 0x1002))[0]
+        self.assertEqual(decoded.mnemonic, "bl")
+        self.assertEqual(int(decoded.op_str.lstrip("#"), 16), 0x2002)
+        # A bl stays in Thumb state, so its target is reported with bit 0 set, as an ELF
+        # symbol for a Thumb function is.
+        self.assertEqual(direct_calls(data, 0x1000), [(0x1002, 0x2003)])
+
+    def test_the_second_half_of_an_instruction_is_not_a_call(self) -> None:
+        # A 32-bit instruction whose second halfword looks like the start of a bl must not
+        # produce an edge: the stream is walked by instruction length, not by every offset.
+        data = bytes.fromhex("4ff00000") + self._encode_bl(0x1004, 0x1100)   # mov.w r0,#0 ; bl
+        self.assertEqual(direct_calls(data, 0x1000), [(0x1004, 0x1101)])
+        self.assertEqual(direct_calls(bytes(1) + data, 0x0fff), [],
+                         "an odd start cannot hold a Thumb instruction")
+
+    def test_a_target_outside_every_code_range_is_dropped(self) -> None:
+        data = self._encode_bl(0x1000, 0x2000)
+        self.assertEqual(direct_calls(data, 0x1000, [(0x1000, 0x1004)]), [])
+        self.assertEqual(direct_calls(data, 0x1000, [(0x1000, 0x3000)]), [(0x1000, 0x2001)])
+
 
 class GraphTests(unittest.TestCase):
     def test_callers_of_a_known_name_are_listed(self) -> None:
@@ -78,9 +114,39 @@ class RealLibraryTests(unittest.TestCase):
         # matters is that the named subset exists and is usable.
         self.assertGreater(graph["named_edges"], 0,
                            "some edges must resolve to real symbol names")
-        self.assertLess(graph["named_fraction"], 0.5,
-                        "if this rises, the libraries were built with .symtab and the record's "
-                        "statement about local symbols being unnamed needs revisiting")
+        # Defined functions are exported entry points, so calls *to* them from inside the
+        # library are rare; a large count would mean callee matching has gone loose again.
+        self.assertGreater(graph["named_local_callees"], 0)
+        self.assertLess(graph["named_local_callees"], 1000)
+
+    def test_every_plt_relocation_names_exactly_one_entry(self) -> None:
+        """PLT entries are 12 or 16 bytes (a Thumb `bx pc; nop` prefix), not a fixed 12.
+
+        The fixed stride mislabelled every import after the first prefixed entry, so E0483's
+        "IPC" call sites were calls to other imports (E0663).
+        """
+        from elftools.elf.elffile import ELFFile
+
+        from callgraph import _plt_symbol_names
+        names = _plt_symbol_names(self.lib)
+        arm_entries = {address: name for address, name in names.items() if not address & 1}
+        with open(self.lib, "rb") as handle:
+            count = ELFFile(handle).get_section_by_name(".rel.plt").num_relocations()
+        self.assertEqual(len(arm_entries), count)
+        self.assertGreater(len(names) - len(arm_entries), 0, "no Thumb-prefixed entries seen")
+
+    def test_a_named_caller_must_own_the_address_it_is_given(self) -> None:
+        """The rule that was wrong once: a caller name requires size-bounded containment.
+
+        These libraries export ~1,853 functions covering under 1% of .text, so bisecting to the
+        nearest symbol start names 99.1% of call sites wrongly. This asserts the honest figure.
+        """
+        graph = build_callgraph(self.lib)
+        named = set(graph["nodes"].values())
+        named_callers = sum(1 for caller, _ in graph["edges"] if caller in named)
+        total = len(graph["edges"])
+        self.assertLess(named_callers / total, 0.05,
+                        "more call sites carry a name than the symbol sizes can justify")
 
     def test_callers_of_a_real_import_are_found_on_more_than_one_body(self) -> None:
         # Not every body's libObj.so calls osal_snd_msg directly (the a6100a does not), so this

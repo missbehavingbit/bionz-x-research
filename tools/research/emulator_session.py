@@ -111,9 +111,10 @@ def build_boot_session(args, parser=None) -> BootSession:
     the guest and does not contact the camera.
     """
     gles_tgid = getattr(args, 'gles_device', 'stop') == 'kernel-bound-tgid'
-    if gles_tgid and (getattr(args, 'gles_engine_model', 'none') != 'none'
+    gles_sugilite = getattr(args, 'gles_device', 'stop') == 'kernel-bound-sugilite'
+    if (gles_tgid or gles_sugilite) and (getattr(args, 'gles_engine_model', 'none') != 'none'
                       or getattr(args, 'gles_engine_seed_observed_block', False)):
-        raise ValueError('TGID completion requires an unseeded run without the assumed engine-completion model')
+        raise ValueError('TGID/Sugilite completion requires an unseeded run without the assumed engine-completion model')
     inventory_dir = getattr(args, 'guest_inventory_dir', None)
     folder = (PROJECT_ROOT / inventory_dir) if inventory_dir else (PROJECT_ROOT / 'artifacts/inventory')
     manifest = json.loads((folder / 'guest-filesystem.json').read_text(encoding='utf-8'))
@@ -202,11 +203,16 @@ def build_boot_session(args, parser=None) -> BootSession:
 
     mmap_base = args.mmap_base
     gles_kernel_bound = getattr(args, 'gles_device', 'stop').startswith('kernel-bound')
-    gles_decoded = getattr(args, 'gles_device', 'stop') in ('kernel-bound-decoded', 'kernel-bound-tgid')
-    if gles_tgid:
+    gles_decoded = getattr(args, 'gles_device', 'stop') in (
+        'kernel-bound-decoded', 'kernel-bound-tgid', 'kernel-bound-sugilite'
+    )
+    if gles_tgid or gles_sugilite:
         from tools.research.gles_contract_trace import MODULE
         checked_input(PROJECT_ROOT, MODULE,
                       'a8d1dbe8c66be365d32371b13f35a0e7d598c415c0ff17f2c8f544084ccc6882')
+    if getattr(args, 'grm_pools', 'gl-common-only') == 'captured-wbi-dmm':
+        from tools.research.wbi_memory import IMAGE as WBI_IMAGE
+        checked_input(PROJECT_ROOT, WBI_IMAGE, expected_inputs[WBI_IMAGE])
     mmap_search_low = 0x10000000 if gles_kernel_bound else None
     probe = InterpreterProbe(syscall_policy='threads', uname_profile=uname_profile,
                              filesystem=filesystem, kuser_template=kuser_template,
@@ -222,6 +228,8 @@ def build_boot_session(args, parser=None) -> BootSession:
                              display_profile=display_profile,
                              grm_pool_policy=getattr(args, 'grm_pools', 'gl-common-only'),
                              mmap_eof_policy=getattr(args, 'mmap_eof', 'zero-fill'))
+    if gles_sugilite or getattr(args, 'grm_pools', 'gl-common-only') == 'captured-wbi-dmm':
+        probe.enable_coherent_physical_ram()
     probe.thread_sleep_policy = getattr(args, 'nanosleep_policy', 'immediate')
     stack_bottom = 0x5e390000 if gles_kernel_bound else 0x7fe00000
     stack_size = 0x800000 if gles_kernel_bound else 0x100000
@@ -237,8 +245,12 @@ def build_boot_session(args, parser=None) -> BootSession:
                 kernel_table.register(thread_id, probe.threads.process_id)
             probe.threads.on_clone = kernel_table.register
         probe.kernel_tasks = kernel_table
+        gles_policy = ('kernel-sugilite' if gles_sugilite
+                       else 'kernel-tgid' if gles_tgid else 'legacy')
         probe.gles = GuestGles(GlesBinding(table=kernel_table),
-                               completion_policy='kernel-tgid' if gles_tgid else 'legacy')
+                               completion_policy=gles_policy)
+        if gles_sugilite:
+            probe.gles.enable_sugilite_engine(probe._sugilite_phys_read, probe._sugilite_phys_write)
     if args.gpio_device == 'driver-bound':
         from src.a6400.execution.guest_gpio import GuestGpio
         probe.gpio = GuestGpio()
@@ -384,6 +396,37 @@ def build_boot_session(args, parser=None) -> BootSession:
         probe.uipc.upm_boot_key = getattr(args, 'upm_boot_key', None)  # restore replaced UIPC
         probe.uipc.model_info_reply = getattr(args, 'model_info_reply', None)
         probe.uipc.capid_table_reply = getattr(args, 'capid_table_reply', None)
+        if getattr(args, 'media_service', 'stop') == 'authentic-sd':
+            probe.uipc.media_service_policy = 'authentic-sd'
+            if getattr(probe.uipc, 'media_service', None) is None:
+                from src.a6400.execution.guest_media_common import GuestMediaCommon
+                probe.uipc.media_service = GuestMediaCommon()
+        if getattr(args, 'graphics_service', 'stop') == 'authentic-grm':
+            probe.uipc.graphics_service_policy = 'authentic-grm'
+            if getattr(probe.uipc, 'grm_service', None) is None:
+                from src.a6400.execution.grm_service import GrmMaService
+                probe.uipc.grm_service = GrmMaService(
+                    pool_policy=getattr(args, 'grm_pools', 'gl-common-only')
+                )
+        if getattr(args, 'grm_pools', 'gl-common-only') == 'captured-wbi-dmm':
+            grm_svc = getattr(probe.uipc, 'grm_service', None)
+            if grm_svc is not None and grm_svc.pool_policy != 'captured-wbi-dmm':
+                grm_svc.upgrade_to_wbi_dmm()
+        if gles_sugilite or getattr(args, 'grm_pools', 'gl-common-only') == 'captured-wbi-dmm':
+            probe.enable_coherent_physical_ram()
+            for m in getattr(probe.mmap, 'mappings', []):
+                if m.get('device') == 'mem' and m.get('address') is not None and m.get('physical_start') is not None:
+                    pa = int(m['physical_start'])
+                    ln = int(m['length'])
+                    va = int(m['address'])
+                    if probe.physical_ram.supports_range(pa, ln):
+                        probe.physical_ram.map_alias(
+                            probe.mu, va, pa, ln, int(m.get('prot', 3)), 'mem', seed_from_existing=True
+                        )
+                        if probe.display is not None:
+                            probe.display.register_mapping(va, ln, pa, 'mem', '/dev/mem')
+            if probe.display is not None:
+                probe._install_display_write_hooks()
         probe.uipc.deliver_model_info_reply(lambda a_, d_: probe.mu.mem_write(a_, bytes(d_)))  # callback registered before the checkpoint
         active_tid = probe.threads.current_tid if hasattr(probe, 'threads') else 1000
         print(f'[*] Checkpoint restored! Resuming at instruction {probe.instructions:,} (active TID {active_tid}).')
@@ -412,13 +455,26 @@ def build_boot_session(args, parser=None) -> BootSession:
             probe.threads.on_clone = kernel_table.register
         probe.kernel_tasks = kernel_table
         probe.gles.binding = GlesBinding(table=kernel_table)
-        if gles_tgid:
+        if gles_sugilite:
+            probe.gles.enable_sugilite_engine(probe._sugilite_phys_read, probe._sugilite_phys_write)
+            if probe.gles.bar_virtual is not None:
+                probe.gles.seed_sugilite_bar_memory(probe._sugilite_bar_sync_write)
+            probe.install_gles_memory_guards()
+        elif gles_tgid:
             probe.gles.enable_tgid_completion()
             probe.install_gles_memory_guards()
-        elif probe.gles.completion_policy == 'kernel-tgid':
-            raise ValueError('TGID completion cannot be retrofitted to or removed from a different-policy checkpoint')
+        elif probe.gles.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
+            raise ValueError('TGID/Sugilite completion cannot be retrofitted to or removed from a different-policy checkpoint')
         probe.gles.decoded_semantics = gles_decoded
-        if gles_tgid:
+        if gles_sugilite:
+            probe.report['gles_completion_contract'] = {
+                'policy': 'kernel-sugilite',
+                'module_sha256': 'a8d1dbe8c66be365d32371b13f35a0e7d598c415c0ff17f2c8f544084ccc6882',
+                'kernel_task_records': 'explicit clone-derived model; not a booted kernel',
+                'shared_memory_init': 'sugilite_open first-open 4-byte header zero + guest rm_rqueue_init',
+                'engine_model': 'SugiliteGpuEngine (PSC0/PPF/P3D + sugilite_interrupt IRQ 76)',
+            }
+        elif gles_tgid:
             probe.report['gles_completion_contract'] = {
                 'policy': 'kernel-tgid',
                 'module_sha256': 'a8d1dbe8c66be365d32371b13f35a0e7d598c415c0ff17f2c8f544084ccc6882',
@@ -503,8 +559,16 @@ def build_boot_session(args, parser=None) -> BootSession:
     probe.mount_service_policy = getattr(args, 'mount_service', 'stop')
     probe.vfat_image = None
     if probe.mount_service_policy == 'observed-nflasha1':
-        from src.a6400.execution.guest_vfat import VfatImage
-        probe.vfat_image = VfatImage.from_evidence(PROJECT_ROOT)
+        from src.a6400.execution.guest_vfat import NFLASHA1_SIZE, VfatImage
+        nflasha1_file = dict(getattr(args, 'nflasha_image', None) or []).get(1)
+        if nflasha1_file:
+            probe.vfat_image = VfatImage(
+                Path(nflasha1_file).read_bytes(),
+                expected_size=NFLASHA1_SIZE,
+                evidence={'source_file': str(nflasha1_file)},
+            )
+        else:
+            probe.vfat_image = VfatImage.from_evidence(PROJECT_ROOT)
         probe.report['mount_service_policy'] = {
             'policy': 'observed-nflasha1',
             'image_sha256': probe.vfat_image.image_sha256,

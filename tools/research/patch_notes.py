@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-#: The section heading the support pages use.  Both spellings occur; either ends the block.
+#: The section heading the support pages use; the block starts at the first one found.
 START_MARKERS = ("Benefits and Improvements",)
 
 VERSION_RE = re.compile(r"Ver\.\s*(\d+(?:\.\d+)?)\s*\((\d{1,2}-\d{1,2}-\d{4})\)")
@@ -95,7 +95,6 @@ def read_page(session: str, url: str, settle: float = 3.0) -> dict:
                               "const i=t.indexOf(" + json.dumps(label) + ");"
                               f"return i>=0?t.slice(i,i+{ENTRY_CHARS}):''}})()")
         time.sleep(0.4)
-        found = VERSION_RE.match(label) or VERSION_RE.search(label + " ()")
         parts = label.split()
         entries.append({
             "label": label,

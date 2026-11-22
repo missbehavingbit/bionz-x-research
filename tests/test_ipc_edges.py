@@ -39,6 +39,28 @@ class ConstantArgumentTests(unittest.TestCase):
         self.assertIsNone(constant_arguments(data, 0x1000, 0x1004, 0))
 
 
+    def test_movw_then_movt_is_the_full_32_bit_value(self) -> None:
+        # movw r0,#0x8192 ; movt r0,#0xca ; call site. The top half must not replace the whole.
+        data = bytes.fromhex("48f29210") + bytes.fromhex("c0f2ca00") + bytes.fromhex("00bf")
+        self.assertEqual(constant_arguments(data, 0x1000, 0x1008, 0), 0xCA8192)
+
+    def test_a_call_in_between_clobbers_the_argument_register(self) -> None:
+        # movs r0,#5 ; bl (to itself) ; site: r0 now holds the callee's return value
+        data = bytes.fromhex("0520") + bytes.fromhex("fff7feff") + bytes.fromhex("00bf")
+        self.assertIsNone(constant_arguments(data, 0x1000, 0x1006, 0))
+
+    def test_a_literal_pool_load_is_read_from_the_pool(self) -> None:
+        # ldr r0,[pc,#4] at 0x1000 reads Align(0x1004,4)+4 = 0x1008; nop at 0x1002; site 0x1004
+        data = bytes.fromhex("0148") + bytes.fromhex("00bf") + bytes.fromhex("00bf00bf") \
+            + (0x00CA8192).to_bytes(4, "little")
+        self.assertEqual(constant_arguments(data, 0x1000, 0x1004, 0), 0xCA8192)
+
+    def test_any_other_write_to_the_register_makes_it_unknown(self) -> None:
+        # movs r0,#5 ; adds r0,#1 ; site: not a constant this tool can claim
+        data = bytes.fromhex("0520") + bytes.fromhex("0130") + bytes.fromhex("00bf")
+        self.assertIsNone(constant_arguments(data, 0x1000, 0x1004, 0))
+
+
 class TsvTests(unittest.TestCase):
     def test_tsv_has_the_documented_header(self) -> None:
         text = edges_to_tsv([{"caller": "a", "callee": "osal_snd_msg",

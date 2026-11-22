@@ -111,7 +111,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x1000,
         'irqs': [201, 202, 203, 204, 205],
         'model': 'cxd90014-sio (5 channels, ch3 sub-micro)',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'adc0_1',
@@ -119,7 +119,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x2000,
         'irqs': [215, 216],
         'model': 'cxd90014-adc (units 0 and 1)',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'gpio',
@@ -127,7 +127,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x1000,
         'irqs': list(range(121, 145)),
         'model': 'cxd90014-gpio',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'dfs_ctrl',
@@ -175,7 +175,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x40000,
         'irqs': [98, 101, 102],
         'model': 'cxd90014-vph (SYSV 0xF3402000, VPH 0xF3440000)',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'audioip',
@@ -191,7 +191,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x130000,
         'irqs': [51, 52, 53, 54, 55, 56, 61, 62, 63, 64, 65, 66],
         'model': 'cxd90014-sa (4 DSP cores)',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'p2s',
@@ -199,7 +199,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x1000,
         'irqs': [38],
         'model': 'cxd90014-p2s',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'evsel',
@@ -207,7 +207,7 @@ QEMU_PERIPHERAL_CATALOG = (
         'size': 0x1000,
         'irqs': [83, 84],
         'model': 'cxd90014-evsel',
-        'unicorn_status': 'missing',
+        'unicorn_status': 'modeled',
     },
     {
         'name': 'imager_leo_clk',

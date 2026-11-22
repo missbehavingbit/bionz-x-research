@@ -14,10 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.a6400.targets.usb_debugger_compat import (  # noqa: E402
-    VERIFIED_LIBUSBCMD_SHA256,
-    VERIFIED_LIBUSBCMD_SIZE,
     VERIFIED_USB_EXTCMD_NORMALIZED_SHA256,
     VERIFIED_USB_EXTCMD_SIZE,
+    is_verified_libusbcmd,
 )
 from tools.research.elf_metadata_identity import normalize_elf_metadata  # noqa: E402
 
@@ -54,7 +53,7 @@ def inspect_and_unpack_bundle(bundle_path: Path, root: Path = ROOT) -> dict:
         and bool(ko_norm.get('valid'))
         and ko_norm.get('normalized_sha256') == VERIFIED_USB_EXTCMD_NORMALIZED_SHA256
     )
-    lib_ok = len(actual_lib) == VERIFIED_LIBUSBCMD_SIZE and lib_sha == VERIFIED_LIBUSBCMD_SHA256
+    lib_ok = is_verified_libusbcmd(actual_lib)
 
     snippet = None
     if ko_ok and lib_ok:
@@ -72,8 +71,8 @@ def inspect_and_unpack_bundle(bundle_path: Path, root: Path = ROOT) -> dict:
             f'        usb_extcmd_reference_paths=(\n'
             f'            "artifacts/hardware/{target_id}-{fw_ver}-pull/usb_extcmd.ko",\n'
             f'        ),\n'
-            f'        libusbcmd_size=VERIFIED_LIBUSBCMD_SIZE,\n'
-            f'        libusbcmd_sha256=VERIFIED_LIBUSBCMD_SHA256,\n'
+            f'        libusbcmd_size={len(actual_lib)},\n'
+            f'        libusbcmd_sha256="{lib_sha}",\n'
             f'    ),'
         )
 

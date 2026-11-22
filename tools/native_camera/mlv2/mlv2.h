@@ -15,18 +15,26 @@
 #ifndef MLV2_VIEW_BASE
 #define MLV2_VIEW_BASE        MLV2_REF_VIEW_BASE
 #endif
-#define MLV2_SET_TEXT         (MLV2_VIEW_BASE + 0x14f6d0u + 1u)
-#define MLV2_SET_MODE         (MLV2_VIEW_BASE + 0x155a68u + 1u)
+#ifdef MLV2_TARGET_A6100
+#define MLV2_SET_TEXT_OFF     0x150030u
+#define MLV2_SET_MODE_OFF     0x1563c8u
+#define MLV2_V1_ANCHOR        (MLV2_REF_VIEW_BASE + 0xb7a658u)
+#else
+#define MLV2_SET_TEXT_OFF     0x14f6d0u
+#define MLV2_SET_MODE_OFF     0x155a68u
 #define MLV2_V1_ANCHOR        0x1615ec40u   /* v1 anchor {magic, state}; also used by the tab icon */
+#endif
+#define MLV2_SET_TEXT         (MLV2_VIEW_BASE + MLV2_SET_TEXT_OFF + 1u)
+#define MLV2_SET_MODE         (MLV2_VIEW_BASE + MLV2_SET_MODE_OFF + 1u)
 #define MLV2_V1_MAGIC         0x444f4d53u   /* "SMOD" */
 #define MLV2_V1_STATE_BYTES   8192u         /* tab icon cache lives at state + 8180 */
 
 /* ---- Shim ---- */
 #ifndef MLV2_SHIM_ADDR
-#define MLV2_SHIM_ADDR        0x05662760u   /* /usr/lib/libtestcmd.so RX zero tail, 2208 bytes */
+#define MLV2_SHIM_ADDR        0x05662800u   /* /usr/lib/libtestcmd.so RX zero tail (>0x2790 EOF), 2048 bytes */
 #endif
-#define MLV2_REF_SHIM_ADDR    0x05662760u
-#define MLV2_SHIM_CAP         2208u
+#define MLV2_REF_SHIM_ADDR    0x05662800u
+#define MLV2_SHIM_CAP         2048u
 #define MLV2_SHIM_SLOT        MLV2_SHIM_ADDR  /* first word of the shim: ShimState pointer */
 #define MLV2_CORE_PATH        "/tmp_bt/mlv2/core.bin"
 #define MLV2_SD_MANAGED       "/tmp_bt/mlv2/sd-managed"

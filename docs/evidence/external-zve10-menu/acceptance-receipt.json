@@ -1,0 +1,127 @@
+{
+  "profile": "zve10-adapted-menu-v1",
+  "stock_boot": false,
+  "physical_panel_qualified": false,
+  "language": "english",
+  "presentation_policy": "guest-framebuffer-on-upstream-vph",
+  "command": [
+    "qemu-system-arm",
+    "-M",
+    "sony-a6400,zve10-menu-boot=on",
+    "-cpu",
+    "cortex-a9",
+    "-smp",
+    "1",
+    "-m",
+    "1024",
+    "-kernel",
+    "<declared raw Image>",
+    "-initrd",
+    "<declared derived CPIO>",
+    "-append",
+    "console=ttyAM0,115200n8 cfg.uart=1 mem=1G@0 memrsv=0x1A5E000@0x02E68000 memrsv=128M@0x20000000:uc rdinit=/init loglevel=8 initrd=0x10000000,259939328",
+    "-display",
+    "none",
+    "-monitor",
+    "none",
+    "-nic",
+    "none",
+    "-no-reboot",
+    "-serial",
+    "tcp:127.0.0.1:<UART>,server=on,wait=on",
+    "-qmp",
+    "tcp:127.0.0.1:<QMP>,server=on,wait=off"
+  ],
+  "qemu_sha256": "df7b3dda57ec0911a736fe681205676b7499536990d7100bb7098c300f38ce4e",
+  "inputs": {
+    "kernel": {
+      "path": "artifacts/zve10-menu/inputs/Image",
+      "sha256": "017f52165f8c46e6ceea62f7410472ba742f563fc712d0013c138aefe0bfb33b"
+    },
+    "initrd": {
+      "path": "artifacts/zve10-menu/inputs/menu.cpio",
+      "sha256": "abc13e99d1cec3b4a1ad2bf5a785db2bee72634a7c990811e4fab6ec5face331"
+    },
+    "source_manifest": {
+      "path": "artifacts/zve10-menu/inputs/source-manifest.json",
+      "sha256": "1a4accb454007709bf39427d83606c6813cb8027d535bcaee58901c97fa5623f"
+    }
+  },
+  "source_manifest_sha256": "1a4accb454007709bf39427d83606c6813cb8027d535bcaee58901c97fa5623f",
+  "guest_bridge_sha256": "08e88fe9f555bf9576e374cd2e31e7b00044a631f6b7a95d4860af58ed5b999e",
+  "completed": true,
+  "requested_oracles": {
+    "initial_rgb": "37d9e8d2c79e60b79d802b3ba1a454ddbab323dae9fc18ac8f71b822f50abfa8",
+    "event_titles": [
+      "d08a1a729c8ce0da06e6e8c1727dcc0ad5cc1a5820f037a732849b2b6cf5120c"
+    ]
+  },
+  "source_sha256": {
+    "tools/research/qemu_zve10_menu.py": "8dc462c0813d291bf6a0e888e0e1f67d8e4e9f0ecb941907c1f7277d10cf3c9e",
+    "tools/research/qemu_boot_probe.py": "8bb85163daef3fbe8e7c239b20c048b230935cab4748fbfec38f2594865ebeb2",
+    "qemu-a6400/qemu-overlay/hw/arm/sony_a6400.c": "d5ec1ec58b0afce36fb6530605f33555f93f3bd722f5e6147d0946379babbe6e",
+    "qemu-a6400/qemu-overlay/hw/misc/cxd90014_vph.c": "899458fe36941ea97ad481e2b0f6783348d3e3aab4ef540bf9e8bca7b546ca9e"
+  },
+  "qmp_version": {
+    "qemu": {
+      "micro": 3,
+      "minor": 1,
+      "major": 11
+    },
+    "package": ""
+  },
+  "ready": {
+    "frame": 27,
+    "pid": 102,
+    "ui_tid": 181,
+    "view": 1918768,
+    "title_sets": 0,
+    "native_glyph_images": 13
+  },
+  "initial_frame": {
+    "framebuffer": "0x22c48000",
+    "raw_sha256": "2a87fa9405312a096e9cd8b3d3300ccb387172e481934613dddbd69fdd879189",
+    "screenshot_sha256": "0454bcbb1e262bdcff1252171a9e247bb39313ae8e914bdc74faa76278daa3aa",
+    "qmp_matches_guest_memory": true,
+    "colors": 224,
+    "rgb_sha256": "37d9e8d2c79e60b79d802b3ba1a454ddbab323dae9fc18ac8f71b822f50abfa8",
+    "title_rgb_sha256": "8b51026430b6eeaf03bf0a5307e5b3ebec7b09cdaddb1626e0d1886d55bf063d"
+  },
+  "events": [
+    {
+      "sequence": 1,
+      "function": 3,
+      "tid": 181,
+      "overlay": 0,
+      "native_action": 4,
+      "completed_frame": 33,
+      "key": "RIGHT",
+      "frame": {
+        "framebuffer": "0x22bb2000",
+        "raw_sha256": "7677771b57f301bed93f8c5a64f7aa816591550142962b70a53cf2c304d75bff",
+        "screenshot_sha256": "a909285bfcd4be0d52282e551fd521cb68bc666e98d4ee21f2f167147d67e9cd",
+        "qmp_matches_guest_memory": true,
+        "colors": 248,
+        "rgb_sha256": "1fb7f9d5b3385bc2fcf5047b702f5e6271f189510b98ab934ee18caff15cbd1c",
+        "title_rgb_sha256": "d08a1a729c8ce0da06e6e8c1727dcc0ad5cc1a5820f037a732849b2b6cf5120c"
+      },
+      "screenshot": "event-01-right.png"
+    }
+  ],
+  "frame": {
+    "framebuffer": "0x22bb2000",
+    "raw_sha256": "7677771b57f301bed93f8c5a64f7aa816591550142962b70a53cf2c304d75bff",
+    "screenshot_sha256": "a909285bfcd4be0d52282e551fd521cb68bc666e98d4ee21f2f167147d67e9cd",
+    "qmp_matches_guest_memory": true,
+    "colors": 248,
+    "rgb_sha256": "1fb7f9d5b3385bc2fcf5047b702f5e6271f189510b98ab934ee18caff15cbd1c",
+    "title_rgb_sha256": "d08a1a729c8ce0da06e6e8c1727dcc0ad5cc1a5820f037a732849b2b6cf5120c"
+  },
+  "stopped": {
+    "marker": "NE_STOPPED"
+  },
+  "returncode": 0,
+  "platform": "Windows x64 / MSYS2 UCRT64",
+  "qemu_source_commit": "005c61c0ef6f6ae615283440b4bb7be51b2c6ddd",
+  "privacy": "Absolute host paths and ephemeral ports removed; no raw frames or proprietary inputs"
+}

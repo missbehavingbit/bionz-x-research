@@ -176,11 +176,18 @@ def run_ghidra(root, profile, env):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('server', choices=('pyghidra', 'ghidra', 'reverify'))
+    parser.add_argument('--install-root', help='Standalone MCP installation with its own Ghidra and JDK')
     args = parser.parse_args(argv)
     if sys.platform != 'linux':
         parser.error('Launch through the workspace WSL MCP configuration')
     config = toolchain_config()['workspace_mcp']
-    root = Path(config['root'])
+    install_root = args.install_root
+    if install_root is None and args.server in ('ghidra', 'pyghidra'):
+        install_root = config['ghidra_install_root']
+    root = Path(install_root if install_root is not None else config['root']).expanduser()
+    if not root.is_absolute():
+        parser.error('The MCP installation root must be an absolute Linux path')
+    root = root.resolve()
     environment = root / 'envs' / args.server
     python = environment / 'bin' / 'python'
     if not python.is_file():
@@ -189,10 +196,13 @@ def main(argv=None):
     for directory in ('home', 'runtime', 'receipts', 'workspace/inputs', 'workspace/pyghidra'):
         (root / directory).mkdir(parents=True, exist_ok=True)
     env = analysis_environment(root, os.environ)
-    profile = rea_profile('current')
+    profile = rea_profile('current', tools_root=root if install_root is not None else None)
     env.update(JAVA_HOME=profile['java'], GHIDRA_INSTALL_DIR=profile['ghidra'])
     if Path(sys.prefix) != environment:
-        os.execve(python, [str(python), '-u', '-m', 'tools.research.mcp_workspace', args.server], env)
+        command = [str(python), '-u', '-m', 'tools.research.mcp_workspace', args.server]
+        if install_root is not None:
+            command.extend(('--install-root', str(root)))
+        os.execve(python, command, env)
     os.environ.clear()
     os.environ.update(env)
     distribution = {'pyghidra': 'pyghidra-mcp', 'ghidra': 'ghidra-mcp-bridge',

@@ -62,3 +62,19 @@ v1 copy imported from a v1 loader, the file replaced (`ON*`), v1 OFF, v2 ON/OFF.
 past the early guards still call stubs only. On the camera (2026-11-17, RAM only) it loaded
 through the v2 core and handled tab taps in all seven tabs. Page, row, swipe, popup and OFF still
 need a camera pass. The SD package still ships the v1 file.
+
+### QEMU native touch replay
+
+The relocatable v2 build now checks the receiver against the live
+`WidgetSystem::sys_getInstance()` result instead of a fixed camera heap
+address. Only the original singleton is accepted. The verified v1
+binary still rebuilds byte-for-byte.
+
+[Matched guest replays](../../docs/evidence/mods/2026-11-19-firmware-qualification.md#native-touch-follow-up)
+confirmed a tab tap and horizontal swipe through Sony's native touch
+callback. Additional matched native reports changed page dots, selected
+and opened a row, and moved a popup highlight by tap or vertical swipe
+only with v2 ON. An outside tap dismissed the popup only with v2 ON.
+The popup did not commit the selected value in that guest, even with
+the stock keys. Scrolling a list with hidden options and physical
+digitizer input were not qualified by these runs.

@@ -172,9 +172,11 @@ static void a6400_uvc_status_prearm(void *ep, void *req)
     unsigned dir_out=g_prearm_dir_out, armed=0;
     if (!g_prearm_pending || !r || r!=g_prearm_req) return;
     g_prearm_pending=0;
-    /* Never arm on an error/setup-pending giveback: only a clean data-stage
-     * completion may be followed by the status stage. */
-    if (r && a6400_uvc_kernel_ptr(r) && (int)a6400_uvc_rd32(r+0x2cu)!=0) {
+    /* Never arm on an error/setup-pending giveback, or on an OUT request whose
+     * data stage transferred zero bytes (unconsumed bounce TRB). */
+    if (r && a6400_uvc_kernel_ptr(r) &&
+        ((int)a6400_uvc_rd32(r+0x2cu)!=0 ||
+         (dir_out && a6400_uvc_rd32(r+0x30u)==0u))) {
         g_prearm_skipped++;
         return;
     }
@@ -974,7 +976,13 @@ static uvc_u32 invoke(struct uvc_old_descriptor *d, uvc_u32 which,
         a6400_uvc_ep0_wrap_install((void *)(uvc_u32)a2);
 #endif
     }
-    if (which==STOP) { a6400_uvc_ring_dump(); a6400_uvc_ring_restore(); }
+    if (which==STOP) {
+        g_prearm_req=0; g_prearm_pending=0; g_prearm_active=0; g_prearm_dir_out=0;
+        a6400_uvc_ring_dump(); a6400_uvc_ring_restore();
+    }
+    if (which==DISCONNECT) {
+        g_prearm_req=0; g_prearm_pending=0; g_prearm_active=0; g_prearm_dir_out=0;
+    }
     if (which==DISCONNECT && !b->started && !g_disconnect_restored) {
         g_disconnect_restored=1;
         printk("[a6400_uvc] DISCONNECT schedule deferred restore started=%u in_flight=%u\n",(unsigned)b->started,(unsigned)b->in_flight);

@@ -2,7 +2,9 @@ import struct
 import unittest
 
 from tools.research.msc_extcmd_trace import (
-    link_arm_call, linked_window, original_text, original_thumb,
+    DRIVER_SHA, KMOD, ReadinessControl, debugger_abi_controls, link_arm_call,
+    linked_window, list_delete_control, original_text, original_thumb,
+    registration_fields_control,
 )
 
 
@@ -38,3 +40,43 @@ class ClosedCallGraphTests(unittest.TestCase):
                                      (0xEBFFFFFE, 0x1000, 0x4000000)):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 link_arm_call(word, place, target)
+
+
+@unittest.skipUnless((KMOD / "usb_extcmd.ko").is_file(), "Private a6400A driver input unavailable")
+class DebuggerAbiControlTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.driver = original_text((KMOD / "usb_extcmd.ko").read_bytes(), DRIVER_SHA)
+
+    def test_debugger_and_model_feature_keys_do_not_alias(self):
+        for node_feature, expected_state in ((1, 0), (0x23, 2)):
+            with self.subTest(node_feature=node_feature):
+                result = ReadinessControl(self.driver, mask=1, feature=node_feature,
+                                          command_feature=0x23).status(1)
+                self.assertEqual(result["original_state_result"], expected_state)
+                self.assertEqual(result["lookup_fixtures"][0]["feature"], 0x23)
+                self.assertEqual(result["readiness_writes"], [])
+
+    def test_registration_preserves_full_feature_and_distinct_buffer_sizes(self):
+        result = registration_fields_control(self.driver, feature=0x1234,
+                                             receive_size=512, send_size=2048)
+        self.assertEqual(result["observed"]["context_feature"], 0x1234)
+        self.assertEqual(result["observed"]["node_feature"], 0x1234)
+        self.assertEqual(result["observed"]["receive_size"], 512)
+        self.assertEqual(result["observed"]["send_size"], 2048)
+        self.assertEqual(result["observed"]["readiness_mask"], 0)
+        self.assertEqual(result["stop"], "create_fields_before_mutex_initialization")
+
+    def test_deleting_debugger_node_preserves_other_registered_feature(self):
+        result = list_delete_control(self.driver)
+        self.assertEqual(result["surviving_feature"], 1)
+        self.assertEqual([row["callee_fixture"] for row in result["helper_fixtures"]],
+                         ["get_extcmd_this", "_mutex_lock", "get_extcmd_this", "_mutex_unlock"])
+
+    def test_debugger_ioctls_reach_their_original_routes_without_qualifying_deployment(self):
+        result = debugger_abi_controls(self.driver)
+        self.assertEqual([row["operation"] for row in result["ioctl_routes"]],
+                         ["create", "destroy", "receive", "send"])
+        self.assertEqual(len({row["pc"] for row in result["ioctl_routes"]}), 4)
+        self.assertEqual(len(result["feature_0x23_status_cases"]), 12)
+        self.assertFalse(result["deployment_qualified"])

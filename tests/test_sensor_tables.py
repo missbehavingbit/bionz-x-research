@@ -1,6 +1,7 @@
 """Unit tests for BIONZ X sensor configuration table mapping and emulation."""
 from __future__ import annotations
 
+import hashlib
 import struct
 import unittest
 from pathlib import Path
@@ -130,57 +131,63 @@ class TestImagerMmioAndRealFirmware(unittest.TestCase):
         self.assertGreater(len(avcam.mmio_tables), 10)
 
     def test_real_a6400_opengate_3_2_unicorn_tables(self) -> None:
-        avcam_path = (
-            PROJECT_ROOT
-            / "firmware"
-            / "extracted_a6400"
-            / "firmware.tar_unpacked"
-            / "0700_part_image"
-            / "dev"
-            / "nflasha3_unpacked"
-            / "av-cam.bin"
-        )
-        if not avcam_path.is_file():
-            self.skipTest("unpacked a6400 av-cam.bin not present")
-
         from unicorn import UC_ARCH_ARM, UC_MODE_THUMB, UC_PROT_EXEC, UC_PROT_READ, UC_PROT_WRITE, Uc
-        from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP
+        from unicorn.arm_const import (
+            UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1,
+            UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP,
+        )
 
-        avcam = avcam_path.read_bytes()
-        mapped_size = ((len(avcam) + 0xFFF) // 0x1000) * 0x1000
-        uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
-        uc.mem_map(ORIL_BASE, mapped_size, UC_PROT_READ | UC_PROT_EXEC)
-        uc.mem_write(ORIL_BASE, avcam)
+        firmware = PROJECT_ROOT / "firmware"
+        builds = (
+            (firmware / "extracted_a6400" / "firmware.tar_unpacked" / "0700_part_image"
+             / "dev" / "nflasha3_unpacked" / "av-cam.bin",
+             "90d515cfec8b936f1ba9a69dcac462816b880297752a652474d67c4bba39125e",
+             0x63C9D13A, 0x63DDF414, 0x63E129E8, 0x63E13284, 0x63E12610),
+            (firmware / "captured_a6400_20261113_analysis" / "av-cam.bin",
+             "dd8f8d0cc74ad4b70100e5728cf8b159b5155e7fb50eaf1147b99c9054740209",
+             0x63CAEADA, 0x63DF199C, 0x63E24F70, 0x63E2580C, 0x63E24B98),
+        )
+        for path, digest, selector, buffers, geometry, timing, depth in builds:
+            with self.subTest(sha256=digest):
+                if not path.is_file():
+                    self.skipTest(f"Local a6400 ORIL not present: {path.name} ({digest[:8]})")
 
-        stack = 0x10000000
-        uc.mem_map(stack, 0x10000, UC_PROT_READ | UC_PROT_WRITE)
+                avcam = path.read_bytes()
+                self.assertEqual(hashlib.sha256(avcam).hexdigest(), digest)
+                uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
+                uc.mem_map(ORIL_BASE, (len(avcam) + 0xFFF) & ~0xFFF, UC_PROT_READ | UC_PROT_EXEC)
+                uc.mem_write(ORIL_BASE, avcam)
+                stack = 0x10000000
+                uc.mem_map(stack, 0x1000, UC_PROT_READ | UC_PROT_WRITE)
 
-        def call_selector(r1: int, r2: int, r3: int, sp0: int) -> tuple[int, int, int, int, int, int]:
-            uc.reg_write(UC_ARM_REG_SP, stack + 0x8000)
-            uc.mem_write(stack + 0x8000, struct.pack("<I", sp0))
-            uc.reg_write(UC_ARM_REG_R1, r1)
-            uc.reg_write(UC_ARM_REG_R2, r2)
-            uc.reg_write(UC_ARM_REG_R3, r3)
-            uc.reg_write(UC_ARM_REG_LR, ORIL_BASE | 1)
-            uc.emu_start(0x63C9D13A | 1, ORIL_BASE, timeout=100000, count=200)
-            idx = uc.reg_read(UC_ARM_REG_R0)
-            w, h, aw, ah, _flag, pool = struct.unpack_from("<6I", uc.mem_read(0x63DDF414 + idx * 24, 24))
-            return idx, w, h, aw, ah, pool
+                for args, expected in (
+                    ((6, 1, 3840, 2160), (3, 1620, 1080, 1664, 1080, 0x50B3F)),
+                    ((6, 1, 3840, 1080), (6, 3240, 2160, 3264, 2160, 0x299)),
+                    ((6, 2, 3840, 1080), (4, 3840, 2160, 3840, 2160, 0x299)),
+                ):
+                    r1, r2, r3, sp0 = args
+                    uc.reg_write(UC_ARM_REG_SP, stack + 0x800)
+                    uc.mem_write(stack + 0x800, struct.pack("<I", sp0))
+                    uc.reg_write(UC_ARM_REG_R1, r1)
+                    uc.reg_write(UC_ARM_REG_R2, r2)
+                    uc.reg_write(UC_ARM_REG_R3, r3)
+                    uc.reg_write(UC_ARM_REG_LR, ORIL_BASE | 1)
+                    uc.emu_start(selector | 1, ORIL_BASE, timeout=100000, count=200)
+                    self.assertEqual(uc.reg_read(UC_ARM_REG_PC), ORIL_BASE, "selector did not return")
+                    idx = uc.reg_read(UC_ARM_REG_R0)
+                    self.assertEqual(idx, expected[0])
+                    width, height, aw, ah, _, pool = struct.unpack("<6I", uc.mem_read(buffers + idx * 24, 24))
+                    self.assertEqual((idx, width, height, aw, ah, pool), expected)
 
-        self.assertEqual(call_selector(6, 1, 3840, 2160), (3, 1620, 1080, 1664, 1080, 0x50B3F))
-        self.assertEqual(call_selector(6, 1, 3840, 1080), (6, 3240, 2160, 3264, 2160, 0x299))
-        self.assertEqual(call_selector(6, 2, 3840, 1080), (4, 3840, 2160, 3840, 2160, 0x299))
-
-        def read_imx284_mode(idx: int) -> tuple[int, int, int, int, int, int]:
-            gw = struct.unpack_from("<19I", uc.mem_read(0x63E129E8 + idx * 0x4C, 76))
-            h1, v1 = struct.unpack_from("<2I", uc.mem_read(0x63E13284 + idx * 24, 8))
-            bw = struct.unpack_from("<8I", uc.mem_read(0x63E12610 + idx * 0x20, 32))
-            bits = (bw[4] >> 8) & 0xFF
-            return gw[7], gw[15], h1, v1, bits, bw[3]
-
-        self.assertEqual(read_imx284_mode(2), (6000, 4000, 831, 4148, 12, 0x010000))
-        self.assertEqual(read_imx284_mode(10), (1996, 1332, 660, 1820, 12, 0x010000))
-        self.assertEqual(read_imx284_mode(16), (6000, 3376, 862, 1740, 11, 0x020000))
+                for mode, expected in (
+                    (2, (6000, 4000, 831, 4148, 12, 0x010000)),
+                    (10, (1996, 1332, 660, 1820, 12, 0x010000)),
+                    (16, (6000, 3376, 862, 1740, 11, 0x020000)),
+                ):
+                    gw = struct.unpack("<19I", uc.mem_read(geometry + mode * 0x4C, 76))
+                    h1, v1 = struct.unpack("<2I", uc.mem_read(timing + mode * 24, 8))
+                    bw = struct.unpack("<8I", uc.mem_read(depth + mode * 0x20, 32))
+                    self.assertEqual((gw[7], gw[15], h1, v1, (bw[4] >> 8) & 0xFF, bw[3]), expected)
 
     def test_real_a6400_idt_rcraw_unicorn_snapshot(self) -> None:
         avcam_path = (

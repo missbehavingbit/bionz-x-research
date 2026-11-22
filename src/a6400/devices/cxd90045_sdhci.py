@@ -73,11 +73,15 @@ class CxdSdhciEmmc:
             self._total_bytes = image_path.stat().st_size
         else:
             self._total_bytes = 0
-        self.regs = bytearray(0x100)
+        self.regs = bytearray(0x1000)
         self._pio_buf = b''
         self._pio_pos = 0
+        self._predefined_blk_cnt = 0
+        self._cow_sectors: dict[int, bytes] = {}
+        self._ext_csd = bytearray(self._init_ext_csd())
         self.cmd_count = 0
         self.sectors_read = 0
+        self.sectors_written = 0
         self._reset(0x01)
 
     def close(self) -> None:
@@ -87,14 +91,28 @@ class CxdSdhciEmmc:
 
     def _reset(self, mask: int) -> None:
         if mask & 0x01:
-            self.regs[:] = b'\x00' * 0x100
+            self.regs[:0x100] = b'\x00' * 0x100
             struct.pack_into('<I', self.regs, SDHCI_CAPABILITIES, EMMC0_CAPAREG)
             struct.pack_into('<H', self.regs, SDHCI_HOST_VERSION, EMMC0_HOST_VERSION)
-            # Card inserted, state stable, detect pin high
-            struct.pack_into('<I', self.regs, SDHCI_PRESENT_STATE, 0x00070000)
+            # Card inserted/stable/detect (0x70000) + CMD and DAT[3:0] lines idle high (0x01F00000)
+            struct.pack_into('<I', self.regs, SDHCI_PRESENT_STATE, 0x01F70000)
             self._pio_buf = b''
             self._pio_pos = 0
+            self._predefined_blk_cnt = 0
             self._update_irq()
+            return
+        if mask & 0x02:
+            st = struct.unpack_from('<I', self.regs, SDHCI_PRESENT_STATE)[0] & ~0x01
+            struct.pack_into('<I', self.regs, SDHCI_PRESENT_STATE, st)
+            ist = struct.unpack_from('<I', self.regs, SDHCI_INT_STATUS)[0] & ~INT_CMD_COMPLETE
+            struct.pack_into('<I', self.regs, SDHCI_INT_STATUS, ist)
+        if mask & 0x04:
+            st = struct.unpack_from('<I', self.regs, SDHCI_PRESENT_STATE)[0] & ~0x02
+            struct.pack_into('<I', self.regs, SDHCI_PRESENT_STATE, st)
+            self._pio_buf = b''
+            self._pio_pos = 0
+            self._predefined_blk_cnt = 0
+        self._update_irq()
 
     def _update_irq(self) -> None:
         status = struct.unpack_from('<I', self.regs, SDHCI_INT_STATUS)[0]
@@ -105,25 +123,69 @@ class CxdSdhciEmmc:
     def _read_backing(self, offset: int, length: int) -> bytes:
         if self.image_bytes is not None:
             chunk = self.image_bytes[offset:offset + length]
-            return chunk.ljust(length, b'\x00')
-        if self._file is not None:
+        elif self._file is not None:
             self._file.seek(offset)
             chunk = self._file.read(length)
-            return chunk.ljust(length, b'\x00')
-        return b'\x00' * length
+        else:
+            chunk = b''
+        if len(chunk) < length:
+            chunk = chunk.ljust(length, b'\x00')
+        if not self._cow_sectors or offset % 512 != 0:
+            return chunk
+        base_sec = offset // 512
+        end_sec = base_sec + (length // 512)
+        if not any(base_sec <= sec < end_sec for sec in self._cow_sectors):
+            return chunk
+        raw = bytearray(chunk)
+        for sec, over in self._cow_sectors.items():
+            if base_sec <= sec < end_sec:
+                idx = sec - base_sec
+                raw[idx * 512:(idx + 1) * 512] = over
+        return bytes(raw)
 
-    def _build_ext_csd(self) -> bytes:
+    def _write_overlay(self, offset: int, data: bytes) -> None:
+        base_sec = offset // 512
+        for idx in range(0, len(data), 512):
+            chunk = data[idx:idx + 512].ljust(512, b'\x00')
+            self._cow_sectors[base_sec + (idx // 512)] = chunk
+
+    def _init_ext_csd(self) -> bytes:
         ext = bytearray(512)
-        ext[192] = 7  # EXT_CSD_REV = 7 (matches QEMU patch)
-        ext[194] = 2  # EXT_CSD_STRUCTURE = 2
-        ext[196] = 0b11  # CARD_TYPE
+        ext[160] = 0b111  # PARTITION_SUPPORT
+        ext[179] = 0x08   # PART_CONFIG: boot1 enabled, user area active (matches sony_a6400.c)
+        ext[192] = 7      # EXT_CSD_REV = 7 (matches QEMU patch)
+        ext[194] = 2      # EXT_CSD_STRUCTURE = 2
+        ext[196] = 0b11   # CARD_TYPE
+        ext[205:211] = b'\x46' * 6
         user_bytes = max(0, self._total_bytes - self.user_offset)
         sectors = user_bytes // 512
         struct.pack_into('<I', ext, 212, sectors)
+        ext[217] = 1      # S_A_TIMEOUT
+        ext[219] = 1      # S_C_VCCQ
+        ext[220] = 1      # S_C_VCC
+        ext[221] = 1      # HC_WP_GRP_SIZE
+        ext[222] = 1      # REL_WR_SEC_C
+        ext[223] = 1      # ERASE_TIMEOUT_MULT
+        ext[224] = 1      # HC_ERASE_GRP_SIZE
+        ext[225] = 1      # ACC_SIZE
+        if self.user_offset >= 256 * 1024:
+            ext[226] = (self.user_offset // 2) // (128 * 1024)  # BOOT_SIZE_MULT
+        ext[504] = 1      # S_CMD_SET
         return bytes(ext)
 
+    def _build_ext_csd(self) -> bytes:
+        return bytes(self._ext_csd)
+
+    def _active_partition_offset(self) -> int:
+        part_access = self._ext_csd[179] & 0x07
+        if part_access == 1:
+            return 0
+        if part_access == 2:
+            return self.user_offset // 2
+        return self.user_offset
+
     def read(self, offset: int, size: int = 4) -> int:
-        if offset >= 0x100:
+        if offset >= 0x1000:
             return 0
         if offset == SDHCI_BUFFER and self._pio_pos < len(self._pio_buf):
             chunk = self._pio_buf[self._pio_pos:self._pio_pos + size]
@@ -137,16 +199,20 @@ class CxdSdhciEmmc:
         return int.from_bytes(self.regs[offset:offset + size], 'little')
 
     def write(self, offset: int, value: int, size: int = 4) -> None:
-        if offset >= 0x100:
+        if offset >= 0x1000:
             return
-        if offset == SDHCI_INT_STATUS:
-            cur = struct.unpack_from('<I', self.regs, SDHCI_INT_STATUS)[0]
-            mask = (value & ((1 << (size * 8)) - 1))
-            struct.pack_into('<I', self.regs, SDHCI_INT_STATUS, cur & ~mask)
+        raw = (value & ((1 << (size * 8)) - 1)).to_bytes(size, 'little')
+        # Normal + Error Interrupt Status (0x30..0x33) are RW1C across all bytes.
+        if offset < 0x34 and (offset + size) > SDHCI_INT_STATUS:
+            for idx, byte_val in enumerate(raw):
+                pos = offset + idx
+                if SDHCI_INT_STATUS <= pos < 0x34:
+                    self.regs[pos] &= ~byte_val
+                elif pos < 0x1000:
+                    self.regs[pos] = byte_val
             self._update_irq()
             return
         # Write raw bytes into register file
-        raw = (value & ((1 << (size * 8)) - 1)).to_bytes(size, 'little')
         self.regs[offset:offset + size] = raw
         if offset <= SDHCI_CLOCK_CONTROL < offset + size:
             clk = struct.unpack_from('<H', self.regs, SDHCI_CLOCK_CONTROL)[0]
@@ -156,14 +222,14 @@ class CxdSdhciEmmc:
         if offset <= SDHCI_SOFTWARE_RESET < offset + size:
             rst = self.regs[SDHCI_SOFTWARE_RESET]
             if rst:
-                self._reset(rst)
                 self.regs[SDHCI_SOFTWARE_RESET] = 0
+                self._reset(rst)
                 return
-        if offset in (SDHCI_INT_ENABLE, SDHCI_SIGNAL_ENABLE):
+        if offset < 0x3C and (offset + size) > SDHCI_INT_ENABLE:
             self._update_irq()
-        if offset <= SDHCI_COMMAND < offset + size and (offset + size) >= SDHCI_COMMAND + 2:
+        if offset <= SDHCI_COMMAND + 1 < offset + size:
             cmdreg = struct.unpack_from('<H', self.regs, SDHCI_COMMAND)[0]
-            self._execute_command((cmdreg >> 8) & 0x3F)
+            self._execute_command((cmdreg >> 8) & 0x3F, cmdreg)
 
     def _set_resp(self, r0: int = 0, r1: int = 0, r2: int = 0, r3: int = 0) -> None:
         struct.pack_into('<4I', self.regs, SDHCI_RESPONSE_0, r0 & 0xFFFFFFFF,
@@ -202,14 +268,46 @@ class CxdSdhciEmmc:
         self._pio_pos = 0
         return INT_CMD_COMPLETE | INT_BUFFER_READ_READY
 
-    def _execute_command(self, cmd: int) -> None:
+    def _receive_data(self, length: int) -> tuple[bytes, int]:
+        xfer_mode = struct.unpack_from('<H', self.regs, SDHCI_TRANSFER_MODE)[0]
+        host_ctrl = self.regs[SDHCI_HOST_CONTROL]
+        out = bytearray()
+        if (xfer_mode & 0x01) and (host_ctrl & 0x18) == 0x10:
+            desc_addr = struct.unpack_from('<I', self.regs, SDHCI_ADMA_ADDRESS)[0]
+            while len(out) < length:
+                attr_len, buf_phys = struct.unpack('<II', self.mem_read(desc_addr, 8))
+                valid = (attr_len & 0x01) != 0
+                end = (attr_len & 0x02) != 0
+                action = attr_len & 0x30
+                seg_len = (attr_len >> 16) & 0xFFFF or 65536
+                if not valid:
+                    break
+                if action == 0x20:
+                    take = min(seg_len, length - len(out))
+                    out.extend(self.mem_read(buf_phys, take))
+                if end:
+                    break
+                desc_addr += 8
+            return bytes(out).ljust(length, b'\x00'), INT_CMD_COMPLETE | INT_XFER_COMPLETE
+        if xfer_mode & 0x01:
+            dma_addr = struct.unpack_from('<I', self.regs, SDHCI_DMA_ADDRESS)[0]
+            data = self.mem_read(dma_addr, length)
+            struct.pack_into('<I', self.regs, SDHCI_DMA_ADDRESS, dma_addr + length)
+            return data.ljust(length, b'\x00'), INT_CMD_COMPLETE | INT_XFER_COMPLETE
+        return b'\x00' * length, INT_CMD_COMPLETE | INT_XFER_COMPLETE
+
+    def _execute_command(self, cmd: int, cmdreg: int = 0) -> None:
         self.cmd_count += 1
         arg = struct.unpack_from('<I', self.regs, SDHCI_ARGUMENT)[0]
         blk_size = struct.unpack_from('<H', self.regs, SDHCI_BLOCK_SIZE)[0] & 0x0FFF
         blk_cnt = struct.unpack_from('<H', self.regs, SDHCI_BLOCK_COUNT)[0] or 1
         int_flags = INT_CMD_COMPLETE
+        if (cmdreg & 0x03) == 0x03 and not (cmdreg & 0x20):
+            # R1b busy-signalling command without data phase sets XFER_COMPLETE too.
+            int_flags |= INT_XFER_COMPLETE
 
         if cmd == 0:
+            self._predefined_blk_cnt = 0
             self._set_resp()
         elif cmd == 1:
             # eMMC SEND_OP_COND: honor sector-mode bit 30 (0x40000000)
@@ -220,20 +318,56 @@ class CxdSdhciEmmc:
             self._set_resp(0x00010000, 0x00000000, 0x00000000, 0x00D00F00)
         elif cmd == 3:
             self._set_resp(0x00010000)
-        elif cmd in (6, 7, 16):
+        elif cmd == 6:
+            access = (arg >> 24) & 0x03
+            index = (arg >> 16) & 0xFF
+            val = (arg >> 8) & 0xFF
+            if access == 1:
+                self._ext_csd[index] |= val
+            elif access == 2:
+                self._ext_csd[index] &= ~val
+            elif access == 3:
+                self._ext_csd[index] = val
+            self._set_resp(0x00000900)
+        elif cmd in (7, 12, 16, 35, 36, 38):
+            if cmd == 12:
+                self._predefined_blk_cnt = 0
             self._set_resp(0x00000900)
         elif cmd == 13:
             self._set_resp(0x00000900)  # TRAN state, ready for data
+        elif cmd == 23:
+            self._predefined_blk_cnt = arg & 0xFFFF
+            self._set_resp(0x00000900)
         elif cmd == 8:
             # eMMC SEND_EXT_CSD
+            self._set_resp(0x00000900)
             int_flags = self._deliver_data(self._build_ext_csd())
+        elif cmd == 21:
+            # SEND_TUNING_BLOCK (HS200): complete tuning in HOST_CONTROL2 (0x3E)
+            hc2 = struct.unpack_from('<H', self.regs, 0x3E)[0]
+            struct.pack_into('<H', self.regs, 0x3E, (hc2 & ~0x0040) | 0x0080)
+            self._set_resp(0x00000900)
+            self._pio_buf = b'\xFF\x0F\xFF\x00' * (max(blk_size, 64) // 4)
+            self._pio_pos = 0
+            int_flags = INT_BUFFER_READ_READY
         elif cmd in (17, 18):
-            count = 1 if cmd == 17 else blk_cnt
+            count = 1 if cmd == 17 else (self._predefined_blk_cnt or blk_cnt)
+            self._predefined_blk_cnt = 0
             nbytes = count * (blk_size or 512)
-            byte_off = self.user_offset + arg * 512
+            byte_off = self._active_partition_offset() + arg * 512
+            self._set_resp(0x00000900)
             data = self._read_backing(byte_off, nbytes)
             self.sectors_read += count
             int_flags = self._deliver_data(data)
+        elif cmd in (24, 25):
+            count = 1 if cmd == 24 else (self._predefined_blk_cnt or blk_cnt)
+            self._predefined_blk_cnt = 0
+            nbytes = count * (blk_size or 512)
+            byte_off = self._active_partition_offset() + arg * 512
+            self._set_resp(0x00000900)
+            data, int_flags = self._receive_data(nbytes)
+            self._write_overlay(byte_off, data)
+            self.sectors_written += count
         elif cmd == 55:
             # APP_CMD: timeout so Linux probes eMMC via CMD1 instead of SD
             int_flags = INT_TIMEOUT

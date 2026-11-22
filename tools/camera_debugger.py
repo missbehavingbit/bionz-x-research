@@ -22,6 +22,7 @@ import time
 import os
 import errno
 import shlex
+import socket
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -122,10 +123,12 @@ class Debugger:
         if not path.startswith('/') or '\0' in path or len(path.encode())>=512 or len(data)>1024*1024:
             raise ValueError('Invalid camera upload path or file larger than 1 MiB')
         quoted=shlex.quote(path)
-        chunks=[data[i:i+640] for i in range(0,len(data),640)] or [b'']
+        # Camera BusyBox v1.13.4 omits the `printf` applet; `echo -ne '\xHH'` is compiled in.
+        # 768 raw bytes expand to <= 3072 escaped chars, staying within MAX_DATA (4064).
+        chunks=[data[i:i+768] for i in range(0,len(data),768)] or [b'']
         for index,chunk in enumerate(chunks):
-            escaped=''.join('\\0%03o'%byte for byte in chunk)
-            command="printf '%b' "+shlex.quote(escaped)+(' > ' if index==0 else ' >> ')+quoted
+            escaped=''.join('\\x%02x'%byte for byte in chunk)
+            command="echo -ne "+shlex.quote(escaped)+(' > ' if index==0 else ' >> ')+quoted
             result=self.request(OP_EXEC,command.encode())
             if result['status'] or result['flags']:
                 raise DebuggerError(result['status'] or -5,result['payload'])
@@ -274,9 +277,43 @@ class NativeExchange:
         return data
 
 
+class TcpExchange:
+    """RAM-only TCP protocol-v2 transport (avoids USB MSC/usb_extcmd)."""
+
+    def __init__(self, host, port=4640, timeout=8.0):
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.sock.settimeout(timeout)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    def __call__(self, payload):
+        self.sock.sendall(payload)
+        chunks = []
+        remaining = FRAME_SIZE
+        while remaining > 0:
+            chunk = self.sock.recv(remaining)
+            if not chunk:
+                raise ConnectionError('Camera TCP debug connection closed')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b''.join(chunks)
+
+    def close(self):
+        self.sock.close()
+
+
 @contextlib.contextmanager
-def connect(transport='auto'):
-    """Prefer the persistent WinUSB bulk transport, fall back to ext-command."""
+def connect(transport='auto', host=None, port=4640):
+    """Prefer TCP when requested, WinUSB bulk transport, then ext-command."""
+    if transport == 'tcp' or (transport == 'auto' and host):
+        target_host = host or os.environ.get('A6400_DEBUG_HOST')
+        if not target_host:
+            raise ValueError('TCP transport requires --host or A6400_DEBUG_HOST')
+        exchange = TcpExchange(target_host, port=port)
+        try:
+            yield Debugger(exchange)
+        finally:
+            exchange.close()
+        return
     if transport in ('auto', 'winusb'):
         try:
             from src.a6400.winusb_transport import open_winusb_exchange, TransportUnavailable
@@ -296,14 +333,38 @@ def connect(transport='auto'):
         yield debugger
 
 
+def _ensure_pmca_path():
+    """Ensure ``pmca`` is importable from bundled, repo, or cached checkouts."""
+    candidates = []
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        mp = Path(meipass)
+        candidates.extend((mp, mp / 'Sony-PMCA-RE'))
+    candidates.extend((
+        ROOT / 'Sony-PMCA-RE',
+        ROOT / '.cache' / 'Sony-PMCA-RE',
+        ROOT.parent / 'Sony-PMCA-RE',
+        ROOT.parent / 'Sony-PMCA-RE-master',
+    ))
+    for candidate in candidates:
+        if (candidate / 'pmca' / 'usb' / 'sony.py').is_file() and (candidate / 'config.py').is_file():
+            if str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+            return candidate
+    return None
+
+
 @contextlib.contextmanager
 def connect_device():
     """Yield (Debugger, device) so a mode switch can use the same open session."""
-    sys.path.insert(0,str(ROOT/'Sony-PMCA-RE'))
+    _ensure_pmca_path()
     from pmca.commands.usb import importDriver,listDevices
     from pmca.usb.sony import SonyMscExtCmdDevice,SonyMtpExtCmdDevice
     with host_lock(),importDriver(None) as driver:
         devices=[d for d in listDevices(driver,True) if isinstance(d,(SonyMscExtCmdDevice,SonyMtpExtCmdDevice))]
+        if not devices:
+            time.sleep(.25)
+            devices=[d for d in listDevices(driver,True) if isinstance(d,(SonyMscExtCmdDevice,SonyMtpExtCmdDevice))]
         if len(devices)!=1:
             raise RuntimeError(f'Expected one existing MSC/MTP camera; found {len(devices)}. No mode switch attempted.')
         yield Debugger(NativeExchange(devices[0])), devices[0]
@@ -319,7 +380,7 @@ def sony_ptp_devices(driver):
 
 def request_msc_switch():
     """Send Sony PTP 0x9282 (SonyReqReconnect arg 0): camera -> mass storage."""
-    sys.path.insert(0, str(ROOT / 'Sony-PMCA-RE'))
+    _ensure_pmca_path()
     from pmca.commands.usb import importDriver
     from pmca.usb.sony import SonyMtpExtCmdDevice
     attempts = []
@@ -338,7 +399,7 @@ def request_msc_switch():
 
 def wait_for_msc(timeout=30, poll=1.0):
     """Wait until the camera enumerates in mass storage mode (054c:0caa)."""
-    sys.path.insert(0, str(ROOT / 'Sony-PMCA-RE'))
+    _ensure_pmca_path()
     from pmca.commands.usb import importDriver, listDevices
     from pmca.usb.sony import SonyMscExtCmdDevice
     deadline = time.monotonic() + timeout
@@ -418,8 +479,12 @@ def recover_to_msc(output=None, timeout=30, transport='auto'):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--transport',choices=('auto','extcmd','winusb'),default='auto',
-                        help='auto prefers the E0402 WinUSB bulk transport, then ext-command')
+    parser.add_argument('--transport',choices=('auto','extcmd','winusb','tcp'),default='auto',
+                        help='auto prefers --host TCP, then E0402 WinUSB bulk, then ext-command')
+    parser.add_argument('--host',default=None,
+                        help='Camera IP/hostname for TCP transport (or set A6400_DEBUG_HOST)')
+    parser.add_argument('--port',type=int,default=4640,
+                        help='TCP debug port (default: 4640)')
     sub=parser.add_subparsers(dest='operation',required=True)
     for name in ('info','ps','stop','ping'):
         sub.add_parser(name)
@@ -445,13 +510,13 @@ def main():
     if args.operation=='recover':
         receipt = recover_to_msc(args.output, args.timeout, args.transport) if args.to_msc else None
         if receipt is None:
-            with connect(args.transport) as debugger:
+            with connect(args.transport, host=args.host, port=args.port) as debugger:
                 text = debugger.recover()
             print(text, end='')
             return 0
         print(json.dumps(receipt, indent=2))
         return 0 if receipt['result']=='msc_recovered' else 2
-    with connect(args.transport) as debugger:
+    with connect(args.transport, host=args.host, port=args.port) as debugger:
         if args.operation=='ping':
             print(debugger.ping(), end='')
         elif args.operation in ('info','ps','stop','threads','usb-state'):

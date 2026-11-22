@@ -36,9 +36,9 @@ from src.a6400.targets.usb_debugger_compat import (  # noqa: E402
     DebuggerTargetSpec,
     PAYLOAD_ASSETS,
     PMCA_ARCHIVE_URL,
-    VERIFIED_LIBUSBCMD_SHA256,
     VERIFIED_USB_EXTCMD_NORMALIZED_SHA256,
     find_debugger_target_by_model,
+    is_verified_libusbcmd,
     load_reference_usb_extcmd,
     verify_camera_debugger_compatibility,
 )
@@ -72,7 +72,7 @@ def ensure_pmca_on_path(root: Path = ROOT, fetcher=_download_bytes) -> Path:
         root / '.cache' / 'Sony-PMCA-RE',
     )
     for candidate in candidates:
-        if (candidate / 'pmca').is_dir():
+        if (candidate / 'pmca').is_dir() and (candidate / 'config.py').is_file():
             if str(candidate) not in sys.path:
                 sys.path.insert(0, str(candidate))
             return candidate
@@ -85,14 +85,14 @@ def ensure_pmca_on_path(root: Path = ROOT, fetcher=_download_bytes) -> Path:
             if member.is_dir():
                 continue
             parts = Path(member.filename).parts
-            if len(parts) < 2 or 'pmca' not in parts:
+            if len(parts) < 2 or not (parts[1] in ('pmca', 'certs') or parts[1] == 'config.py'):
                 continue
             rel = Path(*parts[1:])
             target = cache_dir / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(zf.read(member))
-    if not (cache_dir / 'pmca').is_dir():
-        raise RuntimeError('Downloaded Sony-PMCA-RE archive did not contain pmca/')
+    if not ((cache_dir / 'pmca').is_dir() and (cache_dir / 'config.py').is_file()):
+        raise RuntimeError('Downloaded Sony-PMCA-RE archive did not contain pmca/ and config.py')
     if str(cache_dir) not in sys.path:
         sys.path.insert(0, str(cache_dir))
     return cache_dir
@@ -228,7 +228,7 @@ def build_onboarding_bundle(
         'libusbcmd': {
             'bytes': len(actual_lib),
             'sha256': lib_sha,
-            'matches_verified_baseline': lib_sha == VERIFIED_LIBUSBCMD_SHA256,
+            'matches_verified_baseline': is_verified_libusbcmd(actual_lib),
         },
         'libc': {
             'bytes': len(libc_bytes) if libc_bytes is not None else 0,

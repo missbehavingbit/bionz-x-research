@@ -14,8 +14,11 @@ its answer is trusted:
 * every load/store in the image whose base register was materialised to that same absolute
   value and whose ``imm12`` equals the field offset is counted, and the walk stops where the
   base register is overwritten;
-* access width must agree: ``strb.w`` at ``+0x540`` and ``str.w`` at ``+0x540`` touch
-  different bytes of that word and are not the same field.
+* an access counts when the bytes it touches overlap the field's bytes: ``ldr.w`` at ``+0x540``
+  reads the byte that ``strb.w`` at ``+0x540`` wrote, while ``ldrb.w`` at ``+0x544`` lies outside
+  a word field at ``+0x540`` (bytes ``+0x540..+0x543``). Signed loads count too;
+* a load into the base register itself (``ldrb.w r3, [r3, #field]``) is a read and is counted
+  before the walk stops at the overwrite.
 
 A negative (zero readers) result is a statement about the packaged image, never about a live
 camera's application layer.
@@ -43,7 +46,8 @@ MAX_WINDOW = 0x400
 _md = Cs(CS_ARCH_ARM, CS_MODE_THUMB)
 _md.skipdata = True
 
-_WIDTH = {"str.w": 4, "ldr.w": 4, "strb.w": 1, "ldrb.w": 1, "strh.w": 2, "ldrh.w": 2}
+_WIDTH = {"str.w": 4, "ldr.w": 4, "strb.w": 1, "ldrb.w": 1, "strh.w": 2, "ldrh.w": 2,
+          "ldrsb.w": 1, "ldrsh.w": 2}
 
 #: ``add rD, pc`` with rD in 0..15, as the 16-bit Thumb encoding allows r0..r7 only.
 _ADDPC = {0x4478 + (d & 7) + ((d & 8) << 4) for d in range(16)}
@@ -110,26 +114,29 @@ def handler_store(data: bytes, handler_va: int):
 
 
 def count_accesses(data: bytes, reg: int, base: int, field: int, width: int) -> tuple[int, int]:
-    """(writes, reads) of ``[reg, #field]`` while ``reg`` still holds ``base``."""
+    """(writes, reads) overlapping the ``width`` bytes at ``[reg, #field]`` while ``reg`` holds ``base``.
+
+    The access is examined before the overwrite check, because the commonest read of a cache
+    field, ``ldr rX, [rX, #field]``, is also the instruction that ends the base's life.
+    """
     writes = reads = 0
     for pos, (found_reg, value) in materialisations(data).items():
         if found_reg != reg or value != base:
             continue
         for ins in _md.disasm(data[pos:pos + MAX_WINDOW], ORIL_BASE + pos):
+            touched = _WIDTH.get(ins.mnemonic)
+            if touched and f"[r{reg}," in ins.op_str and ", #0x" in ins.op_str:
+                try:
+                    offset = int(ins.op_str.split("#")[1].split("]")[0], 16)
+                except (IndexError, ValueError):
+                    offset = None
+                if offset is not None and offset < field + width and field < offset + touched:
+                    if ins.mnemonic.startswith("str"):
+                        writes += 1
+                    else:
+                        reads += 1
             if _overwrites(ins, reg):
                 break
-            if f"[r{reg}," not in ins.op_str or ", #0x" not in ins.op_str:
-                continue
-            try:
-                offset = int(ins.op_str.split("#")[1].split("]")[0], 16)
-            except (IndexError, ValueError):
-                continue
-            if offset != field or _WIDTH.get(ins.mnemonic) != width:
-                continue
-            if ins.mnemonic.startswith("str"):
-                writes += 1
-            else:
-                reads += 1
     return writes, reads
 
 

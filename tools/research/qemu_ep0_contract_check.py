@@ -14,6 +14,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--qemu-dir',type=Path,required=True)
     p.add_argument('--report-dir',type=Path,required=True)
+    p.add_argument('--strict-bulk-out',action='store_true',
+                   help='also validate bounded bulk OUT with a separate native qtest fixture')
     args=p.parse_args();out=args.report_dir.resolve()
     if not out.is_relative_to(ROOT/'artifacts'):raise ValueError('Output must stay under artifacts')
     out.mkdir(parents=True,exist_ok=False)
@@ -25,6 +27,8 @@ def main():
                  '-qtest',f'unix:{qp},server=on,wait=off',
                  '-chardev',f'socket,id=host,path={hp},server=on,wait=off',
                  '-global','cxd90045-dwc3.chardev=host','-global','cxd90045-dwc3.strict-ep0=on']
+        if args.strict_bulk_out:
+            command += ['-global', 'cxd90045-dwc3.strict-bulk=on']
         with (out/'qemu.log').open('wb') as log:
             proc=subprocess.Popen(command,stdout=log,stderr=log)
             try:
@@ -51,7 +55,11 @@ def main():
                     def token(line,expected):
                         host.sendall((line+'\n').encode())
                         reply=b''
-                        while b'\n' not in reply:reply+=host.recv(4096)
+                        while b'\n' not in reply:
+                            chunk=host.recv(4096)
+                            if not chunk:
+                                raise EOFError(f'No host reply for {line[:60]}')
+                            reply+=chunk
                         check(line[:60],reply.decode()==expected+'\n')
                     def arm(ep,kind,length,extra=0,address=0x13000):
                         trb=0x12000+ep*0x100
@@ -114,6 +122,90 @@ def main():
                     data=arm(1,5,4,address=0xf020c100)
                     token('IN 1','ERROR payload-dma-read')
                     check('MMIO payload not fabricated as RAM',read(data+12)&1==1)
+                    if args.strict_bulk_out:
+                        # Independent ring state from the EP0 assertions above.
+                        write(0xf020c704,0x40000000)
+                        write(0xf020c400,0x10000);write(0xf020c408,4096)
+                        reg=0xf020c800+6*16
+                        write(reg+4,(4<<25)|0x500);write(reg+8,(512<<3)|(2<<1))
+                        write(reg+12,0x401)
+                        write(0xf020c720,1<<6);write(0xf020c704,0x80000000)
+                        command_out='OUT 4 0c0000000100011000000000'
+                        token(command_out,'NAK 4')
+                        check('bulk NRDY is routed to enabled physical EP6',read(0x10000)==0xcc)
+                        token(command_out,'NAK 4')
+                        check('bulk NRDY is not duplicated',read(0xf020c40c)==4)
+                        ack_events()
+                        data=arm(6,1,512)
+                        write(0x13000,0xaaaaaaaa);write(0x1300c,0xaabbccdd)
+                        check('NAK does not queue the command for a future TRB',
+                              bool(read(data+12)&1) and read(0x13000)==0xaaaaaaaa)
+                        token('OUT 4 0czz','ERROR out-encoding')
+                        token('OUT 5 0c00','ERROR unsupported-host-command')
+                        token(command_out,'ACK 4 12')
+                        check('bulk OUT bytes are written without copying beyond the token',
+                              (read(0x13000),read(0x13004),read(0x13008),read(0x1300c))==
+                              (12,0x10010001,0,0xaabbccdd))
+                        check('short bulk OUT preserves residual and transfers ownership',
+                              read(data+8)==500 and read(data+12)&1==0)
+                        check('complete event includes physical EP6, LST and short',
+                              read(0x10004)==0xa04c and read(0xf020c40c)==4)
+                        ack_events()
+                        data=arm(6,1,8)
+                        token(command_out,'ERROR unsupported-bulk-out-length')
+                        check('oversized token leaves HWO and residual alone',
+                              read(data+8)==8 and bool(read(data+12)&1))
+                        data=arm(6,1,512,extra=4)
+                        token(command_out,'ERROR unsupported-bulk-out-trb')
+                        check('chained bulk OUT is untouched',bool(read(data+12)&1))
+                        data=arm(6,1,512,address=0xf020c100)
+                        token(command_out,'ERROR payload-dma-write')
+                        check('non-RAM payload does not retire the bulk descriptor',
+                              bool(read(data+12)&1) and read(0xf020c40c)==0)
+                        host.sendall(b'DISC\n')
+                        token(command_out,'NAK 4')
+                        # E0476 Status Pre-Arm + Logical Bulk IN multi-TRB checks (independent ring state)
+                        write(0xf020c704,0x40000000)
+                        write(0xf020c400,0x10000);write(0xf020c408,4096)
+                        for ep in (0,1):
+                            reg=0xf020c800+16*ep
+                            write(reg+4,0x500);write(reg+8,0);write(reg+12,0x401)
+                        write(0xf020c720,3);write(0xf020c704,0x80000000)
+                        host.sendall(b'CONN\n')
+                        ack_events()
+                        arm(0,2,8)
+                        token('SETUP a181000102001a00','ACK 0 8')
+                        ack_events()
+                        write(0x16000,0x01010000)
+                        arm(1,5,26,address=0x16000)
+                        token('IN 1','IN 1 00000101'+'00'*22)
+                        ack_events()
+                        prearm_status=arm(0,4,64)
+                        token('OUT 0 -','ACK 0 0')
+                        check('pre-armed STATUS3 retires without NRDY',
+                              (read(prearm_status+12)&1)==0 and read(0x10008)==0x8040)
+                        ack_events()
+                        reg_in=0xf020c800+7*16
+                        write(reg_in+4,(9<<25)|0x500);write(reg_in+8,(512<<3)|(2<<1))
+                        write(reg_in+12,0x401)
+                        write(0xf020c720,(1<<6)|(1<<7)|3)
+                        trb_base=0x14000
+                        write(0x15000,0x00008d0c);write(0x15004,0x00000000);write(0x15008,0xd9ff0000)
+                        # TRB 0: 8 bytes, LST=0 (ctrl=0x811) -> HWO|IOC|NORMAL
+                        write(trb_base+0,0x15000);write(trb_base+4,0);write(trb_base+8,8);write(trb_base+12,(1<<4)|0x801)
+                        # TRB 1: 4 bytes, LST=1 (ctrl=0x813) -> HWO|LST|IOC|NORMAL
+                        write(trb_base+16,0x15008);write(trb_base+20,0);write(trb_base+24,4);write(trb_base+28,(1<<4)|0x803)
+                        write(reg_in+4,trb_base);write(reg_in+8,0);write(reg_in+12,0x406)
+                        token('IN 9','IN 9 0c8d000000000000')
+                        check('logical Bulk IN 9 resolves physical EP7 TRB0',
+                              (read(trb_base+12)&1)==0 and (read(trb_base+28)&1)==1)
+                        ack_events()
+                        token('IN 9','IN 9 0000ffd9')
+                        check('logical Bulk IN 9 advances to TRB1 and completes LST',(read(trb_base+28)&1)==0)
+                        check('logical Bulk IN 9 TRB0 XferComplete event',read(0x1000c)==0x4e)
+                        check('logical Bulk IN 9 TRB1 XferComplete LST event',read(0x10010)==0x804e)
+                        ack_events()
+                        host.sendall(b'DISC\n')
                     stream.close()
             finally:
                 proc.terminate();proc.wait(10)
@@ -121,6 +213,6 @@ def main():
             'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
             'source_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'checks':checks}
     (out/'report.json').write_text(json.dumps(report,indent=2)+'\n')
-    print(f'PASS: {len(checks)} native EP0 contract checks')
+    print(f'PASS: {len(checks)} native USB token contract checks')
 
 if __name__=='__main__':main()

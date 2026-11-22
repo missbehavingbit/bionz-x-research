@@ -83,6 +83,14 @@ classify every remaining prerequisite. Missing historical payloads or
 other-model captures are unvalidated coverage, not successful tests; never
 replace them with another camera's input or relax hash/assertion guards.
 
+### Pylance MCP
+
+If `pylanceRunCodeSnippet` reports `workspaceRoot is required`, call
+`pylanceWorkspaceRoots` and pass the returned repository URI as `workspaceRoot`
+on the snippet call. An open VS Code folder is not necessarily a configured MCP
+default. `workingDirectory` controls where the snippet runs, not which
+workspace Pylance uses.
+
 ## Documentation sync
 
 `README.md` and the generated `docs/images/research-status.svg` dashboard are checked against `STATUS_SNAPSHOT` / `TELEMETRY` in `tools/research/a6400_status_data.py`. When a milestone changes the latest evidence record, the evidence count or the recorded suite count, update the data module, regenerate the dashboard with `python -m tools.research.render_research_status --write`, and let `tests/test_research_status_sync.py` + `tests/test_research_status_dashboard.py` prove that the README, the dashboard and the inventory agree. The generator also pins a content-hash query (`?v=...`) on the README image link, so a refreshed dashboard gets a new URL instead of a stale cached render.

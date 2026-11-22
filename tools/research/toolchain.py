@@ -13,12 +13,13 @@ def toolchain_config():
     return config
 
 
-def rea_profile(name=None):
+def rea_profile(name=None, *, tools_root=None):
     config = toolchain_config()
     name = name if name is not None else config['default_rea_profile']
     if name not in config['rea_profiles']:
         raise ValueError(f'Unknown REA toolchain profile: {name}')
-    root = os.environ.get('A6400_REA_TOOLS_ROOT', config['rea_tools_root'])
+    root = (tools_root if tools_root is not None
+            else os.environ.get('A6400_REA_TOOLS_ROOT', config['rea_tools_root']))
     if not PurePosixPath(root).is_absolute():
         raise ValueError('REA tools root must be an absolute Linux path')
     profile = dict(config['rea_profiles'][name], name=name)

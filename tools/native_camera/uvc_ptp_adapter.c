@@ -21,7 +21,10 @@ int a6400_uvc_ptp_translate_setup(const unsigned char *wire,
      * wIndex high byte (entity ID); it is not part of the interface number. */
     if ((wire[0]&0x7f)!=0x21 || wire[4]!=wire_interface) return -22;
     for (i=0; i<8; ++i) native[i]=wire[i];
-    native[4]=(unsigned char)(wire_interface-1);
+    /* Non-primary VS shadow requests (wire_interface 1 or 2) must reach
+     * native wIndex=0 so reference 0x1390 dispatches to 0x11bc/0x131c
+     * instead of the uninitialized wIndex=1 branch at 0x1410/0x14d0. */
+    native[4]=0u;
     return 0;
 }
 

@@ -26,7 +26,9 @@ from src.a6400.execution.guest_threads import GuestThreads, REGISTER_LIST, EXPEC
 from src.a6400.execution.guest_fb import GuestFramebuffer
 from src.a6400.execution.guest_stream import GuestStream, UnsupportedStream
 from src.a6400.execution.lz77 import inflate_block
-from src.a6400.execution.guest_gles import GuestGles, UnsupportedGles, GLES_LOCK_SEMAPHORE
+from src.a6400.execution.guest_gles import (
+    GuestGles, UnsupportedGles, GLES_LOCK_SEMAPHORE, GLES_UNLOCK_SEMAPHORE
+)
 from src.a6400.execution.guest_gpio import GuestGpio, UnsupportedGpio
 from src.a6400.execution.guest_kikilog import UnsupportedKikilog
 from src.a6400.execution.guest_usb_buspower import GuestUsbBusPower, UnsupportedUsbBusPower
@@ -255,6 +257,185 @@ def inspect_elf_load_and_symbols(elf_bytes, symbol_names):
     return segments, symbols
 
 
+LIBC_IT_LATCH_TARGETS = (
+    (0x57C04, 0x57C04, b'\xdb\xf8\x30\x10'),
+    (0x57C44, 0x57C44, b'\xbb\x68\xb5\xf5'),
+    (0x589C0, 0x589C0, b'\x28\x6b\xb8\x42'),
+    (0x589E0, 0x589E0, b'\x05\xf1\x30\x03'),
+    (0x58B42, 0x58B42, b'\x04\x98\x05\xeb'),
+)
+
+
+LIBC_EPILOGUE_MOV_R0_REPAIRS = (
+    (0x58750, 0x5874E, b'\x20\x46\xbd\xe8', arm.UC_ARM_REG_R4),
+    (0x59322, 0x59320, b'\x30\x46\x0f\xb0', arm.UC_ARM_REG_R6),
+    (0x5A49E, 0x5A49C, b'\x38\x46\xbd\xe8', arm.UC_ARM_REG_R7),
+    (0x5BAEC, 0x5BAEA, b'\x38\x46\x29\x46', arm.UC_ARM_REG_R7),
+    (0x5BBD8, 0x5BBD6, b'\x48\x46\x01\xb0', arm.UC_ARM_REG_R9),
+    (0x5C04A, 0x5C048, b'\x40\x46\xbd\xe8', arm.UC_ARM_REG_R8),
+    (0x5C2CE, 0x5C2CC, b'\x40\x46\xbd\xe8', arm.UC_ARM_REG_R8),
+)
+
+
+def _thumb_it_legitimately_spans(uc, address):
+    """Return True only if a preceding Thumb IT block architecturally covers ``address``."""
+    import capstone
+    start = max(0, (address - 18) & ~1)
+    if start >= address:
+        return False
+    try:
+        raw = bytes(uc.mem_read(start, address - start + 4))
+    except unicorn.UcError:
+        page_start = address & ~0xFFF
+        if page_start >= address:
+            return False
+        start = max(start, page_start)
+        try:
+            raw = bytes(uc.mem_read(start, address - start + 4))
+        except unicorn.UcError:
+            return False
+    md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB)
+    it_mnems = {
+        'it', 'itt', 'ite', 'ittt', 'itte', 'itet', 'itee',
+        'itttt', 'ittte', 'ittet', 'ittee', 'itett', 'itete', 'iteet', 'iteee',
+    }
+    for off in range(0, address - start, 2):
+        insns = list(md.disasm(raw[off:], start + off))
+        if not insns or insns[0].address != start + off:
+            continue
+        if insns[0].mnemonic not in it_mnems:
+            continue
+        cond_len = len(insns[0].mnemonic) - 1
+        if len(insns) < 1 + cond_len:
+            continue
+        covered = {insns[k].address for k in range(1, 1 + cond_len)}
+        if address in covered:
+            return True
+    return False
+
+
+def build_libc_malloc_it_guard(mu, base):
+    """Build (lo, hi, interior_set, post_it_targets) for libc-2.11.2.so malloc.o."""
+    import capstone
+    lo_off, hi_off = 0x57B94, 0x5CB00
+    try:
+        if bytes(mu.mem_read(base + 0x59820, 4)) != b'\x38\x33\x0c\x93':
+            return None
+        data = bytes(mu.mem_read(base + lo_off, hi_off - lo_off))
+    except unicorn.UcError:
+        return None
+    md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB)
+    insns = []
+    pos = 0
+    while pos < len(data):
+        chunk = list(md.disasm(data[pos:pos + 64], base + lo_off + pos))
+        if not chunk:
+            pos += 2
+            continue
+        insns.append(chunk[0])
+        pos += chunk[0].size
+    it_mnems = {
+        'it', 'itt', 'ite', 'ittt', 'itte', 'itet', 'itee',
+        'itttt', 'ittte', 'ittet', 'ittee', 'itett', 'itete', 'iteet', 'iteee',
+    }
+    interior = set()
+    post_targets = set()
+    for idx, ins in enumerate(insns):
+        if ins.mnemonic in it_mnems:
+            cond_len = len(ins.mnemonic) - 1
+            for sub in insns[idx + 1:idx + 1 + cond_len]:
+                interior.add(sub.address)
+            after_idx = idx + 1 + cond_len
+            if after_idx < len(insns):
+                post_targets.add(insns[after_idx].address)
+            for sub in insns[idx + 1:min(len(insns), idx + 1 + cond_len + 5)]:
+                if (sub.mnemonic.startswith('b')
+                        and not sub.mnemonic.startswith(('bic', 'bfc', 'bfi', 'bkpt', 'bx', 'bl'))
+                        and sub.op_str.startswith('#0x')):
+                    tgt = int(sub.op_str[1:], 16)
+                    if base + lo_off <= tgt < base + hi_off:
+                        post_targets.add(tgt)
+    post_targets -= interior
+    return (base + lo_off, base + hi_off, frozenset(interior), frozenset(post_targets))
+
+
+def install_libc_it_latch_repairs(mu, base, report=None, *, include_malloc_add=True):
+    """Arm signature-checked Unicorn 2.1.4 Thumb-2 stale ITSTATE repairs on libc-2.11.2.so."""
+    armed = []
+    it_mask = (3 << 25) | (0x3f << 10)
+
+    def _clear_it(uc, address, size, user_data):
+        cpsr = uc.reg_read(arm.UC_ARM_REG_CPSR)
+        if cpsr & it_mask:
+            uc.reg_write(arm.UC_ARM_REG_CPSR, cpsr & ~it_mask)
+            if report is not None:
+                report['libc_it_latch_clears'] = report.get('libc_it_latch_clears', 0) + 1
+
+    for hook_off, sig_off, sig in (*LIBC_IT_LATCH_TARGETS, (0x59320, 0x59320, b'\x30\x46\x0f\xb0')):
+        try:
+            if bytes(mu.mem_read(base + sig_off, len(sig))) != sig:
+                continue
+        except unicorn.UcError:
+            continue
+        mu.hook_add(unicorn.UC_HOOK_CODE, _clear_it, begin=base + hook_off, end=base + hook_off)
+        armed.append(base + hook_off)
+
+    for hook_off, sig_off, sig, src_reg in LIBC_EPILOGUE_MOV_R0_REPAIRS:
+        try:
+            if bytes(mu.mem_read(base + sig_off, len(sig))) != sig:
+                continue
+        except unicorn.UcError:
+            continue
+
+        def _repair_epilogue_r0(uc, address, size, _ud, reg=src_reg):
+            cpsr = uc.reg_read(arm.UC_ARM_REG_CPSR)
+            if cpsr & it_mask:
+                uc.reg_write(arm.UC_ARM_REG_CPSR, cpsr & ~it_mask)
+            want = uc.reg_read(reg)
+            if uc.reg_read(arm.UC_ARM_REG_R0) != want:
+                uc.reg_write(arm.UC_ARM_REG_R0, want)
+                if report is not None:
+                    report['libc_malloc_epilogue_repairs'] = (
+                        report.get('libc_malloc_epilogue_repairs', 0) + 1
+                    )
+
+        mu.hook_add(unicorn.UC_HOOK_CODE, _repair_epilogue_r0,
+                    begin=base + hook_off, end=base + hook_off)
+        armed.append(base + hook_off)
+
+    try:
+        has_malloc_add = include_malloc_add and bytes(mu.mem_read(base + 0x59820, 4)) == b'\x38\x33\x0c\x93'
+    except unicorn.UcError:
+        has_malloc_add = False
+    if has_malloc_add:
+        def _repair_malloc_largebin_idx(uc, address, size, user_data):
+            cpsr = uc.reg_read(arm.UC_ARM_REG_CPSR)
+            if cpsr & it_mask:
+                uc.reg_write(arm.UC_ARM_REG_CPSR, cpsr & ~it_mask)
+            r3 = uc.reg_read(arm.UC_ARM_REG_R3)
+            if r3 < 0x38:
+                fixed = (r3 + 0x38) & 0xffffffff
+                uc.reg_write(arm.UC_ARM_REG_R3, fixed)
+                cpsr2 = uc.reg_read(arm.UC_ARM_REG_CPSR) & ~0xf0000000
+                if fixed & 0x80000000:
+                    cpsr2 |= 0x80000000
+                if fixed == 0:
+                    cpsr2 |= 0x40000000
+                if r3 + 0x38 > 0xffffffff:
+                    cpsr2 |= 0x20000000
+                uc.reg_write(arm.UC_ARM_REG_CPSR, cpsr2)
+                if report is not None:
+                    report['libc_malloc_largebin_repairs'] = report.get('libc_malloc_largebin_repairs', 0) + 1
+
+        mu.hook_add(unicorn.UC_HOOK_CODE, _repair_malloc_largebin_idx,
+                    begin=base + 0x59822, end=base + 0x59822)
+        armed.append(base + 0x59822)
+
+    if report is not None and armed:
+        report.setdefault('libc_it_latch_repairs', []).append({'base': base, 'hooks': armed})
+    return armed
+
+
 MONDRV_OUTPUT_SYMBOLS = ('_ZN6MonDrv9mp_outputE', '_ZN6MonDrv10PutcharSubEi', '_ZN6MonDrv16IsEmptyOutputBufEv')
 MONDRV_QUEUE_CAPACITY = 0x7bf0
 MONDRV_REGION_SIZE = 0x8000
@@ -458,7 +639,7 @@ class InterpreterProbe:
             self.kuser = GuestKuser(self.mu, kuser_template)
             self.report['assumptions'].append('ARM Linux high vectors page at 0xffff0000 with kernel helper template (version 5) and set_tls contract.')
         if syscall_policy in ('uipc', 'threads'):
-            if grm_pool_policy not in ('gl-common-only', 'captured-e0044'):
+            if grm_pool_policy not in ('gl-common-only', 'captured-e0044', 'captured-wbi-dmm'):
                 raise ValueError('Unknown GRM pool policy')
             uipc_options = {'backup_service_policy': backup_service_policy,
                             'graphics_service_policy': graphics_service_policy,
@@ -601,6 +782,11 @@ class InterpreterProbe:
             (0x54194E56, 0x54194E4C, b'\x03\x4b\x04\x4a'),
             (0x50259BFC, 0x50259BFC, b'\xdf\xf8\x94\x24'),
             (0x50259822, 0x50259820, b'\x38\x33\x0c\x93'),
+            (0x50257C04, 0x50257C04, b'\xdb\xf8\x30\x10'),
+            (0x50257C44, 0x50257C44, b'\xbb\x68\xb5\xf5'),
+            (0x502589C0, 0x502589C0, b'\x28\x6b\xb8\x42'),
+            (0x502589E0, 0x502589E0, b'\x05\xf1\x30\x03'),
+            (0x50258B42, 0x50258B42, b'\x04\x98\x05\xeb'),
             (0x5026ED06, 0x5026ED06, b'\x70\xbd'),
             (0x5026ECFC, 0x5026ECF6, b'\x84\xbf\x1c\x60\x22\x46'),
         )
@@ -677,16 +863,22 @@ class InterpreterProbe:
                 self.report['live_libobj_it_repair_hits'] = self.report.get('live_libobj_it_repair_hits', 0) + 1
 
     def _arm_relocated_libc_repair(self, event):
-        """Arm the libc top-split IT-latch repair at whatever base libc was mapped.
-
-        The fixed-address repair in _it_workaround only covers base 0x50200000. Same byte
-        signature guard; the hook sits on the instruction AFTER the literal load and only
-        writes r2 when it differs from the literal, counting every such skip.
-        """
+        """Arm signature-checked libc-2.11.2.so Thumb-2 IT-latch repairs at any load base."""
         mapping = event.get('mapping') or {}
         base = event.get('returned')
-        if (self.hook_mode != 'fast' or mapping.get('offset') != 0 or base == 0x50200000
+        if (mapping.get('offset') != 0 or base is None
                 or not str(mapping.get('path', '')).endswith('/libc-2.11.2.so')):
+            return
+        if self.hook_mode == 'fast':
+            install_libc_it_latch_repairs(
+                self.mu, base, self.report, include_malloc_add=(base != 0x50200000)
+            )
+            guard = build_libc_malloc_it_guard(self.mu, base)
+            if guard is not None:
+                self._libc_malloc_it_guard = guard
+        elif base != 0x50200000:
+            install_libc_it_latch_repairs(self.mu, base, self.report)
+        if self.hook_mode != 'fast' or base == 0x50200000:
             return
         try:
             if bytes(self.mu.mem_read(base + 0x59bfc, 4)) != bytes.fromhex('dff89424'):
@@ -878,6 +1070,23 @@ class InterpreterProbe:
         threads.restore_context(uc, next_tid, getattr(self, 'kuser', None))
 
     def _block(self, uc, address, size, user_data):
+        if self.syscall_policy in ('mmap', 'kuser', 'uipc', 'threads'):
+            cpsr = uc.reg_read(arm.UC_ARM_REG_CPSR)
+            if (cpsr & 0x20) and (cpsr & ((3 << 25) | (0x3f << 10))):
+                prev_end = getattr(self, '_prev_thumb_block_end', None)
+                prev_tid = getattr(self, '_prev_thumb_block_tid', None)
+                cur_tid = getattr(getattr(self, 'threads', None), 'current_tid', None)
+                if address != prev_end or cur_tid != prev_tid or not _thumb_it_legitimately_spans(uc, address):
+                    uc.reg_write(arm.UC_ARM_REG_CPSR, cpsr & ~((3 << 25) | (0x3f << 10)))
+                    uc.reg_write(arm.UC_ARM_REG_PC, address | 1)
+                    self._it_restart_pc = address | 1
+                    self.report['thumb_block_it_repairs'] = (
+                        self.report.get('thumb_block_it_repairs', 0) + 1
+                    )
+                    uc.emu_stop()
+                    return
+            self._prev_thumb_block_end = address + size
+            self._prev_thumb_block_tid = getattr(getattr(self, 'threads', None), 'current_tid', None)
         insn_est = max(1, size // 2)
         self.instructions += insn_est
         if self._pause_requested:
@@ -908,10 +1117,10 @@ class InterpreterProbe:
         # Workaround for emulator bug where a Thumb-2 IT block with mixed 16/32-bit instructions
         # leaves leftover IT bits in CPSR, corrupting subsequent non-IT instructions.
         if address in (0x40004e4c, 0x50259c24, 0x50034e32, 0x50034e6a, 0x4000a6f4,
-                       0x5026ebc4, 0x5026ec26) and self.syscall_policy in ('mmap', 'kuser', 'uipc', 'threads'):
-            cpsr = uc.reg_read(arm.UC_ARM_REG_CPSR)
-            if cpsr & ((3 << 25) | (0x3f << 10)):
-                uc.reg_write(arm.UC_ARM_REG_CPSR, cpsr & ~((3 << 25) | (0x3f << 10)))
+                       0x5026ebc4, 0x5026ec26,
+                       0x50257c04, 0x50257c44, 0x502589c0, 0x502589e0, 0x50258b42,
+                       0x50259822) and self.syscall_policy in ('mmap', 'kuser', 'uipc', 'threads'):
+            self._it_workaround(uc, address, size, user_data)
         if address == 0x4000a6f4 and self.syscall_policy in ('mmap', 'kuser', 'uipc', 'threads'):
             uc.reg_write(arm.UC_ARM_REG_R4, uc.reg_read(arm.UC_ARM_REG_R0))
 
@@ -1014,7 +1223,7 @@ class InterpreterProbe:
         without touching guest state.
         """
         gles = getattr(self, 'gles', None)
-        if gles is not None and gles.completion_policy == 'kernel-tgid':
+        if gles is not None and gles.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
             self.install_gles_memory_guards()
             return ([(gles.bar_virtual, gles.bar_length)]
                     if gles.bar_virtual is not None else [])
@@ -1044,7 +1253,82 @@ class InterpreterProbe:
             'pc': self.mu.reg_read(arm.UC_ARM_REG_PC), **details})
         self.mu.emu_stop()
 
+    def enable_coherent_physical_ram(self):
+        """Share physical DRAM banks across /dev/stream, /dev/mem, and Sugilite DMA."""
+        from src.a6400.execution.guest_physical_ram import GuestPhysicalRam
+        if getattr(self, 'physical_ram', None) is None:
+            self.physical_ram = GuestPhysicalRam()
+        if getattr(self, 'stream', None) is not None:
+            self.stream.physical_ram = self.physical_ram
+            for m in list(self.stream.mappings):
+                va = int(m['virtual_start'])
+                pa = int(m['physical_start'])
+                length = int(m['length'])
+                prot = int(m.get('prot', unicorn.UC_PROT_READ | unicorn.UC_PROT_WRITE))
+                if self.physical_ram.supports_range(pa, length):
+                    self.physical_ram.map_alias(
+                        self.mu, va, pa, length, prot, 'stream', seed_from_existing=True
+                    )
+        return self.physical_ram
+
+    def _sugilite_phys_read(self, phys_addr, size):
+        ram = getattr(self, 'physical_ram', None)
+        if ram is None:
+            return None
+        return ram.read_physical(phys_addr, size)
+
+    def _sugilite_phys_write(self, phys_addr, data):
+        ram = getattr(self, 'physical_ram', None)
+        if ram is None or not ram.write_physical(phys_addr, data):
+            return False
+        if getattr(self, 'stream', None) is not None:
+            self.stream.forget_physical_range(phys_addr, len(data))
+        if self.display is not None:
+            try:
+                pc = self.mu.reg_read(arm.UC_ARM_REG_PC)
+            except Exception:
+                pc = 0
+            tid = getattr(getattr(self, 'threads', None), 'current_tid', None)
+            self.display.note_physical_write(phys_addr, len(data), pc, tid, self.instructions)
+        return True
+
+    def _sugilite_bar_sync_write(self, address, data):
+        self._in_sugilite_bar_sync = True
+        try:
+            self.mu.mem_write(address, data)
+        finally:
+            self._in_sugilite_bar_sync = False
+
     def _gles_mmio_boundary(self, uc, access, address, size, value, virtual):
+        if getattr(self, '_in_sugilite_bar_sync', False):
+            return
+        gles = getattr(self, 'gles', None)
+        if gles is not None and gles.completion_policy == 'kernel-sugilite':
+            offset = int(address - virtual)
+            if access == unicorn.UC_MEM_READ:
+                counts = self.report.setdefault('gles_bar_reads', {})
+                key = str(offset)
+                counts[key] = counts.get(key, 0) + 1
+                return
+            writes = self.report.setdefault('gles_bar_writes', [])
+            if len(writes) < 4096:
+                writes.append({
+                    'offset': offset, 'size': size, 'value': value & 0xffffffff,
+                    'tid': getattr(getattr(self, 'threads', None), 'current_tid', None),
+                    'pc': uc.reg_read(arm.UC_ARM_REG_PC),
+                })
+            added = gles.handle_sugilite_mmio_write(offset, size, value, self._sugilite_bar_sync_write)
+            if added and getattr(self, 'threads', None) is not None and gles.irq_waiters:
+                target_tids = list(gles.irq_waiters)
+                woken = []
+                for wait_fd in tuple(self.threads.fd_waiters):
+                    woken.extend(self.threads.handle_fd_wake(wait_fd, tids=target_tids))
+                self.report.setdefault('gles_irq_events', []).append({
+                    'offset': offset, 'value': value & 0xffffffff,
+                    'status_added': added, 'completions': gles.engine_completions,
+                    'woken': sorted(set(woken)), 'instruction': self.instructions,
+                })
+            return
         if access == unicorn.UC_MEM_READ and address == virtual and size == 4:
             return
         self.report.update(status='unsupported_gles_contract', boundary={
@@ -1085,8 +1369,12 @@ class InterpreterProbe:
         """Read one display frame from guest memory; never writes guest state."""
         if self.display is None:
             return None
-        return self.display.read_frame(lambda address, size: bytes(self.mu.mem_read(address, size)),
-                                       key=key, instruction=self.instructions)
+        ram = getattr(self, 'physical_ram', None)
+        return self.display.read_frame(
+            lambda address, size: bytes(self.mu.mem_read(address, size)),
+            key=key, instruction=self.instructions,
+            physical_reader=(ram.read_physical if ram is not None else None),
+        )
 
     def inject_usb_event(self, record):
         """Inject one verified /dev/usb/event record and wake blocked readers."""
@@ -3097,19 +3385,23 @@ class InterpreterProbe:
                     event_pending = (cmd == 0xC0048203
                                      and getattr(self.gles, 'decoded_semantics', False)
                                      and (getattr(self.gles, 'engine_model', False)
-                                          or self.gles.completion_policy == 'kernel-tgid'))
-                    if (ret is None and (cmd == 0xC004820D or event_pending)
+                                          or self.gles.completion_policy in ('kernel-tgid', 'kernel-sugilite')))
+                    sem_pending = (cmd == GLES_LOCK_SEMAPHORE
+                                   and self.gles.completion_policy == 'kernel-sugilite')
+                    if (ret is None and (cmd == 0xC004820D or event_pending or sem_pending)
                             and getattr(self, 'threads', None) is not None):
-                        # Kernel wait: completion wait 0xC004820D or event wait
-                        # 0xC0048203 (handler 0xAD0 on dev+0x4C). Park the caller
-                        # and retry after the corresponding wake; no fabricated
-                        # timeout or status is injected.
+                        # Kernel wait: completion wait 0xC004820D, event wait
+                        # 0xC0048203 (handler 0xAD0 on dev+0x4C), or semaphore
+                        # down_interruptible 0xC0048211. Park the caller and
+                        # retry after the corresponding wake.
                         self.threads.save_context(uc)
                         current = self.threads.threads[self.threads.current_tid]
                         current.regs[arm.UC_ARM_REG_PC] = pc - size
-                        wait_op = 'gles_event' if event_pending else 'gles_wait'
+                        wait_op = ('gles_event' if event_pending
+                                   else 'gles_sem' if sem_pending else 'gles_wait')
                         next_tid, wait_event = self.threads.handle_fd_wait(fd, wait_op, pc - size)
                         reason = ('gles_event_wait_blocked' if event_pending
+                                  else 'gles_sem_wait_blocked' if sem_pending
                                   else 'gles_wait_completion_blocked')
                         event = {'syscall': 'ioctl', 'r7': 54, 'fd': fd, 'cmd': cmd, 'arg': arg,
                                  'returned': None, 'pc': pc, 'instruction_address': pc - size,
@@ -3126,21 +3418,26 @@ class InterpreterProbe:
                         return
                     event = {'syscall': 'ioctl', 'r7': 54, 'fd': fd, 'cmd': cmd, 'arg': arg, 'returned': ret,
                              'pc': pc, 'instruction_address': pc - size, 'thumb': thumb, 'device': 'dmpgles2'}
-                    if (cmd == 0xC004820E and getattr(self.gles, 'decoded_semantics', False)
+                    if (cmd in (0xC004820E, GLES_UNLOCK_SEMAPHORE)
+                            and getattr(self.gles, 'decoded_semantics', False)
                             and getattr(self, 'threads', None) is not None):
-                        if self.gles.completion_policy == 'kernel-tgid':
-                            target_tids = self.gles.transactions[-1]['woken_tids']
+                        if self.gles.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
+                            target_tids = self.gles.transactions[-1].get('woken_tids') or []
                             woken = []
-                            for wait_fd in tuple(self.threads.fd_waiters):
-                                woken.extend(self.threads.handle_fd_wake(wait_fd, tids=target_tids))
-                        else:
+                            if target_tids:
+                                for wait_fd in tuple(self.threads.fd_waiters):
+                                    woken.extend(self.threads.handle_fd_wake(wait_fd, tids=target_tids))
+                        elif cmd == 0xC004820E:
                             woken = self.threads.handle_fd_wake(fd)
+                        else:
+                            woken = []
                         if woken:
                             event['woken_tids'] = woken
                     self.report['serviced_syscalls'].append(event)
                     self.report['syscall_responses_supplied'] += 1
                     uc.reg_write(arm.UC_ARM_REG_R0, ret)
-                    if self.threads and cmd == GLES_LOCK_SEMAPHORE:
+                    if (self.threads and cmd == GLES_LOCK_SEMAPHORE
+                            and self.gles.completion_policy != 'kernel-sugilite'):
                         next_tid = self.threads.get_next_runnable_tid()
                         if next_tid is not None:
                             self.threads.save_context(uc)
@@ -3358,7 +3655,10 @@ class InterpreterProbe:
                     except UnverifiedGuestData as error:
                         self._identity_boundary(error.details)
                         return
-                    uc.mem_write(job['dst'], job['out'])
+                    if job.get('dst_is_physical'):
+                        self._sugilite_phys_write(job['dst'], job['out'])
+                    else:
+                        uc.mem_write(job['dst'], job['out'])
                     self.report['ldec_jobs'] = self.report.get('ldec_jobs', 0) + 1
                     self.report['serviced_syscalls'].append({
                         'syscall': 'ioctl', 'r7': 54, 'fd': fd, 'cmd': cmd, 'returned': 0,
@@ -3613,7 +3913,15 @@ class InterpreterProbe:
                                  phys_addr=phys_addr, pgoff=pgoff)
                     if 0 <= event['returned'] < 0x80000000:
                         self.mmap.mark_device_range(event['returned'], length, 'mem')
-                        if (getattr(getattr(self, 'gles', None), 'completion_policy', 'legacy') == 'kernel-tgid'
+                        ram = getattr(self, 'physical_ram', None)
+                        if ram is not None and ram.supports_range(phys_addr, length):
+                            ram.map_alias(uc, event['returned'], phys_addr, length, prot, 'mem')
+                            if self.display is not None:
+                                self.display.register_mapping(
+                                    event['returned'], length, phys_addr, 'mem', '/dev/mem'
+                                )
+                                self._install_display_write_hooks()
+                        if (getattr(getattr(self, 'gles', None), 'completion_policy', 'legacy') in ('kernel-tgid', 'kernel-sugilite')
                                 and phys_addr < 0xf1004000 and 0xf1000000 < phys_addr + length):
                             if phys_addr != 0xf1000000 or length != 0x4000:
                                 self.report.update(status='unsupported_gles_contract', boundary={
@@ -3623,7 +3931,10 @@ class InterpreterProbe:
                                 return
                             self.gles.bar_virtual = event['returned']
                             self.gles.bar_length = length
-                            uc.mem_write(event['returned'], struct.pack('<I', 0x000b0000))
+                            if self.gles.completion_policy == 'kernel-sugilite':
+                                self.gles.seed_sugilite_bar_memory(self._sugilite_bar_sync_write)
+                            else:
+                                uc.mem_write(event['returned'], struct.pack('<I', 0x000b0000))
                             self.install_gles_memory_guards()
                     self.report['serviced_syscalls'].append(event)
                     self.report['syscall_responses_supplied'] += 1
@@ -3650,14 +3961,17 @@ class InterpreterProbe:
                     uc.reg_write(arm.UC_ARM_REG_R0, event['returned'])
                     if (0 <= event['returned'] < 0x80000000
                             and getattr(self.gles, 'bar_virtual', None) == event['returned']):
-                        # Seed the observed BAR identity word and, when requested,
-                        # install observe-only access hooks for the resumed replay.
-                        seed = bytes(self.gles.bar[:max(0, int(self.gles.bar_length))])
-                        if seed:
-                            uc.mem_write(event['returned'], seed)
-                        if getattr(self, 'gles_bar_trace', False) and self.gles.bar_length > 0:
-                            self.install_gles_bar_hooks(event['returned'], self.gles.bar_length)
-                    if self.gles.completion_policy == 'kernel-tgid':
+                        if self.gles.completion_policy == 'kernel-sugilite':
+                            self.gles.seed_sugilite_bar_memory(self._sugilite_bar_sync_write)
+                        else:
+                            # Seed the observed BAR identity word and, when requested,
+                            # install observe-only access hooks for the resumed replay.
+                            seed = bytes(self.gles.bar[:max(0, int(self.gles.bar_length))])
+                            if seed:
+                                uc.mem_write(event['returned'], seed)
+                            if getattr(self, 'gles_bar_trace', False) and self.gles.bar_length > 0:
+                                self.install_gles_bar_hooks(event['returned'], self.gles.bar_length)
+                    if self.gles.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
                         self.install_gles_memory_guards()
                     return
         if svc and immediate == 0 and self.syscall_policy in ('mmap', 'kuser', 'uipc', 'threads'):
@@ -4053,6 +4367,8 @@ class InterpreterProbe:
                         self.cec.close(entry.get('owner_id'))
                     if entry.get('device') == 'mmca_char' and hasattr(self, 'mmca_char') and self.mmca_char:
                         self.mmca_char.close(entry.get('owner_id'))
+                    if entry.get('device') == 'dmpgles2' and getattr(self, 'gles', None) is not None:
+                        self.gles.close(entry.get('owner_id'))
                     if entry.get('device') == 'pipe' and hasattr(self, 'pipes') and self.pipes:
                         self.pipes.close_end(entry.get('pipe_id'), entry.get('end'))
                         peer_fd = entry.get('peer_fd')
@@ -4607,10 +4923,15 @@ class InterpreterProbe:
         if out is None or len(out) != dst_len:
             raise UnsupportedStream('ldec_stream_not_modeled', src_len=src_len, dst_len=dst_len,
                                     decoded_len=len(out) if out is not None else None, device='/dev/ldec')
+        dst_is_physical = False
         if not accessible(uc, dst, dst_len, unicorn.UC_PROT_WRITE):
-            raise UnsupportedStream('ldec_destination_not_accessible', dst=dst, dst_len=dst_len, device='/dev/ldec')
+            ram = getattr(self, 'physical_ram', None)
+            if ram is not None and ram.supports_range(dst, dst_len):
+                dst_is_physical = True
+            else:
+                raise UnsupportedStream('ldec_destination_not_accessible', dst=dst, dst_len=dst_len, device='/dev/ldec')
         return {'src': src, 'src_len': src_len, 'dst': dst, 'dst_len': dst_len,
-                'channel': channel, 'out': out}
+                'channel': channel, 'out': out, 'dst_is_physical': dst_is_physical}
 
     def _identity_boundary(self, details):
         self.report.update(status=('unverified_device_read' if details.get('domain') == 'stream' else
@@ -4673,8 +4994,23 @@ class InterpreterProbe:
             if self.mu.reg_read(arm.UC_ARM_REG_CPSR) & 0x20:
                 start |= 1
         self._slices_executed = getattr(self, '_slices_executed', 0) + 1
+        target_end = self.instructions + instruction_count
+        remaining = instruction_count
+        import time as _time
+        deadline_s = _time.monotonic() + (timeout / 1_000_000.0)
         try:
-            self.mu.emu_start(start, 0, timeout=timeout, count=instruction_count)
+            while True:
+                self._it_restart_pc = None
+                rem_us = max(1, int((deadline_s - _time.monotonic()) * 1_000_000))
+                self.mu.emu_start(start, 0, timeout=rem_us, count=remaining)
+                if getattr(self, '_it_restart_pc', None) is not None and self.report['status'] == 'running':
+                    if _time.monotonic() >= deadline_s:
+                        self.report['status'] = 'timeout'
+                        break
+                    start = self._it_restart_pc
+                    remaining = max(1, target_end - self.instructions)
+                    continue
+                break
         except unicorn.UcError as error:
             if self.report['status'] == 'running':
                 self.report['status'] = 'execution_fault'

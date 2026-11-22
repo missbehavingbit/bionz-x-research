@@ -151,6 +151,15 @@ class SourceContract(unittest.TestCase):
 
     def test_error_giveback_guard_present(self):
         self.assertIn('(int)a6400_uvc_rd32(r+0x2cu)!=0', self.src)
+        self.assertIn('(dir_out && a6400_uvc_rd32(r+0x30u)==0u)', self.src)
+
+    def test_stop_and_disconnect_clear_prearm_state(self):
+        stop_idx = self.src.index('if (which==STOP) {')
+        disc_idx = self.src.index('if (which==DISCONNECT) {')
+        self.assertIn('g_prearm_req=0; g_prearm_pending=0; g_prearm_active=0; g_prearm_dir_out=0;',
+                      self.src[stop_idx:stop_idx + 200])
+        self.assertIn('g_prearm_req=0; g_prearm_pending=0; g_prearm_active=0; g_prearm_dir_out=0;',
+                      self.src[disc_idx:disc_idx + 200])
 
 
 if __name__ == '__main__':

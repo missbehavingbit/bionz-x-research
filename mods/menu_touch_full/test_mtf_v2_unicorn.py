@@ -29,7 +29,8 @@ HOOK_REL, HOOK_PRS = 0x06309D48, 0x06309E54
 ORIG_REL = bytes.fromhex("2de9f04788b04ff014080122")
 ORIG_PRS = bytes.fromhex("2de9f04788b04ff014090122")
 GET_POS = 0x06309018
-SYSTEM = 0x956F0
+GET_SYSTEM = 0x06308D30
+PHYSICAL_SYSTEM = 0x956F0
 STACK, STOP, MSG = 0x50000000, 0x5F000000, 0x52000000
 STATE_BYTES = 632
 
@@ -61,14 +62,16 @@ else:
 
 
 class Loaded:
-    def __init__(self, base):
+    def __init__(self, base, system):
         self.base = base
         self.calls = []
         self.pos = (100, 200)
+        self.system = system
         m = self.m = uc.Uc(uc.UC_ARCH_ARM, uc.UC_MODE_THUMB)
         m.mem_map(base, (code_size + bss + 0x1FFF) & ~0xFFF)
         m.mem_write(base, code)
         m.mem_write(base + code_size + bss, b"\xa5" * 64)          # sentinel after the bss
+        m.mem_map(GET_SYSTEM & ~0xFFF, 0x1000)
         m.mem_map(FW, 0x1000)
         # Firmware continuation after each replayed prologue: check the replayed registers, then
         # add sp,#0x20; movs r0,#0x5a (rel) / #0x6b (prs); pop.w {r4-r10,pc}
@@ -105,6 +108,9 @@ class Loaded:
             r8, r9, r2 = (m.reg_read(r) for r in (A.UC_ARM_REG_R8, A.UC_ARM_REG_R9, A.UC_ARM_REG_R2))
             ok = r2 == 1 and ((r8 == 0x14) if want_r8 else (r9 == 0x14))
             self.calls.append(("orig_rel" if want_r8 else "orig_prs", ok))
+        elif pc == GET_SYSTEM:
+            m.reg_write(A.UC_ARM_REG_R0, self.system)
+            m.reg_write(A.UC_ARM_REG_PC, m.reg_read(A.UC_ARM_REG_LR))
         elif pc == GET_POS:
             r0, r1, r2, r3 = (m.reg_read(r) for r in (A.UC_ARM_REG_R0, A.UC_ARM_REG_R1, A.UC_ARM_REG_R2, A.UC_ARM_REG_R3))
             self.calls.append(("get_pos", r0, r1))
@@ -142,9 +148,9 @@ class Loaded:
         return MSG
 
 
-for base in (0x40000000, 0x48123000):
+for base, system in ((0x40000000, PHYSICAL_SYSTEM), (0x48123000, 0x28AC8)):
     print(f"Load base {base:#x}")
-    L = Loaded(base)
+    L = Loaded(base, system)
     patched = bytes(L.m.mem_read(HOOK_REL, 12))
     check(patched[:8] == bytes.fromhex("dff804f000bf00bf") and
           struct.unpack("<I", patched[8:])[0] == base + (syms["mt_full_release"] | 1),
@@ -154,9 +160,9 @@ for base in (0x40000000, 0x48123000):
     st, raw = L.state()
     check(raw == bytes(STATE_BYTES), "state is zero before ON")
     L.calls.clear()
-    check(L.run(HOOK_REL, SYSTEM, L.message(0)) == 0x5A and L.calls == [("orig_rel", True)],
+    check(L.run(HOOK_REL, system, L.message(0)) == 0x5A and L.calls == [("orig_rel", True)],
           "before ON: release forwards to the original with the replayed prologue and returns its result")
-    check(L.run(HOOK_PRS, SYSTEM, L.message(0)) == 0x6B and L.calls[-1] == ("orig_prs", True),
+    check(L.run(HOOK_PRS, system, L.message(0)) == 0x6B and L.calls[-1] == ("orig_prs", True),
           "before ON: press forwards likewise")
     check(L.state()[1] == bytes(STATE_BYTES), "forwarding does not touch the state")
 
@@ -167,25 +173,31 @@ for base in (0x40000000, 0x48123000):
     check(bytes(L.m.mem_read(base + code_size + bss, 64)) == b"\xa5" * 64, "nothing written past the bss")
 
     L.calls.clear()
-    check(L.run(HOOK_PRS, SYSTEM, L.message(1)) == 0x6B, "press with the menu system returns the original result")
+    check(L.run(HOOK_PRS, system, L.message(1)) == 0x6B, "press with the menu system returns the original result")
     st, _ = L.state()
-    check(L.calls == [("orig_prs", True), ("get_pos", SYSTEM, 1)] and
+    check(L.calls == [("orig_prs", True), ("get_pos", system, 1)] and
           (st["press_x"], st["press_y"], st["press_valid"], st["inflight"]) == (100, 200, 1, 0),
           "press: original first, then position captured (100, 200)")
 
     L.calls.clear()
-    check(L.run(HOOK_REL, 0x1111, L.message(1)) == 0x5A and L.calls == [("orig_rel", True)],
+    foreign = PHYSICAL_SYSTEM if system != PHYSICAL_SYSTEM else 0x28AC8
+    check(L.run(HOOK_REL, foreign, L.message(1)) == 0x5A and L.calls == [("orig_rel", True)],
           "release for another system object only forwards")
     check(L.state()[0]["press_valid"] == 1, "foreign release keeps the pending press")
 
-    L.run(HOOK_REL, SYSTEM, L.message(7))
+    L.system = 0
+    L.calls.clear()
+    check(L.run(HOOK_REL, system, L.message(1)) == 0x5A and L.calls == [("orig_rel", True)],
+          "unavailable singleton: release only forwards")
+    L.system = system
+    L.run(HOOK_REL, system, L.message(7))
     check(L.state()[0]["last_err"] == 99 and L.state()[0]["inflight"] == 0, "release with mouse index >= 4 is rejected (last_err 99)")
 
     L.pos = (32767, 32767)
     L.calls.clear()
-    check(L.run(HOOK_REL, SYSTEM, L.message(2)) == 0x5A, "release with an invalid position returns the original result")
+    check(L.run(HOOK_REL, system, L.message(2)) == 0x5A, "release with an invalid position returns the original result")
     st, _ = L.state()
-    check(L.calls == [("orig_rel", True), ("get_pos", SYSTEM, 2)] and st["press_valid"] == 0 and st["count"] == 0
+    check(L.calls == [("orig_rel", True), ("get_pos", system, 2)] and st["press_valid"] == 0 and st["count"] == 0
           and st["inflight"] == 0, "invalid position: press consumed, no action recorded, no menu lookup")
 
     L.run(base + off_off, 0)
@@ -193,7 +205,7 @@ for base in (0x40000000, 0x48123000):
     check(st["magic"] == 0 and st["enabled"] == 0, "off(): magic and enabled cleared")
     L.calls.clear()
     L.pos = (10, 20)
-    check(L.run(HOOK_PRS, SYSTEM, L.message(1)) == 0x6B and L.calls == [("orig_prs", True)],
+    check(L.run(HOOK_PRS, system, L.message(1)) == 0x6B and L.calls == [("orig_prs", True)],
           "after OFF a thread still entering the hook only forwards")
 
 print("ALL MTF v2 CHECKS PASSED")

@@ -81,6 +81,7 @@ void a6400_uipc_purge(struct a6400_uipc *u);
 
 /* ---- DMM service operations (uvc_sensor_feeder_30fps.c:325-428) ---------- */
 
+#define A6400_DMM_OP_REF        2u
 #define A6400_DMM_OP_SET_RULE  20u
 #define A6400_DMM_OP_OPEN       5u
 #define A6400_DMM_OP_CLOSE      6u
@@ -110,6 +111,12 @@ int a6400_dmm_open_unit(struct a6400_dmm *d, uint32_t handle,
 int a6400_dmm_close_unit(struct a6400_dmm *d, uint32_t handle);
 int a6400_dmm_free_unit(struct a6400_dmm *d, uint32_t handle);
 
+/* Increments the DMM allocation refcount of `handle` (op 2, matching
+ * av-cam 0x63a8c6dc). Returns 0 on success, >0 on DMM status error, <0 on
+ * transport error. */
+int a6400_dmm_ref_unit(struct a6400_dmm *d, uint32_t unit_type,
+                       uint32_t handle, uint16_t *out_val);
+
 /* ---- DataflowInfra messages (uvc_sensor_feeder_30fps.c:431-529) ---------- */
 
 /* 20-byte header: reply id, marker 0xa0a0a0a0, version 1, total length,
@@ -121,8 +128,9 @@ int a6400_dmm_free_unit(struct a6400_dmm *d, uint32_t handle);
  * the selector the physical feeder uses for SET_PATH (evidence: E0145:38;
  * the width gate for 0x50 is NOT decoded, so never assume 1280x720 is
  * accepted - discover the accepted geometry from the first real frame). */
-#define A6400_DF_SELECTOR_JPEG  0x20u
-#define A6400_DF_SELECTOR_PATH  0x50u
+#define A6400_DF_SELECTOR_JPEG     0x20u
+#define A6400_DF_SELECTOR_PATH     0x50u
+#define A6400_DF_SELECTOR_LIVEVIEW 0x51u
 
 struct a6400_scalar_path_cfg {
     int      enable;     /* 0 = stop/reset, 1 = start */
@@ -131,6 +139,7 @@ struct a6400_scalar_path_cfg {
     uint32_t comp_level; /* feeder uses 5 for 720p30 */
     uint32_t param_val;  /* feeder uses 300 */
     uint32_t timeout_ms; /* reply wait bound; never 0 for a start request */
+    uint8_t  pin_no;     /* 0 = default (1); set 0xff for pin 0 (ISP LiveView) */
 };
 
 /* One GET_JPEG result. `size_upper_bound` is size_shift << 7: the original
@@ -147,6 +156,38 @@ struct a6400_jpeg_result {
 
 /* Sends the SET_PATH request and returns the original status int (0 = ok). */
 int a6400_scalar_set_path(struct a6400_dmm *d, const struct a6400_scalar_path_cfg *cfg);
+
+/* Sends the FuncCmdLiveViewMsg (0x51, liveViewOnOff) request and returns status (0 = ok). */
+int a6400_scalar_set_liveview(struct a6400_dmm *d, int enable, uint32_t timeout_ms);
+
+/* Read-only DataflowInfra GetPinInfo (0x1000/0x0000) query on target queue. */
+int a6400_df_get_pin_info(struct a6400_uipc *u, uint32_t qid,
+                          uint32_t pin_type, uint32_t pin_dir, uint32_t pin_no,
+                          uint32_t out_words[8], uint32_t timeout_ms);
+
+/* DataflowInfra PinConnect (0x1000/0x0001) on target queue (e.g. VDF 0x0059000e). */
+int a6400_df_pin_connect(struct a6400_uipc *u, uint32_t qid,
+                         const uint32_t src_pin[4], const uint32_t dst_pin[4],
+                         uint32_t *out_status, uint32_t timeout_ms);
+
+/* DataflowInfra PinDisconnect (0x1000/0x0002) on target queue. */
+int a6400_df_pin_disconnect(struct a6400_uipc *u, uint32_t qid,
+                            uint32_t pin_type, uint32_t pin_dir, uint32_t pin_no,
+                            uint32_t *out_status, uint32_t timeout_ms);
+
+/* Sends the ObjRemote 64-byte ScalarInfra mode command (0x2009/0x0001,
+ * libObj.so:0x2fe0f8) directly to 0x01670464 (mode=0x20 starts JPEG streaming,
+ * mode=0x01 returns to idle). */
+int a6400_scalar_set_mode_0464(struct a6400_dmm *d, uint16_t mode,
+                               uint32_t rate_fps, uint32_t width,
+                               uint8_t comp_level, uint8_t pin_no,
+                               uint32_t timeout_ms);
+
+/* Sends a DataflowInfra 0x9010 frame-descriptor notification to ScalarInfra
+ * (0x0167046a, matching av-cam 0x63a9f7f4). Caller MUST increment DMM refcounts
+ * of both the descriptor and any inner YUV unit before calling. */
+int a6400_scalar_push_yc(struct a6400_dmm *d, uint16_t handle,
+                         uint32_t unit_type);
 
 /* Polls one JPEG. Return values:
  *   0  frame available, result filled, ownership of handle1/handle2 handed to

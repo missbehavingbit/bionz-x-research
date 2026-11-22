@@ -37,6 +37,7 @@ class GuestStream:
         self.mappings = []
         self.unknown = []
         self._alias_buffers = {}  # root virtual_start -> host buffer; must outlive the probe
+        self.physical_ram = None
 
     def open(self, flags):
         # O_RDWR | O_DSYNC (0x1002) is the original DDS request; mcmn_mmap_init
@@ -70,8 +71,9 @@ class GuestStream:
         # Exact duplicate = alias (real stream.ko remap_pfn_range does not check prior mappings).
         twin = next((m for m in self.mappings if m['physical_start'] == physical and m['length'] == rounded
                      and 'alias_of' not in m), None)
-        if twin is None and any(physical < m['physical_start'] + m['length'] and m['physical_start'] < physical + rounded
-                                for m in self.mappings):
+        if (self.physical_ram is None and twin is None
+                and any(physical < m['physical_start'] + m['length'] and m['physical_start'] < physical + rounded
+                        for m in self.mappings)):
             raise UnsupportedStream('stream_multiple_mapping_requires_physical_alias_contract')
         if addr and addr % PAGE_SIZE:
             raise UnsupportedStream('stream_unaligned_address_hint', address=addr)
@@ -96,6 +98,32 @@ class GuestStream:
                         'pgoff': pgoff, 'prot': prot}
         self.mappings.append(self.mapping)
         self.offset = abs(virtual - physical)
+        if self.physical_ram is not None and self.physical_ram.supports_range(physical, rounded):
+            backed_data = self.backed_physical_ranges.get((physical, rounded))
+            if backed_data is not None:
+                self.physical_ram.write_physical(physical, backed_data)
+            self.physical_ram.map_alias(self.mu, virtual, physical, rounded, prot, 'stream')
+            if twin is not None:
+                new_m = self.mapping
+                new_m['alias_of'] = twin['virtual_start']
+                event['alias_of'] = twin['virtual_start']
+                a = twin['virtual_start']
+                self.unknown += [(begin - a + virtual, end - a + virtual)
+                                 for begin, end in self.unknown if a <= begin < a + rounded]
+                self.mu.hook_add(unicorn.UC_HOOK_MEM_READ, self._read, begin=virtual, end=virtual + rounded - 1)
+                self.mu.hook_add(unicorn.UC_HOOK_MEM_WRITE, self._write, begin=virtual, end=virtual + rounded - 1)
+                self.transactions.append({'operation': 'mmap_alias', **self.mapping, 'offset': self.offset})
+                return event
+            if backed_data is not None:
+                device_mapping['physical_contents'] = 'verified WBI section 555 mcmn_buf_init region'
+                self.mapper.mappings[-1]['physical_contents'] = device_mapping['physical_contents']
+                event['physical_contents'] = device_mapping['physical_contents']
+            else:
+                self.unknown.append((virtual, virtual + rounded))
+                self.mu.hook_add(unicorn.UC_HOOK_MEM_READ, self._read, begin=virtual, end=virtual + rounded - 1)
+                self.mu.hook_add(unicorn.UC_HOOK_MEM_WRITE, self._write, begin=virtual, end=virtual + rounded - 1)
+            self.transactions.append({'operation': 'mmap', **self.mapping, 'offset': self.offset})
+            return event
         if twin is not None:
             self._alias(twin, self.mapping, event)
             self.transactions.append({'operation': 'mmap_alias', **self.mapping, 'offset': self.offset})
@@ -204,6 +232,20 @@ class GuestStream:
         for m in group:  # same bytes seen through every alias VA
             delta = m['virtual_start'] - owner['virtual_start']
             self._forget(address + delta, size)
+
+    def forget_physical_range(self, phys_addr, size):
+        """Clear unknown-byte guards across all stream VAs covering [phys_addr, phys_addr + size)."""
+        if size <= 0 or not self.unknown:
+            return
+        phys_end = phys_addr + size
+        for m in self.mappings:
+            m_start = m['physical_start']
+            m_end = m_start + m['length']
+            lo = max(phys_addr, m_start)
+            hi = min(phys_end, m_end)
+            if lo < hi:
+                va_lo = m['virtual_start'] + (lo - m_start)
+                self._forget(va_lo, hi - lo)
 
     def _forget(self, address, size):
         end = address + size

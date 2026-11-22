@@ -15,7 +15,7 @@ __attribute__((section(".text.slotb"), used)) const volatile uint32_t mlv2_view_
 __attribute__((section(".text.slotb"), used)) const volatile uint32_t mlv2_testcmd_bias = MLV2_SHIM_ADDR - MLV2_REF_SHIM_ADDR;
 
 static ShimState *shim_state(int create) {
-    volatile uint32_t *slot = (volatile uint32_t *)MLV2_SHIM_SLOT;
+    volatile uint32_t *slot = (volatile uint32_t *)&mlv2_slot;
     ShimState *s = (ShimState *)*slot;
     if (s && s->magic == MLV2_SHIM_MAGIC) {
         if (s->layout_magic != MLV2_LAYOUT_MAGIC) {      /* state from an older shim */
@@ -27,7 +27,7 @@ static ShimState *shim_state(int create) {
     }
     if (!create) return 0;
     uint32_t m = ml_mmap_rwx(4096u);
-    if (!m || ml_make_rwx(MLV2_SHIM_SLOT, 4u) < 0) return 0;
+    if (!m || ml_make_rwx((uint32_t)&mlv2_slot, 4u) < 0) return 0;
     s = (ShimState *)m;
     ml_memset(s, 0, sizeof(*s));
     s->magic = MLV2_SHIM_MAGIC;

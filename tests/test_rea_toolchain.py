@@ -25,7 +25,8 @@ class ReaToolchainTests(unittest.TestCase):
                 rea_profile('current')
 
     def test_session_uses_the_selected_executables_without_shell_interpolation(self):
-        with patch('tools.research.rea_wsl_batch.subprocess.Popen') as popen:
+        with patch.dict(os.environ, {}, clear=True), patch(
+                'tools.research.rea_wsl_batch.subprocess.Popen') as popen:
             popen.return_value.stdout = []
             session = Session(None, toolchain='current')
             session.reader.join(timeout=1)

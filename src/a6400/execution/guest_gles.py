@@ -18,6 +18,9 @@ GLES_RESET = 0x40048204
 GLES_SET_POWER_ON = 0xc0048204
 GLES_GET_SUBDEVICE_ID = 0x80048205
 GLES_GET_MMIO_SIZE = 0x80048206
+GLES_GET_ALIGNMENT_DECODED = 0x80048207
+GLES_CLOCK_DOWN = 0xc0048208
+GLES_NEXT_EVENT_SEQ = 0xc004820c
 GLES_GET_RESOURCE_SUB = 0xc004820d
 GLES_SIGNAL_COMPLETION = 0xc004820e
 GLES_SET_POWER_OFF = 0xc004820f
@@ -76,13 +79,22 @@ class GuestGles:
     """Emulates /dev/dmpgles2 device file operations conforming to grm_gles.ko."""
 
     def __init__(self, binding: GlesBinding = None, *, completion_policy='legacy'):
-        if completion_policy not in ('legacy', 'kernel-tgid'):
+        if completion_policy not in ('legacy', 'kernel-tgid', 'kernel-sugilite'):
             raise ValueError(f'Unknown GLES completion policy: {completion_policy}')
         self.binding = binding
         self.completion_policy = completion_policy
         self.tgid_completions = {}
         self.shared_mapping = None
         self.shared_unknown = {}
+        self.dev_open_count = 0
+        self.dev_event_seq = 0
+        self.shared_header_zeroed = False
+        self.sems = {
+            0: {'count': 1, 'waiters': [], 'ready_tid': None},
+            1: {'count': 1, 'waiters': [], 'ready_tid': None},
+            2: {'count': 1, 'waiters': [], 'ready_tid': None},
+        }
+        self.sugilite_gpu = None
         self.owners = {}
         self.transactions = []
         self.major = 248
@@ -91,7 +103,7 @@ class GuestGles:
         # 0x8004820A reads the suspend/status word (dev+0x48, kzalloc 0) and
         # 0xC004820D is wait-for-completion (out 1 only when a completion is
         # actually pending). The historical default keeps the earlier table.
-        self.decoded_semantics = completion_policy == 'kernel-tgid'
+        self.decoded_semantics = completion_policy in ('kernel-tgid', 'kernel-sugilite')
         # Physical read-only evidence (E0313): GPES/Sugilite BAR word 0 reads
         # 0x000b0000 and status word 0x34 carries 0x40000000/0x80000000 during
         # operation. The BAR is an emulated zero page; seed only the observed
@@ -110,14 +122,25 @@ class GuestGles:
         self.engine_event_status = 0
         self.dev_a8 = 0
         self.event_waiters = []
+        self.irq_waiters = set()
         self.engine_state_events = 0
         # Opt-in DMP SMAPH/P3D + PPF + PSC BAR model (Oein/a5000-emulator RE_DISPLAY_GPU.md).
         self.p3d_model = False
         self._p3d_mmio = None
+        if completion_policy == 'kernel-sugilite':
+            from src.a6400.execution.sugilite_gpu import SugiliteGpuEngine
+            self.sugilite_gpu = SugiliteGpuEngine()
 
     def __setstate__(self, state):
         """Restore old checkpoints that predate the BAR/engine-model fields."""
+        state = dict(state)
+        raw_backing = state.pop('_shared_backing_bytes', None)
         self.__dict__.update(state)
+        if raw_backing is not None:
+            import ctypes
+            self._shared_backing = (ctypes.c_char * len(raw_backing)).from_buffer_copy(raw_backing)
+        if not hasattr(self, 'irq_waiters'):
+            self.irq_waiters = set()
         if not hasattr(self, 'completion_policy'):
             self.completion_policy = 'legacy'
         if not hasattr(self, 'tgid_completions'):
@@ -126,6 +149,20 @@ class GuestGles:
             self.shared_mapping = None
         if not hasattr(self, 'shared_unknown'):
             self.shared_unknown = {}
+        if not hasattr(self, 'dev_open_count'):
+            self.dev_open_count = len(getattr(self, 'owners', {}))
+        if not hasattr(self, 'dev_event_seq'):
+            self.dev_event_seq = 0
+        if not hasattr(self, 'shared_header_zeroed'):
+            self.shared_header_zeroed = False
+        if not hasattr(self, 'sems'):
+            self.sems = {
+                0: {'count': 1, 'waiters': [], 'ready_tid': None},
+                1: {'count': 1, 'waiters': [], 'ready_tid': None},
+                2: {'count': 1, 'waiters': [], 'ready_tid': None},
+            }
+        if not hasattr(self, 'sugilite_gpu'):
+            self.sugilite_gpu = None
         if not hasattr(self, 'bar'):
             self.bar = bytearray(0x4000)
             struct.pack_into('<I', self.bar, 0, 0x000b0000)
@@ -145,6 +182,8 @@ class GuestGles:
             self.dev_a8 = 0
         if not hasattr(self, 'event_waiters'):
             self.event_waiters = []
+        if not hasattr(self, 'irq_waiters'):
+            self.irq_waiters = set()
         if not hasattr(self, 'engine_state_events'):
             self.engine_state_events = 0
         if not hasattr(self, 'engine_submitted'):
@@ -193,18 +232,53 @@ class GuestGles:
             }
         }
         self.owners[owner_id] = owner
-        if self.completion_policy == 'kernel-tgid':
+        self.dev_open_count += 1
+        first_open = (self.dev_open_count == 1)
+        if first_open and self.completion_policy == 'kernel-sugilite':
+            # Verified in grm_gles.ko sugilite_open (+0x47c..+0x548):
+            # atomic_inc_return(&dev->open_count) == 1 clears dev+0x44 (event_status = 0),
+            # calls __memzero(dev->shared_area, 4), and resets sems[0..2] to count 1.
+            self.dev_event_seq = 0
+            self.shared_header_zeroed = True
+            for sem_idx in (0, 1, 2):
+                self.sems[sem_idx] = {'count': 1, 'waiters': [], 'ready_tid': None}
+            if self.shared_mapping is not None:
+                vbase = self.shared_mapping['virtual']
+                for off in range(4):
+                    self.shared_unknown.pop(vbase + off, None)
+        if self.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
             self.tgid_completions.setdefault(
                 caller_tgid, {'fast': False, 'done': 0x7fffffff, 'waiters': {}})
-        self.transactions.append({'operation': 'open', 'flags': flags, 'owner_id': owner_id})
+        self.transactions.append({
+            'operation': 'open', 'flags': flags, 'owner_id': owner_id,
+            **({'dev_open_count': self.dev_open_count, 'first_open_zeroed_4b': first_open}
+               if self.completion_policy == 'kernel-sugilite' else {}),
+        })
         return owner
+
+    def close(self, owner_id):
+        """Model sugilite_release (grm_gles.ko + 0x310): decrement dev->open_count and owner ref."""
+        owner = self.owners.get(owner_id)
+        if owner is None:
+            return
+        if self.dev_open_count > 0:
+            self.dev_open_count -= 1
+        owner['ref_count'] = max(0, owner.get('ref_count', 1) - 1)
+        if owner['ref_count'] == 0:
+            tgid = owner.get('caller_tgid')
+            del self.owners[owner_id]
+            if (tgid is not None and self.completion_policy in ('kernel-tgid', 'kernel-sugilite')
+                    and not any(o.get('caller_tgid') == tgid for o in self.owners.values())):
+                self.tgid_completions.pop(tgid, None)
+        self.transactions.append({'operation': 'close', 'owner_id': owner_id,
+                                  'dev_open_count': self.dev_open_count})
 
     def ioctl(self, owner_id, cmd, arg, mem_read, mem_write, tid=None):
         owner = self.owners.get(owner_id)
         if not owner:
             raise UnsupportedGles('gles_invalid_owner_descriptor', owner_id=owner_id)
 
-        if self.completion_policy == 'kernel-tgid' and cmd in (
+        if self.completion_policy in ('kernel-tgid', 'kernel-sugilite') and cmd in (
                 GLES_RELEASE_RESOURCE, GLES_GET_RESOURCE_SUB, GLES_SIGNAL_COMPLETION):
             return self._kernel_completion_ioctl(cmd, arg, mem_read, mem_write, tid)
 
@@ -347,13 +421,35 @@ class GuestGles:
                                      'resource_index': index, 'resource_value': val})
             return 0
 
-        if cmd == GLES_GET_ALIGNMENT:
+        if cmd in (GLES_GET_ALIGNMENT, GLES_GET_ALIGNMENT_DECODED):
             # Verified in grm_gles.ko at 0xdf0: returns 0x200 (512 bytes buffer alignment)
             if arg >= self.binding.address_limit:
                 raise UnsupportedGles('user_pointer_outside_task_limit', address=arg)
             mem_write(arg, struct.pack('<I', 0x200))
             self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg, 'returned': 0,
                                      'alignment': 0x200})
+            return 0
+
+        if cmd == GLES_CLOCK_DOWN and self.decoded_semantics:
+            # Verified in grm_gles.ko at 0xe14: sets suspend_status (dev+0x48) = 1
+            if arg >= self.binding.address_limit:
+                raise UnsupportedGles('user_pointer_outside_task_limit', address=arg)
+            prev = owner.get('suspend_status', 0)
+            owner['suspend_status'] = 1
+            changed = 0 if prev == 1 else 1
+            mem_write(arg, struct.pack('<I', changed))
+            self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg, 'returned': 0,
+                                     'clock_down_changed': changed})
+            return 0
+
+        if cmd == GLES_NEXT_EVENT_SEQ and self.decoded_semantics:
+            # Verified in grm_gles.ko at 0xf00: atomic_inc_return(&dev->event_status) at dev+0x44
+            if arg >= self.binding.address_limit:
+                raise UnsupportedGles('user_pointer_outside_task_limit', address=arg)
+            self.dev_event_seq = (self.dev_event_seq + 1) & 0xFFFFFFFF
+            mem_write(arg, struct.pack('<I', self.dev_event_seq))
+            self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg, 'returned': 0,
+                                     'event_seq': self.dev_event_seq})
             return 0
 
         if cmd == GLES_GET_CONTEXT:
@@ -404,6 +500,21 @@ class GuestGles:
             sem_id = struct.unpack('<I', raw_id)[0]
             if sem_id > 2:
                 return -22  # -EINVAL
+            if self.completion_policy == 'kernel-sugilite' and tid is not None:
+                sem = self.sems[sem_id]
+                if sem.get('ready_tid') == tid:
+                    sem['ready_tid'] = None
+                elif tid in sem['waiters']:
+                    self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg,
+                                              'returned': None, 'lock_semaphore': sem_id, 'tid': tid})
+                    return None
+                elif sem['count'] > 0:
+                    sem['count'] -= 1
+                else:
+                    sem['waiters'].append(tid)
+                    self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg,
+                                              'returned': None, 'lock_semaphore': sem_id, 'tid': tid})
+                    return None
             mem_write(arg, struct.pack('<I', 0))
             self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg, 'returned': 0,
                                      'lock_semaphore': sem_id})
@@ -419,9 +530,18 @@ class GuestGles:
             sem_id = struct.unpack('<I', raw_id)[0]
             if sem_id > 2:
                 return -22  # -EINVAL
+            woken_tids = []
+            if self.completion_policy == 'kernel-sugilite':
+                sem = self.sems[sem_id]
+                if sem['waiters'] and sem.get('ready_tid') is None:
+                    nxt = sem['waiters'].pop(0)
+                    sem['ready_tid'] = nxt
+                    woken_tids.append(nxt)
+                else:
+                    sem['count'] = 1
             mem_write(arg, struct.pack('<I', 0))
             self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg, 'returned': 0,
-                                     'unlock_semaphore': sem_id})
+                                     'unlock_semaphore': sem_id, 'woken_tids': woken_tids})
             return 0
 
         if cmd == GLES_SIGNAL_COMPLETION:
@@ -524,11 +644,14 @@ class GuestGles:
 
         if cmd == GLES_KICK_CONTROL and self.decoded_semantics:
             # grm_gles.ko 0x1248: store value and iowrite32(value|0x20000000, BAR+0xC0).
-            # No GPES engine is modelled, so only the software-visible value is kept.
             if arg >= self.binding.address_limit:
                 raise UnsupportedGles('user_pointer_outside_task_limit', address=arg)
             value = struct.unpack('<I', mem_read(arg, 4))[0]
+            if value > 1 and self.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
+                return -14  # grm_gles.ko + 0x1264..0x1274: value > 1 -> -EFAULT
             owner['kick_value'] = value
+            if self.sugilite_gpu is not None:
+                self.sugilite_gpu.write_mmio(0xC0, value | 0x20000000)
             self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'arg': arg, 'returned': 0,
                                      'kick_control': value, 'decoded': True})
             return 0
@@ -548,19 +671,31 @@ class GuestGles:
         owner = self.owners.get(owner_id)
         if not owner:
             raise UnsupportedGles('gles_invalid_owner_descriptor', owner_id=owner_id)
-        if self.completion_policy == 'kernel-tgid':
+        if self.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
             if pgoff != 0 or length not in (0x4000, 0x20000):
                 raise UnsupportedGles('gles_mapping_shape_unqualified', length=length, pgoff=pgoff)
             if length == 0x20000:
-                if self.shared_mapping is not None:
+                if self.shared_mapping is not None and self.completion_policy != 'kernel-sugilite':
                     raise UnsupportedGles('gles_shared_alias_not_modelled')
                 event = mapper.request_mmap2(addr, length, prot, flags | 0x20, -1, 0)
                 virtual = event['returned']
                 if 0 <= virtual < 0x80000000:
                     mapper.mark_device_range(virtual, length, 'dmpgles2-shared')
-                    self.shared_mapping = {'virtual': virtual, 'length': length}
-                    self.shared_unknown = {
-                        virtual + offset: 'gles_shared_uninitialized' for offset in range(length)}
+                    if self.completion_policy == 'kernel-sugilite':
+                        import ctypes
+                        if getattr(self, '_shared_backing', None) is None:
+                            self._shared_backing = (ctypes.c_char * length)()
+                        mapper.mu.mem_unmap(virtual, length)
+                        mapper.mu.mem_map_ptr(virtual, length, prot, ctypes.addressof(self._shared_backing))
+                    if self.shared_mapping is None:
+                        self.shared_mapping = {'virtual': virtual, 'length': length, 'aliases': [virtual]}
+                        start_unknown = 4 if (self.completion_policy == 'kernel-sugilite' and self.shared_header_zeroed) else 0
+                        self.shared_unknown = {
+                            virtual + offset: 'gles_shared_uninitialized'
+                            for offset in range(start_unknown, length)
+                        }
+                    else:
+                        self.shared_mapping.setdefault('aliases', []).append(virtual)
                 event['gles_mapping_kind'] = 'software-shared'
                 self.transactions.append({'operation': 'mmap2', 'virtual': virtual,
                                           'length': length, 'mapping_kind': 'software-shared',
@@ -592,6 +727,69 @@ class GuestGles:
         self.completion_policy = 'kernel-tgid'
         self.decoded_semantics = True
 
+    def enable_sugilite_execution(self, phys_reader=None, phys_writer=None):
+        """Enable verified first-open 4-byte shared init + Sugilite GPU & IRQ 76 model."""
+        if self.completion_policy == 'kernel-sugilite':
+            if self.sugilite_gpu is None:
+                from src.a6400.execution.sugilite_gpu import SugiliteGpuEngine
+                self.sugilite_gpu = SugiliteGpuEngine(phys_reader=phys_reader, phys_writer=phys_writer)
+            else:
+                self.sugilite_gpu.phys_reader = phys_reader
+                self.sugilite_gpu.phys_writer = phys_writer
+            return
+        if (self.owners or self.transactions or self.bar_virtual is not None
+                or self.engine_model or self.p3d_model or self.dev_a8
+                or self.engine_command_seen or self.engine_completions
+                or self.engine_event_status or self.shared_mapping is not None):
+            raise UnsupportedGles('gles_completion_policy_requires_preopen_state')
+        from src.a6400.execution.sugilite_gpu import SugiliteGpuEngine
+        self.completion_policy = 'kernel-sugilite'
+        self.decoded_semantics = True
+        self.sugilite_gpu = SugiliteGpuEngine(phys_reader=phys_reader, phys_writer=phys_writer)
+
+    enable_sugilite_engine = enable_sugilite_execution
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        backing = state.pop('_shared_backing', None)
+        if backing is not None:
+            state['_shared_backing_bytes'] = bytes(backing)
+        return state
+
+    def seed_sugilite_bar_memory(self, mem_write):
+        """Populate mapped BAR VA with initial Sugilite register state."""
+        if self.bar_virtual is None or self.sugilite_gpu is None:
+            return
+        words = [self.sugilite_gpu.read_mmio(off) for off in range(0, 0x4000, 4)]
+        mem_write(self.bar_virtual, struct.pack('<4096I', *words))
+
+    def handle_sugilite_mmio_write(self, offset: int, size: int, value: int, mem_write=None) -> int:
+        """Execute one BAR write and run sugilite_interrupt if an engine raised IRQ 76."""
+        if self.sugilite_gpu is None:
+            raise UnsupportedGles('sugilite_gpu_not_enabled', offset=offset)
+        aligned = offset & ~3
+        if size == 4 and offset == aligned:
+            word = value & 0xFFFFFFFF
+        else:
+            cur = self.sugilite_gpu.read_mmio(aligned)
+            shift = (offset & 3) * 8
+            mask = ((1 << (size * 8)) - 1) << shift
+            word = ((cur & ~mask) | ((value << shift) & mask)) & 0xFFFFFFFF
+        self.sugilite_gpu.write_mmio(aligned, word)
+        added = 0
+        if self.sugilite_gpu.status != 0:
+            added = self.sugilite_gpu.service_interrupt()
+            if added:
+                self.dev_a8 |= added
+                self.engine_completions += 1
+        if mem_write is not None and self.bar_virtual is not None:
+            # Mirror current register values so guest MMIO loads read authentic hardware state.
+            mem_write(self.bar_virtual + aligned, struct.pack('<I', self.sugilite_gpu.read_mmio(aligned)))
+            mem_write(self.bar_virtual + 0x34, struct.pack('<I', self.sugilite_gpu.read_mmio(0x34)))
+            for ack_off in (0x1C, 0xC18, 0x1000, 0x1800):
+                mem_write(self.bar_virtual + ack_off, struct.pack('<I', self.sugilite_gpu.read_mmio(ack_off)))
+        return added
+
     def _kernel_completion_ioctl(self, cmd, arg, mem_read, mem_write, tid):
         if self.engine_model or self.p3d_model:
             raise UnsupportedGles('gles_unqualified_engine_with_tgid_contract')
@@ -621,6 +819,7 @@ class GuestGles:
                 return -14
             if self.dev_a8 & mask:
                 self.dev_a8 &= ~mask
+                self.irq_waiters.discard(tid)
                 mem_write(arg, struct.pack('<I', mask))
                 self.transactions.append({**event, 'returned': 0, 'decoded': 'irq_wait',
                                           'mask': mask, 'status': mask})
@@ -628,6 +827,8 @@ class GuestGles:
             if self.dev_a8:
                 raise UnsupportedGles('gles_unmatched_irq_requires_retry_recovery',
                                       mask=mask, pending=self.dev_a8)
+            if tid is not None:
+                self.irq_waiters.add(tid)
             self.transactions.append({**event, 'returned': None, 'decoded': 'irq_wait', 'mask': mask})
             return None
 
@@ -722,7 +923,7 @@ class GuestGles:
         decoded IRQ ack path clears via BAR+0x1000/+0xC18. This model only
         exposes that device completion; it never completes a guest ctx.
         """
-        if self.completion_policy == 'kernel-tgid':
+        if self.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
             raise UnsupportedGles('gles_unqualified_engine_with_tgid_contract')
         if self.bar_virtual is None:
             return None
@@ -768,7 +969,7 @@ class GuestGles:
 
     def complete_engine_command(self, source='bar-write'):
         """Device completion for a submitted command; never completes a ctx."""
-        if self.completion_policy == 'kernel-tgid':
+        if self.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
             raise UnsupportedGles('gles_unqualified_engine_with_tgid_contract')
         if getattr(self, 'engine_bar_completed', False):
             return None  # same submission (0x16C then 0x170); poll clears the flag
@@ -793,7 +994,7 @@ class GuestGles:
         """
         if not getattr(self, 'p3d_model', False) or self.bar_virtual is None:
             return 0
-        if self.completion_policy == 'kernel-tgid':
+        if self.completion_policy in ('kernel-tgid', 'kernel-sugilite'):
             raise UnsupportedGles('gles_unqualified_engine_with_tgid_contract')
         from src.a6400.execution.dmp_p3d import (
             SUGI_REG_IRQ_STATUS,

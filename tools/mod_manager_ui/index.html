@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sony BIONZ X Mod Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+    <div class="drop-box">
+      <div class="drop-icon">+</div>
+      <div class="drop-title">Drop .mod file to add</div>
+      <div class="drop-sub">Validated with SMOD header and FNV-1a checksum before staging</div>
+    </div>
+  </div>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span>&alpha;</span></div>
+        <div class="brand-copy">
+          <div class="brand-title">BIONZ X Mod Manager</div>
+          <div class="brand-sub">CXD90045 · Toggle ON/OFF &amp; 1-Click Install</div>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <div id="camera-pill" class="camera-pill state-offline" title="Camera connection status">
+          <span class="status-dot"></span>
+          <div class="camera-pill-text">
+            <span id="camera-pill-title">Not Scanned</span>
+            <span id="camera-pill-sub" class="camera-pill-sub">Connect camera in Mass Storage mode</span>
+          </div>
+        </div>
+        <button id="btn-scan-camera" class="btn btn-secondary" type="button">
+          <span class="btn-icon" aria-hidden="true">&#x21BB;</span>
+          <span>Scan Camera</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <nav class="sidebar" aria-label="Main navigation">
+        <button class="nav-item active" data-tab="mods" type="button">
+          <span class="nav-glyph" aria-hidden="true">&#x25A6;</span>
+          <span class="nav-label">Mods &amp; Tweaks</span>
+        </button>
+        <button class="nav-item" data-tab="sd" type="button">
+          <span class="nav-glyph" aria-hidden="true">&#x25AF;</span>
+          <span class="nav-label">SD Card Sync</span>
+        </button>
+        <button class="nav-item" data-tab="tools" type="button">
+          <span class="nav-glyph" aria-hidden="true">&#x2699;</span>
+          <span class="nav-label">Tools &amp; Setup</span>
+          <span id="tools-badge" class="nav-dot hidden" title="Tools need attention"></span>
+        </button>
+
+        <div class="sidebar-footer">
+          <div class="safety-card">
+            <div class="safety-title">RAM-First Safety</div>
+            <p>Runtime <code>.mod</code> files run in RAM via Mod Loader v2. Rebooting restores stock code. Permanent PMCA tweaks always confirm first.</p>
+          </div>
+        </div>
+      </nav>
+
+      <main class="content">
+        <!-- MODS TAB -->
+        <section id="tab-mods" class="tab-panel active">
+          <div id="mlv2-banner" class="alert-banner hidden"></div>
+
+          <div class="section-header">
+            <div>
+              <h2>Runtime Camera Mods <span class="pill pill-ram">RAM-Only</span></h2>
+              <p class="section-desc">Toggle what you want active in the camera's <code>MENU &rarr; Mods</code> tab. Zero flash writes.</p>
+            </div>
+            <div class="section-actions">
+              <span id="runtime-counter" class="counter-pill">0 / 12 active</span>
+              <button id="btn-add-mod" class="btn btn-ghost" type="button">+ Add Custom .mod</button>
+            </div>
+          </div>
+
+          <div id="runtime-mods-list" class="card-grid"></div>
+
+          <div class="section-header section-header-spaced">
+            <div>
+              <h2>Permanent Firmware Tweaks <span class="pill pill-flash">PMCA Flash</span></h2>
+              <p class="section-desc">Writes Sony backup settings via PMCA Senser. Only toggled changes are written after confirmation.</p>
+            </div>
+            <div class="section-actions">
+              <button id="btn-read-tweaks" class="btn btn-secondary" type="button">Read Current from Camera</button>
+            </div>
+          </div>
+
+          <div id="pmca-tweaks-list" class="card-grid card-grid-two"></div>
+        </section>
+
+        <!-- SD CARD SYNC TAB -->
+        <section id="tab-sd" class="tab-panel">
+          <div class="section-header">
+            <div>
+              <h2>SD Card Sync <span class="pill pill-ram">E:\mods\</span></h2>
+              <p class="section-desc">Stage your toggled-ON runtime <code>.mod</code> files onto a removable SD card with SHA-256 read-back verification.</p>
+            </div>
+            <div class="section-actions">
+              <button id="btn-refresh-sd" class="btn btn-secondary" type="button">Refresh Drives</button>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="sd-picker-row">
+              <label for="sd-drive-select">Target Removable Drive</label>
+              <div class="sd-select-wrap">
+                <select id="sd-drive-select"></select>
+                <span id="sd-drive-meta" class="muted-meta"></span>
+              </div>
+            </div>
+
+            <div id="sd-diff-box" class="diff-box"></div>
+
+            <div class="panel-actions">
+              <button id="btn-sd-sync" class="btn btn-primary" type="button" disabled>Sync Toggled Mods to SD Card</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- TOOLS & SETUP TAB -->
+        <section id="tab-tools" class="tab-panel">
+          <div class="section-header">
+            <div>
+              <h2>Tools &amp; Setup</h2>
+              <p class="section-desc">Everything needed for PMCA, USB transport, debugger bootstrap, and Mod Loader v2.</p>
+            </div>
+            <div class="section-actions">
+              <button id="btn-prepare-tools" class="btn btn-primary" type="button">Download / Prepare Tools</button>
+            </div>
+          </div>
+
+          <div id="tools-grid" class="tools-grid"></div>
+
+          <div class="section-header section-header-spaced">
+            <div>
+              <h2>Diagnostics &amp; Receipts</h2>
+              <p class="section-desc">Read-only verification, unsupported-camera onboarding dump, and install receipts.</p>
+            </div>
+            <div class="section-actions">
+              <button id="btn-open-receipts" class="btn btn-ghost" type="button">Open Receipts Folder</button>
+            </div>
+          </div>
+
+          <div class="diag-actions">
+            <button id="btn-check-debugger" class="btn btn-secondary" type="button">Debugger Check-Only (Read-Only)</button>
+            <button id="btn-collect-onboarding" class="btn btn-secondary" type="button">Export Onboarding Bundle (.zip)</button>
+            <button id="btn-pick-mlv2" class="btn btn-secondary" type="button">Select MLv2 Build Folder...</button>
+          </div>
+
+          <div id="diag-output" class="panel-card diag-output hidden"></div>
+
+          <div class="panel-card">
+            <div class="panel-subhead">Recent Receipts</div>
+            <div id="receipts-list" class="receipts-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer class="action-bar">
+      <div class="action-summary">
+        <div id="action-summary-title" class="action-summary-title">Ready</div>
+        <div id="action-summary-sub" class="action-summary-sub">Select mods above, then click 1-Click Install.</div>
+      </div>
+      <div class="action-buttons">
+        <button id="btn-reset-selection" class="btn btn-ghost" type="button">Reset</button>
+        <button id="btn-one-click-install" class="btn btn-hero" type="button">1-Click Install to Camera</button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- CONFIRMATION MODAL -->
+  <div id="confirm-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="confirm-title">Confirm Camera Changes</h3>
+        <button class="icon-close" data-close="confirm-modal" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="confirm-body" class="modal-body"></div>
+      <label class="confirm-check">
+        <input id="confirm-checkbox" type="checkbox">
+        <span>I have read the notices above and want to proceed with these changes on the connected camera.</span>
+      </label>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-close="confirm-modal" type="button">Cancel</button>
+        <button id="btn-confirm-proceed" class="btn btn-hero" type="button" disabled>Confirm &amp; Install Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIVE INSTALL PROGRESS MODAL -->
+  <div id="progress-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="progress-title">
+    <div class="modal-card modal-card-wide">
+      <div class="modal-header">
+        <h3 id="progress-title">Installing to Camera</h3>
+        <button id="btn-progress-close" class="icon-close hidden" data-close="progress-modal" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="power-cycle-callout" class="power-cycle-callout hidden">
+          <div class="callout-title">Power-Cycle Your Camera Once</div>
+          <p>Native USB debugger was written to <code>/setting</code> and verified. On <code>ILCE-6400</code>, make sure <strong>Bluetooth is ON</strong> (<strong>Airplane Mode OFF</strong>) so <code>/tmp_bt</code> mounts writable, then turn the camera <strong>OFF</strong>, unplug USB, wait <strong>3 seconds</strong>, turn it <strong>ON</strong>, and reconnect USB in <strong>Mass Storage</strong> mode. Waiting automatically...</p>
+        </div>
+        <div id="progress-steps" class="progress-steps"></div>
+        <div id="progress-result" class="progress-result hidden"></div>
+        <details class="log-drawer">
+          <summary>Live Operation Log</summary>
+          <pre id="progress-log" class="progress-log"></pre>
+        </details>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-progress-cancel" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="btn-progress-receipt" class="btn btn-secondary hidden" type="button">Open Receipt Folder</button>
+        <button id="btn-progress-done" class="btn btn-primary hidden" data-close="progress-modal" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

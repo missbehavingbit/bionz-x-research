@@ -178,8 +178,9 @@ def _verdict(equal: int, shared: int, members: int, sample: "Body",
         code = [n for n in differing if sample.types.get(n) in _CODE_TYPES]
         # Name the kinds of symbol that moved rather than calling every one a version string:
         # the nine that move between two real bodies include sqrt_oddadjust and six __func__.
+        # One moved function disproves "one code object" (capability_path.sharing_verdict).
         if code:
-            return (f"one code object; {len(code)} of {len(differing)} differing addresses are "
+            return (f"separate kernels: {len(code)} of {len(differing)} differing addresses are "
                     f"function symbols (build {sample.build})")
         return (f"one code object; all {len(differing)} differing addresses are data "
                 f"(build {sample.build})")
@@ -189,6 +190,9 @@ def _verdict(equal: int, shared: int, members: int, sample: "Body",
     if differing and code_diff == 0:
         return (f"one symbol set, {shared - equal:,} addresses shifted, "
                 f"none of them function symbols")
+    if code_diff:
+        return (f"separate kernels: one symbol set, {shared - equal:,} addresses shifted, "
+                f"{code_diff:,} of them function symbols")
     return f"one symbol set, {shared - equal:,} addresses shifted"
 
 

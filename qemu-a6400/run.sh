@@ -22,6 +22,8 @@
 # SGC1_EVENT_A=1 (opt-in Sgc1 event A and IRQ 35, E0569).
 # GATE_FORCE_PROBE=1 (declared stimulus cond. PROBE gate-force: one-shot patch
 # of the av-cam step-26 producer cbz at PA 0x03874fd0 to a NOP; not a fix).
+# ENTRY_FORCE_PROBE=1 (declared stimulus cond. PROBE entry-force: while the
+# camera-control state is 240, force the first av-cam entry to r0 = 1; not a fix).
 # LIVEVIEW_SOURCE (opt-in bars, ramp, none, or pgm:PATH, E0591).
 # P2S_TRACE=1 (log the first 64 sensor-writer transfers).
 # USB_VBUS_TEST=1 (enable the runtime usb-vbus QMP property).
@@ -30,16 +32,65 @@
 # WATCHDOG=1 (opt-in CXD4115 hardware watchdog at 0xF2402000, E0636; expiry follows
 # QEMU -action watchdog=, add e.g. QEMU_EXTRA="-icount shift=0,sleep=on -action watchdog=pause").
 # WORK_DMA=1 (opt-in work DMA copy channel at 0xF0102000, E0641).
+# DDRB_CONTROL=1 (opt-in initialized DDR-B idle/active-mode sequence).
+# DFS_CONTROL=1 (opt-in DFS clock-switch completion handshake).
+# ZMA1_STARTUP=1 (opt-in captured ZMA1 startup interrupt, not JPEG decode).
+# ZMA1_JPEG_FILL=1 (opt-in DGI neutral fill; requires ZMA1_STARTUP=1).
 # LOWMEM_ABORT=1 (opt-in bus error on PA 0x000F8000 in the reserved first MiB, as on the
 # camera, E0647; guest log under -d guest_errors).
 # REAR_CONTROLS=1 (route host keys to emulated rear camera controls).
+# SHUTTER_EDGE_IRQ=1 (opt-in latched body shutter edges in the GIC).
 # REAR_LCD_DIAGNOSTIC=1 (E0572 device select on the run's qcow2 overlay).
+# PP_UNLOCK=1 (opt-in, default off, E9102): redirect the Soft Skin menu node to
+# the Picture Profile node with one 4-byte .dynsym st_value write on the run's
+# disposable overlay; PP_PARTITION_OFFSET overrides the rootfs partition start.
+# SUBMICRO_PAGE (E0527 capture, empty for no micro) or SUBMICRO_FRAMES
+# (the verified 384-byte A/C/B extract from that same capture).
+# SUBMICRO_LENS_POWER=1 (opt-in lens rail status in slot B; no lens protocol).
+# IDT_CAM (opt-in original sabin/idt_cam.bin, captured boot profile only).
+# SD_IMAGE and SD_SHA256 (opt-in checked raw card; starts ejected).
 # SERIAL (QEMU -serial backend for ttyAM0; default mon:stdio). The mod tools use a unix socket.
 # SETTING_FILES ("HOST_PATH:NAME ..." added to /setting on the run's disposable overlay only;
 # host paths must not contain spaces). Mod development stages the guard and request this way.
 # The machine models 4 Cortex-A5 cores by default (E0522); -smp 1 still works.
 set -euo pipefail
 E="$(cd "$(dirname "$0")" && pwd)"
+
+if [ "${ZMA1_JPEG_FILL:-0}" = 1 ] && [ "${ZMA1_STARTUP:-0}" != 1 ]; then
+    echo "ZMA1_JPEG_FILL=1 requires ZMA1_STARTUP=1" >&2
+    exit 1
+fi
+
+# Check the replay fixture before spending time staging firmware and an overlay.
+# SUBMICRO_FRAMES_SHA declares a different 384-byte extract, e.g. the one
+# tools.research.qemu_packaged_inputs derives from the public updater's WBI.
+SUBMICRO_FRAME_SHA=${SUBMICRO_FRAMES_SHA:-6d5026e3932f3f46b47cc44a15008ced099dba46041deafbc1c058e4a0fa85ed}
+SUBMICRO_RX="${SUBMICRO_FRAMES:-}"
+if [ -n "$SUBMICRO_RX" ]; then
+    if [ -n "${SUBMICRO_PAGE:-}" ]; then
+        echo "Choose either SUBMICRO_PAGE or SUBMICRO_FRAMES, not both." >&2
+        exit 1
+    fi
+    SUBMICRO_SHA=$SUBMICRO_FRAME_SHA
+    SUBMICRO_SKIP=0
+else
+    SUBMICRO_RX="${SUBMICRO_PAGE-$E/../artifacts/qemu-a6400/e0526/camera-page-0x03443000.bin}"
+    SUBMICRO_SHA=14fba4e607b0efdb76ced74e0463355a279146c96bbba0abec89776b8972fb54
+    SUBMICRO_SKIP=$((0x3A4))
+fi
+if [ -n "$SUBMICRO_RX" ]; then
+    if [ ! -f "$SUBMICRO_RX" ] || [ ! -r "$SUBMICRO_RX" ]; then
+        printf 'E0527 sub-micro replay fixture is missing or unreadable: %s\n' "$SUBMICRO_RX" >&2
+        echo 'Set SUBMICRO_PAGE to the captured page or SUBMICRO_FRAMES to its A/C/B extract.' >&2
+        echo 'SUBMICRO_PAGE= skips replay for serial-only diagnostics; it does not boot the powered menu.' >&2
+        exit 1
+    fi
+    if ! printf '%s  %s\n' "$SUBMICRO_SHA" "$SUBMICRO_RX" | sha256sum -c --status -; then
+        printf 'E0527 sub-micro replay SHA-256 mismatch: %s\n' "$SUBMICRO_RX" >&2
+        exit 1
+    fi
+fi
+
 D="$E/data"
 PREPARED=0
 if [ -n "${A6400_QEMU_DATA_DIR:-}" ]; then
@@ -65,6 +116,29 @@ else
     AVCAM="${AVCAM:-$E/../firmware/extracted_a6400/firmware.tar_unpacked/0700_part_image/dev/nflasha3_unpacked/av-cam.bin}"
 fi
 AVCAM_PA=0x035C6000
+IDT_BOOT=()
+if [ -n "${IDT_CAM:-}" ]; then
+    if [ "$PREPARED" != 1 ] || ! printf '%s  %s\n' \
+        dd8f8d0cc74ad4b70100e5728cf8b159b5155e7fb50eaf1147b99c9054740209 "$AVCAM" \
+        d7a9ae09d2195c1b5151e60f3ff1344715b619631cfad608d9a5fcf7a876c618 "$D/nflasha3-Image" \
+        | sha256sum --check --status; then
+        echo 'IDT_CAM requires the verified captured ILCE-6400 kernel and av-cam.' >&2
+        exit 1
+    fi
+    if [ ! -f "$IDT_CAM" ] || [ "$(stat -Lc '%s' -- "$IDT_CAM")" != 176528 ] ||
+        ! printf '%s  %s\n' \
+        d21e2c0b6b87f49f70ccf451781093037db8093b5a378587ec0029a16dcaef92 "$IDT_CAM" \
+        | sha256sum --check --status; then
+        echo 'IDT_CAM is not the original 176528-byte sabin/idt_cam.bin.' >&2
+        exit 1
+    fi
+fi
+SD=()
+if [ -n "${SD_IMAGE:-}${SD_SHA256:-}" ]; then
+    SD_NODE=$(cd "$E/.." && python3 -m tools.research.qemu_media sd-blockdev \
+        --image "${SD_IMAGE:-}" --sha256 "${SD_SHA256:-}" --inputs "$D" --run-dir "$R")
+    SD=(-drive if=none,id=a6400-sd -blockdev "$SD_NODE")
+fi
 mkdir -p "$R"
 
 # QEMU's option parser splits on ',' and the repo path may contain spaces,
@@ -72,6 +146,16 @@ mkdir -p "$R"
 tar xOf "$D/setting.tar" ./Backup.bin > "$R/Backup.bin"
 cp "$AVCAM" "$R/av-cam.bin"
 BACKUP_PA=$(printf '0x%08X' "$(od -An -tu4 -N4 "$R/Backup.bin" | tr -d ' ')")
+if [ -n "${IDT_CAM:-}" ]; then
+    cp -- "$IDT_CAM" "$R/idt_cam.bin"
+    if ! printf '%s  %s\n' \
+        d21e2c0b6b87f49f70ccf451781093037db8093b5a378587ec0029a16dcaef92 "$R/idt_cam.bin" \
+        | sha256sum --check --status; then
+        echo 'IDT_CAM changed during staging.' >&2
+        exit 1
+    fi
+    IDT_BOOT=(-device "loader,file=${R//,/,,}/idt_cam.bin,addr=0x20152000,force-raw=on")
+fi
 
 if [ "$PREPARED" = 1 ]; then
     CMD=$(cat "$D/serial-cmdline.txt")
@@ -116,19 +200,37 @@ if [ "${REAR_LCD_DIAGNOSTIC:-0}" = 1 ]; then
         -c "write -q -s rear-lcd-sector.bin $LCD_OFF 512" emmc-overlay.qcow2)
 fi
 
-# Sub-micro frames (E0527): av-cam's micro->CPU RX slots A/C/B
-# (PA 0x034433A4, 0x03443424, 0x034434A4; 384 bytes), cut from the 4 KiB
-# /dev/mem page captured read-only on a
-# live ILCE-6400.  Replayed on SIO ch3 by the board.  Set SUBMICRO_PAGE= to
-# run without a micro (the power lever then reads OFF, off factor 7).
-SUBMICRO_PAGE="${SUBMICRO_PAGE-$E/../artifacts/qemu-a6400/e0526/camera-page-0x03443000.bin}"
-SUBMICRO_SHA=14fba4e607b0efdb76ced74e0463355a279146c96bbba0abec89776b8972fb54
+# PP_UNLOCK=1 (opt-in, default off, E9102): point the Soft Skin menu node at the
+# Picture Profile node by rewriting one .dynsym st_value inside the run's
+# disposable overlay. The dump, emmc.img and /setting are never modified; a
+# stock run is byte-for-byte unaffected. PP_PARTITION_OFFSET is the rootfs
+# partition start in emmc.img (a6100 nflasha15: user area 0x800000 + 0x2d800000).
+if [ "${PP_UNLOCK:-0}" = 1 ]; then
+    PP_OFFSET_ARGS=(--partition-offset "${PP_PARTITION_OFFSET:-0x2e000000}")
+    python3 -m tools.research.a6100_picture_profile unlock-offset \
+        --emmc "$D/emmc.img" "${PP_OFFSET_ARGS[@]}" \
+        --path /lib/CautionConfig.so --out "$R/pp-unlock.bin" \
+        --json "$R/pp-unlock.json" >&2
+    PP_OFF=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_offset"])' \
+             "$R/pp-unlock.json")
+    QEMU_IO="$(cd "$Q/build" && pwd)/qemu-io"
+    (cd "$R" && "$QEMU_IO" -f qcow2 \
+        -c "write -q -s pp-unlock.bin $PP_OFF 4" emmc-overlay.qcow2)
+fi
+
+# E0527: the board replays the captured micro->CPU slots A/C/B on SIO ch3.
 MACHINE=sony-a6400
-if [ -n "$SUBMICRO_PAGE" ]; then
-    echo "$SUBMICRO_SHA  $SUBMICRO_PAGE" | sha256sum -c --quiet - >&2
-    dd if="$SUBMICRO_PAGE" bs=1 skip=$((0x3A4)) count=384 status=none \
-        > "$R/submicro-frames.bin"
-    MACHINE="sony-a6400,submicro-frames=$R/submicro-frames.bin"
+if [ -n "$SUBMICRO_RX" ]; then
+    # A retained extract can itself be in RUN_DIR; never overwrite it.
+    SUBMICRO_STAGED=$(mktemp -- "$R/submicro-frames.XXXXXX")
+    dd if="$SUBMICRO_RX" bs=1 skip="$SUBMICRO_SKIP" count=384 status=none \
+        > "$SUBMICRO_STAGED"
+    # Check what will actually be replayed, even if the source changed after preflight.
+    printf '%s  %s\n' "$SUBMICRO_FRAME_SHA" "$SUBMICRO_STAGED" | sha256sum -c --quiet - >&2
+    MACHINE="sony-a6400,submicro-frames=$SUBMICRO_STAGED"
+fi
+if [ "${SUBMICRO_LENS_POWER:-0}" = 1 ]; then
+    MACHINE="$MACHINE,submicro-lens-power=on"
 fi
 if [ "${CAMPIG_ENABLE_READBACK:-0}" = 1 ]; then
     MACHINE="$MACHINE,campig-enable-readback=on"
@@ -140,8 +242,15 @@ fi
 if [ "${GATE_FORCE_PROBE:-0}" = 1 ]; then
     MACHINE="$MACHINE,gate-force-probe=on"
 fi
+# ENTRY_FORCE_PROBE=1 (declared stimulus cond. PROBE entry-force; off by default).
+if [ "${ENTRY_FORCE_PROBE:-0}" = 1 ]; then
+    MACHINE="$MACHINE,entry-force-probe=on"
+fi
 if [ "${REAR_CONTROLS:-0}" = 1 ]; then
     MACHINE="$MACHINE,rear-controls=on"
+fi
+if [ "${SHUTTER_EDGE_IRQ:-0}" = 1 ]; then
+    MACHINE="$MACHINE,shutter-edge-irq=on"
 fi
 # HOSTWIN=FILE: developer option, FILE mapped as shared RAM at PA 0x50000000 (16 MiB) for fast
 # test-file transfer into a running guest (tools/warm.py, tools/hostwin_get.c); not a hardware model.
@@ -166,6 +275,12 @@ fi
 if [ "${WORK_DMA:-0}" = 1 ]; then
     MACHINE="$MACHINE,work-dma=on"
 fi
+if [ "${DDRB_CONTROL:-0}" = 1 ]; then
+    MACHINE="$MACHINE,ddrb-control=on"
+fi
+if [ "${DFS_CONTROL:-0}" = 1 ]; then
+    MACHINE="$MACHINE,dfs-control=on"
+fi
 if [ "${LOWMEM_ABORT:-0}" = 1 ]; then
     MACHINE="$MACHINE,lowmem-abort=on"
 fi
@@ -189,6 +304,13 @@ P2S=()
 if [ "${P2S_TRACE:-0}" = 1 ]; then
     P2S=(-global cxd90014-p2s.trace-transfers=on)
 fi
+SA=()
+if [ "${ZMA1_STARTUP:-0}" = 1 ]; then
+    SA=(-global cxd90014-sa.zma1-startup=on)
+fi
+if [ "${ZMA1_JPEG_FILL:-0}" = 1 ]; then
+    SA+=(-global cxd90014-sa.zma1-jpeg-fill=on)
+fi
 
 echo "Backup.bin -> $BACKUP_PA, av-cam.bin -> $AVCAM_PA, overlay $R/emmc-overlay.qcow2" >&2
 T=()
@@ -199,5 +321,5 @@ exec "${T[@]}" "$Q/build/qemu-system-arm" -M "$MACHINE" -m 1G -nographic -serial
   -drive if=sd,format=qcow2,file="$R/emmc-overlay.qcow2" \
   -device loader,file="$R/Backup.bin",addr="$BACKUP_PA",force-raw=on \
   -device loader,file="$R/av-cam.bin",addr="$AVCAM_PA",force-raw=on \
-  "${EVSEL[@]}" "${P2S[@]}" "${LIVEVIEW_ARGS[@]}" \
+  "${IDT_BOOT[@]}" "${EVSEL[@]}" "${P2S[@]}" "${SA[@]}" "${LIVEVIEW_ARGS[@]}" "${SD[@]}" \
   ${QEMU_EXTRA--icount shift=0,sleep=on}

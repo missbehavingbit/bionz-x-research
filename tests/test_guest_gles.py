@@ -468,6 +468,51 @@ class TgidCompletionTests(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedGles, 'shared_alias'):
             self.gles.mmap2(mapper, 0, 0x20000, 3, 1, 0, self.owner)
 
+    def test_kernel_sugilite_first_open_zeros_four_bytes_and_coherent_second_alias_attaches(self):
+        import unicorn
+        from src.a6400.execution.guest_gles import GLES_LOCK_SEMAPHORE, GLES_UNLOCK_SEMAPHORE
+        from src.a6400.execution.guest_mmap import GuestMmap
+
+        mu = unicorn.Uc(unicorn.UC_ARCH_ARM, unicorn.UC_MODE_ARM)
+        try:
+            mapper = GuestMmap(mu, type('FS', (), {'fds': {}})())
+            gles = GuestGles(self.gles.binding)
+            gles.enable_sugilite_execution()
+            first = gles.open(flags=2, caller_pid=1001, caller_tgid=1000)
+            self.assertTrue(gles.shared_header_zeroed)
+            ev1 = gles.mmap2(mapper, 0, 0x20000, 3, 1, 0, first['owner_id'])
+            va1 = ev1['returned']
+            # Bytes 0..3 were zeroed by sugilite_open (0 -> 1); 4..0x1FFFF remain unknown.
+            self.assertEqual(len(gles.shared_unknown), 0x20000 - 4)
+            self.assertNotIn(va1, gles.shared_unknown)
+            self.assertIn(va1 + 4, gles.shared_unknown)
+            self.assertEqual(bytes(mu.mem_read(va1, 4)), b'\x00\x00\x00\x00')
+
+            # Guest rm_rqueue_init writes 1 to [va1 + 0]; second open (1 -> 2) preserves it across aliases.
+            mu.mem_write(va1, struct.pack('<I', 1))
+            second = gles.open(flags=2, caller_pid=1002, caller_tgid=1000)
+            ev2 = gles.mmap2(mapper, 0, 0x20000, 3, 1, 0, second['owner_id'])
+            va2 = ev2['returned']
+            self.assertNotEqual(va1, va2)
+            self.assertEqual(struct.unpack('<I', bytes(mu.mem_read(va2, 4)))[0], 1)
+
+            # Semaphore 1 contention parks the second thread and wakes it on unlock.
+            arg_va = 0x40000000
+            mu.mem_map(arg_va, 0x1000)
+            r_fn = lambda a, n: bytes(mu.mem_read(a, n))
+            w_fn = lambda a, d: mu.mem_write(a, d)
+            mu.mem_write(arg_va, struct.pack('<I', 1))
+            self.assertEqual(gles.ioctl(first['owner_id'], GLES_LOCK_SEMAPHORE, arg_va, r_fn, w_fn, tid=1001), 0)
+            mu.mem_write(arg_va, struct.pack('<I', 1))
+            self.assertIsNone(gles.ioctl(second['owner_id'], GLES_LOCK_SEMAPHORE, arg_va, r_fn, w_fn, tid=1002))
+            mu.mem_write(arg_va, struct.pack('<I', 1))
+            self.assertEqual(gles.ioctl(first['owner_id'], GLES_UNLOCK_SEMAPHORE, arg_va, r_fn, w_fn, tid=1001), 0)
+            self.assertEqual(gles.transactions[-1]['woken_tids'], [1002])
+            mu.mem_write(arg_va, struct.pack('<I', 1))
+            self.assertEqual(gles.ioctl(second['owner_id'], GLES_LOCK_SEMAPHORE, arg_va, r_fn, w_fn, tid=1002), 0)
+        finally:
+            del mu
+
 
 if __name__ == '__main__':
     unittest.main()

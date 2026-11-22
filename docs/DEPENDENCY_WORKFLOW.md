@@ -2,6 +2,11 @@
 
 Use this workflow before substantial new module call-chain analysis. It is static research; it does not execute firmware or supply a guest response.
 
+For the configured WSL/Ghidra environment and the explicit
+`A6400_REA_LAUNCHER` / `A6400_REA_WSL_DISTRO` selection used by the batch
+launcher, see [REA_WORKFLOW.md](REA_WORKFLOW.md). A target profile does not
+select a tool installation or establish provider readiness.
+
 ## Start from a known boundary
 
 From the project root in PowerShell, using a new report directory:

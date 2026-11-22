@@ -9,14 +9,19 @@ CC=arm-linux-gnueabi-gcc
 common=(-mthumb -mcpu=cortex-a5 -mfloat-abi=softfp -Os -ffreestanding -fno-builtin -nostdlib
         -nostartfiles -fno-stack-protector -fomit-frame-pointer -Wall -Wextra -Werror
         -Wno-unused-parameter)
+target_flags=()
+if [[ "${MLV2_TARGET:-a6400}" == "a6100" ]]; then
+    target_flags=(-DMLV2_TARGET_A6100=1)
+    common+=("${target_flags[@]}")
+fi
 
 # Shim: linked at the reference cave address. A second link moves the shim by 0x1000 and the
 # viewUnified2.so base by 0x10000; package.py diffs the two images to record the relocations.
 "$CC" "${common[@]}" -fno-pic -Wl,--build-id=none -T "$D/shim.ld" \
     "$D/shim.c" "$D/mlv2_trampoline.S" -o "$OUT/shim.elf"
-sed -e 's/0x05662760/0x05663760/' -e 's/0x05663000/0x05664000/' "$D/shim.ld" > "$OUT/shim-reloc.ld"
+sed -e 's/0x05662800/0x05663800/' -e 's/0x05663000/0x05664000/' "$D/shim.ld" > "$OUT/shim-reloc.ld"
 "$CC" "${common[@]}" -fno-pic -Wl,--build-id=none -T "$OUT/shim-reloc.ld" \
-    -DMLV2_SHIM_ADDR=0x05663760u -DMLV2_VIEW_BASE=0x155f6000u \
+    -DMLV2_SHIM_ADDR=0x05663800u -DMLV2_VIEW_BASE=0x155f6000u \
     "$D/shim.c" "$D/mlv2_trampoline.S" -o "$OUT/shim-reloc.elf"
 
 # Core: position-independent. Compile to an object first and reject absolute relocations.
@@ -38,18 +43,20 @@ python3 tools/native_camera/mlv2/package.py "$OUT"
 
 # On-camera guard (static ARM binary, runs as root over ptrace).
 "$CC" -static -O2 -Wall -Wextra -Werror -march=armv7-a -mfloat-abi=softfp \
-    "$D/mlv2_guard.c" -o "$OUT/mlv2_guard_arm"
+    "${target_flags[@]}" "$D/mlv2_guard.c" -o "$OUT/mlv2_guard_arm"
 
 # The joint debugger package invokes this separate worker in the background.
 # Only the matching archive can supply executable code to it.
-mkdir "$OUT/companion" "$OUT/card"
-"$CC" -static -O2 -Wall -Wextra -Werror -march=armv7-a -mfloat-abi=softfp \
-    "$D/card_read.c" -o "$OUT/companion/mlv2_card_read.elf"
-"$CC" -O2 -Wall -Wextra -Werror -march=armv7-a -mfloat-abi=softfp -nostdlib \
-    -fPIC -shared -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -U_TIME_BITS -D_TIME_BITS=32 \
-    -Wl,-soname,mlv2_sd_boot_hook.so,-z,defs,-z,max-page-size=4096 \
-    "$D/sd_boot_hook.c" tools/sony_sysroot/lib/libc.so -o "$OUT/companion/mlv2_sd_boot_hook.so"
-python3 -m tools.research.package_mlv2_sd --build "$OUT"
+if [[ "${CI_SKIP_SYSROOT:-0}" != "1" ]]; then
+    mkdir "$OUT/companion" "$OUT/card"
+    "$CC" -static -O2 -Wall -Wextra -Werror -march=armv7-a -mfloat-abi=softfp \
+        "$D/card_read.c" -o "$OUT/companion/mlv2_card_read.elf"
+    "$CC" -O2 -Wall -Wextra -Werror -march=armv7-a -mfloat-abi=softfp -nostdlib \
+        -fPIC -shared -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -U_TIME_BITS -D_TIME_BITS=32 \
+        -Wl,-soname,mlv2_sd_boot_hook.so,-z,defs,-z,max-page-size=4096 \
+        "$D/sd_boot_hook.c" tools/sony_sysroot/lib/libc.so -o "$OUT/companion/mlv2_sd_boot_hook.so"
+    python3 -m tools.research.package_mlv2_sd --build "$OUT"
+fi
 
 # SMOD v2 test mod for the Unicorn harness (hook target lives only in the harness).
 "$CC" "${common[@]}" -fpie -fvisibility=hidden -c "$D/test_mod.c" -o "$OUT/test_mod.o"

@@ -83,6 +83,14 @@ class SonyBusy(RuntimeError):
     """Sony's explicit device-busy sense, not a generic SCSI failure."""
 
 
+class ScsiCommandError(RuntimeError):
+    def __init__(self, status: int, sense: list[int], transferred_bytes: int):
+        self.scsi_status = status
+        self.sense = tuple(sense)
+        self.transferred_bytes = transferred_bytes
+        super().__init__(f"SCSI command failed: status {status}, sense {sense}; no retry")
+
+
 _DISCOVER_TEMPLATE = r"""
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
@@ -267,6 +275,10 @@ class ScsiPacket(c.Structure):
 
 
 class NativeTransport:
+    @staticmethod
+    def _admit_request(command: bytes, data_out: bytes | None, read_size: int) -> str:
+        return admit_request(command, data_out, read_size)
+
     def __init__(self, disk_index: int, operations: list):
         if os.name != "nt":
             raise RuntimeError("Windows SCSI transport is not available on this platform")
@@ -315,7 +327,7 @@ class NativeTransport:
         return returned.value
 
     def exchange(self, command, *, data_out=None, read_size=0):
-        operation = admit_request(command, data_out, read_size)
+        operation = self._admit_request(command, data_out, read_size)
         if self.handle is None:
             raise RuntimeError("Native transport is not open")
         size = len(data_out) if data_out is not None else read_size
@@ -348,7 +360,7 @@ class NativeTransport:
                     raise ValueError("Sony BUSY response contains partial data; no retry")
                 row["sony_busy"] = True
                 raise SonyBusy("Sony device-busy; the request is not resubmitted")
-            raise RuntimeError(f"SCSI command failed: status {row['scsi_status']}, sense {row['sense']}; no retry")
+            raise ScsiCommandError(row["scsi_status"], row["sense"], row["transferred_bytes"])
         if packet.sptd.DataTransferLength != size:
             raise ValueError("Short native SCSI transfer; no retry")
         return b"" if data_out is not None else c.string_at(address, size)

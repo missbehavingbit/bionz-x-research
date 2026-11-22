@@ -89,6 +89,58 @@ class TimerGicModelTests(unittest.TestCase):
         self.assertEqual(machine._timer_irq_pending, 1)  # not queued twice
         self.assertEqual(machine._next_jiffy_tick, 300)
 
+    def test_frame_clock_irq_waits_for_gic_enable_then_latches(self):
+        from src.a6400.devices.cxd90045_peripherals import ENGINE_FRAME_US, IRQ_SYSV
+        machine = self.make_machine(
+            qemu_peripherals=True, instruction_limit=40, sample_interval=40,
+            timer_irq_start_instructions=0)
+        machine._gic_regs[('cpu', GIC_ICCICR)] = 1
+        machine._gic_regs[('dist', 0x000)] = 1
+        machine._advance_timer(ENGINE_FRAME_US)
+        self.assertEqual(machine._cxd_bus.vph.frame, 1)
+        self.assertIn(IRQ_SYSV, machine._edge_pending)
+        self.assertNotIn(IRQ_SYSV, machine._soft_pending_irqs)
+        enable = 1 << (IRQ_SYSV % 32)
+        offset = 0x100 + (IRQ_SYSV // 32) * 4
+        machine._gic_regs[('dist', offset)] = enable
+        also = 1 << (101 % 32)
+        machine._gic_regs[('dist', offset)] |= also
+        self.assertEqual(machine._gic_regs[('dist', offset)] & enable, enable)
+        self.assertEqual(machine._gic_regs[('dist', offset)] & also, also)
+        machine._sync_frame_irqs(set())
+        self.assertIn(IRQ_SYSV, machine._soft_pending_irqs)
+        self.assertNotIn(IRQ_SYSV, machine._edge_pending)
+        from unicorn.arm_const import UC_ARM_REG_PC, UC_ARM_REG_R0
+        site = 0x00108080
+        machine.uc.mem_write(site, struct.pack('<IIII', 0xE59F0004, 0xE5900000, 0, 0xF3402098))
+        machine.uc.reg_write(UC_ARM_REG_PC, site)
+        machine.uc.emu_start(site, site + 8, count=2)
+        self.assertEqual(machine.uc.reg_read(UC_ARM_REG_R0), 1)
+
+    def test_gic_isenabler_keeps_both_frame_clock_lines(self):
+        image = bytearray(0x80)
+        words = [
+            0xE321F0D3,
+            0xE59F0024,  # ldr r0, [pc, #0x24] -> GICD at 0x30
+            0xE59F1024,  # ldr r1, [pc, #0x24] -> bit 98
+            0xE580110C,  # str r1, [r0, #0x10c]
+            0xE59F1020,  # ldr r1, [pc, #0x20] -> bit 101
+            0xE580110C,
+            0xE590210C,  # ldr r2, [r0, #0x10c]
+            0xE59F3018,  # ldr r3, [pc, #0x18] -> storage at 0x3c
+            0xE5832000,
+            0xEAFFFFFE,
+        ]
+        for index, word in enumerate(words):
+            struct.pack_into('<I', image, index * 4, word)
+        bit98 = 1 << 2
+        bit101 = 1 << 5
+        struct.pack_into('<4I', image, 0x30, GIC_DIST, bit98, bit101, STORAGE)
+        machine = self.make_machine(bytes(image), instruction_limit=20, sample_interval=20)
+        machine.run()
+        enabled = struct.unpack_from('<I', machine.uc.mem_read(STORAGE, 4))[0]
+        self.assertEqual(enabled & (bit98 | bit101), bit98 | bit101)
+
     def test_irq_injection_enters_arm_irq_vector_with_banked_state(self):
         from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_LR,
                                        UC_ARM_REG_PC, UC_ARM_REG_SPSR)

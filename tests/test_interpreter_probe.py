@@ -1911,6 +1911,70 @@ class PipeNonblockFcntlTests(unittest.TestCase):
             self.assertEqual(self._events(report, 'read')[-1]['returned'], 1)
 
 
+class ThumbStaleItAndLdecCoherenceTests(unittest.TestCase):
+    """Unicorn 2.1.4 Thumb-2 stale-ITSTATE guard, non-idle clock guard, and /dev/ldec physical DMA."""
+
+    def test_thumb_it_legitimately_spans_distinguishes_fallthrough_from_unspanned_target(self):
+        import unicorn
+        from src.a6400.execution.interpreter_probe import _thumb_it_legitimately_spans
+
+        mu = unicorn.Uc(unicorn.UC_ARCH_ARM, unicorn.UC_MODE_THUMB)
+        try:
+            mu.mem_map(0x10000, 0x1000)
+            # 0x10000: ite ge (0xBFAC); 0x10002: movs r0, #1 (0x2001); 0x10004: movs r0, #0 (0x2000); 0x10006: nop (0xBF00)
+            mu.mem_write(0x10000, struct.pack('<4H', 0xBFAC, 0x2001, 0x2000, 0xBF00))
+            self.assertTrue(_thumb_it_legitimately_spans(mu, 0x10002))
+            self.assertTrue(_thumb_it_legitimately_spans(mu, 0x10004))
+            self.assertFalse(_thumb_it_legitimately_spans(mu, 0x10006))
+
+            # Unrelated branch target 0x10100 preceded by movs r1, #0; add.w r7, r7, #0x14 is NOT spanned by IT.
+            mu.mem_write(0x100FE, struct.pack('<3H', 0x2100, 0xF107, 0x0714))
+            self.assertFalse(_thumb_it_legitimately_spans(mu, 0x10100))
+        finally:
+            del mu
+
+    def test_get_next_runnable_tid_does_not_fast_forward_while_current_thread_running(self):
+        from src.a6400.execution.guest_threads import GuestThread, GuestThreads
+
+        threads = GuestThreads()
+        threads.threads[1001] = GuestThread(1001, 'Appframework', state='blocked_poll')
+        threads.timer_waiters[1001] = 10_000_000
+        # Main thread 1000 is still 'running': scheduler reports no switch target without jumping clock_floor to 10s.
+        self.assertIsNone(threads.get_next_runnable_tid())
+        self.assertEqual(getattr(threads, 'clock_floor', 0), 0)
+        # Once 1000 blocks, idle fast-forward advances clock_floor to 10s and wakes 1001.
+        threads.threads[1000].state = 'blocked_futex'
+        self.assertEqual(threads.get_next_runnable_tid(), 1001)
+        self.assertEqual(threads.clock_floor, 10_000_000)
+
+    def test_ldec_writes_decompressed_lz77_to_coherent_physical_ram(self):
+        import unicorn
+
+        raw = b''.join(s.ljust(65, b'\0') for s in
+                       (b'Linux', b'(none)', b'3.0.27', b'#1', b'arm', b'(none)'))
+        probe = InterpreterProbe(
+            syscall_policy='mmap',
+            uname_profile={'raw_hex': raw.hex()},
+            filesystem={'nodes': {}, 'content_loader': lambda p, n: b''},
+        )
+        try:
+            probe.mu.mem_map(0x10000, 0x4000)
+            probe.enable_coherent_physical_ram()
+            probe.physical_ram.map_alias(probe.mu, 0x62000000, 0x226E0000, 0x1000, unicorn.UC_PROT_ALL, 'stream')
+            # Stored Sony LZ77 block (kind 0x0f, pad 0x00, little-endian len=4, payload 'SONY').
+            src_va = 0x11000
+            payload = b'\x0f\x00\x04\x00SONY'
+            probe.mu.mem_write(src_va, payload)
+            job_va = 0x12000
+            probe.mu.mem_write(job_va, struct.pack('<7I', src_va, len(payload), 0x226E0100, 4, 0, 0, 0))
+            job = probe._ldec_decompress(probe.mu, 1, job_va)
+            self.assertTrue(job['dst_is_physical'])
+            probe.physical_ram.write_physical(job['dst'], job['out'])
+            self.assertEqual(bytes(probe.mu.mem_read(0x62000100, 4)), b'SONY')
+        finally:
+            del probe.mu
+
+
 if __name__ == '__main__':
     unittest.main()
 

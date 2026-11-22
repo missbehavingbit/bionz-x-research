@@ -1,9 +1,11 @@
 """Pure helpers of tools.research.qemu_usb_host_probe (no QEMU is started)."""
 import argparse
 import unittest
+from unittest import mock
 
 from tools.research.qemu_usb_host_probe import (
-    DWC3_REGISTERS, GET_DEVICE_DESCRIPTOR, STATE_COMMAND, parse_setup, section)
+    DWC3_REGISTERS, GET_DEVICE_DESCRIPTOR, STATE_COMMAND, parse_setup, section,
+    stock_osd_armed)
 
 
 class QemuUsbHostProbeHelpers(unittest.TestCase):
@@ -30,6 +32,15 @@ class QemuUsbHostProbeHelpers(unittest.TestCase):
             self.assertTrue(0xF020C100 <= address < 0xF0210000, name)
         self.assertEqual(DWC3_REGISTERS["DCTL"], 0xF020C704)
         self.assertEqual(DWC3_REGISTERS["GCTL"], 0xF020C110)
+
+    def test_powered_osd_gate_does_not_require_luma_or_accept_an_empty_plane(self):
+        qmp = mock.Mock()
+        for enable, base, expected in ((0x3000232, 0x23A80000, True),
+                                       (0x3000231, 0x23A80000, False),
+                                       (0x3000232, 0, False)):
+            with self.subTest(enable=enable, base=base):
+                qmp.request.side_effect = [f"f3440144: {enable:#x}", f"f3441320: {base:#x}"]
+                self.assertEqual(stock_osd_armed(qmp), expected)
 
 
 if __name__ == "__main__":

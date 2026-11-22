@@ -2,7 +2,7 @@
 
 The checkpoint must be generated locally by the original process runner. Calls
 use its existing thread, TLS, stack, dynamic bindings and allocator. No import,
-allocator, callback, FSM state, descriptor or device reply is replaced here.
+allocator, userspace callback, FSM state or descriptor is replaced here.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from project_paths import PROJECT_ROOT
 from src.a6400.execution.guest_memory import accessible
 from src.a6400.execution.guest_filesystem import UnsupportedFilesystem
 from src.a6400.execution.guest_checkpoint import save_checkpoint
+from src.a6400.execution.guest_fusb_startup import CapturedFusbStartup, KERNEL_SIZE
 from src.a6400.execution.guest_osal_alloc import (
     QUEUE_ID_USB_CONTROL_LOCAL, lookup_local_queue,
 )
@@ -475,6 +476,13 @@ def main(argv=None):
     source.add_argument('--cold-start', action='store_true',
                         help='regenerate the original process with declared experimental policies')
     parser.add_argument('--checkpoint-sha256')
+    parser.add_argument('--otg-connected-kernel', type=Path,
+                        help='opt in to original FUSB callbacks and the E0597 connected guard')
+    parser.add_argument('--otg-gate-clear-control', action='store_true',
+                        help='use the E0597 clear-bit negative control instead of the snapshot')
+    parser.add_argument('--otg-qemu-context', type=Path,
+                        help='load a pinned stock QEMU report with native DWC3 prefix fields')
+    parser.add_argument('--otg-qemu-context-sha256')
     parser.add_argument('--report-dir', required=True, type=Path)
     parser.add_argument('--instructions', type=int, default=500000)
     parser.add_argument('--function', type=lambda value: int(value, 0),
@@ -485,12 +493,39 @@ def main(argv=None):
         parser.error('--instructions must be positive')
     if bool(args.checkpoint) != bool(args.checkpoint_sha256):
         parser.error('--checkpoint requires --checkpoint-sha256, and vice versa')
+    if args.otg_connected_kernel and not (args.exercise_startup and args.function == 4):
+        parser.error('--otg-connected-kernel requires the diagnostic function 4 startup')
+    if args.otg_gate_clear_control and not args.otg_connected_kernel:
+        parser.error('--otg-gate-clear-control requires --otg-connected-kernel')
+    if bool(args.otg_qemu_context) != bool(args.otg_qemu_context_sha256):
+        parser.error('--otg-qemu-context requires --otg-qemu-context-sha256 and vice versa')
+    if args.otg_qemu_context and (not args.otg_connected_kernel or args.otg_gate_clear_control):
+        parser.error('The QEMU context requires the opt-in connected kernel policy')
     output = args.report_dir.resolve()
     if not output.is_relative_to((PROJECT_ROOT / 'artifacts').resolve()):
         parser.error('Report directory must remain under artifacts')
     output.mkdir(parents=True, exist_ok=False)
     report = {'status': 'configuration_error', 'camera_access': False}
     try:
+        captured_fusb = None
+        if args.otg_connected_kernel:
+            kernel = args.otg_connected_kernel.resolve()
+            if (not kernel.is_relative_to((PROJECT_ROOT / 'artifacts').resolve()) or
+                    kernel.stat().st_size != KERNEL_SIZE):
+                raise ValueError('Expected the prepared captured kernel under artifacts')
+            qemu_context = None
+            if args.otg_qemu_context:
+                receipt = checked_checkpoint(args.otg_qemu_context, args.otg_qemu_context_sha256)
+                if receipt.stat().st_size > 256 * 1024:
+                    raise ValueError('QEMU USB context report exceeds the bounded size')
+                capture = json.loads(receipt.read_bytes())
+                if (not isinstance(capture, dict) or capture.get('status') != 'boundary' or
+                        not capture.get('stock_attach') or 'native_dwc3_context' not in capture):
+                    raise ValueError('Expected a bounded stock QEMU report')
+                qemu_context = capture['native_dwc3_context']
+            captured_fusb = CapturedFusbStartup(kernel.read_bytes(),
+                                                gate_clear_control=args.otg_gate_clear_control,
+                                                qemu_context=qemu_context)
         options = list(BOOT_OPTIONS)
         if args.checkpoint:
             checkpoint = checked_checkpoint(args.checkpoint, args.checkpoint_sha256)
@@ -516,7 +551,27 @@ def main(argv=None):
         with checkpoint.open('rb') as stream:
             checkpoint_sha = hashlib.file_digest(stream, 'sha256').hexdigest()
         replay = ProcessUsbStartup(probe, instruction_budget=args.instructions)
-        report = replay.execute(exercise_startup=args.exercise_startup, function=args.function)
+        if captured_fusb is not None:
+            probe.usb_otgcore.captured_fusb_startup = captured_fusb
+        try:
+            report = replay.execute(exercise_startup=args.exercise_startup, function=args.function)
+        finally:
+            if captured_fusb is not None:
+                del probe.usb_otgcore.captured_fusb_startup
+        if captured_fusb is not None:
+            report['otg_connected_guard'] = {
+                'policy': 'e0597-connected-start-guard', 'kernel_sha256': captured_fusb.sha256,
+                'gate_clear_control': args.otg_gate_clear_control,
+                'kernel_path': kernel.relative_to(PROJECT_ROOT).as_posix(),
+                'transactions': [
+                    row for row in probe.usb_otgcore.transactions
+                    if row.get('source') in ('captured-kernel-arm-callback',
+                                             'e0597-connected-start-guard')],
+                'limitation': ('Controller inputs are snapshots and fixtures, not a booted kernel '
+                               'in this checkpoint. The DWC3 callback is not completed.'),
+            }
+            if args.otg_qemu_context:
+                report['otg_connected_guard']['qemu_context_sha256'] = args.otg_qemu_context_sha256
         report['checkpoint'] = {
             'path': checkpoint.relative_to(PROJECT_ROOT).as_posix(), 'sha256': checkpoint_sha}
         report['policies'] = list(BOOT_OPTIONS)

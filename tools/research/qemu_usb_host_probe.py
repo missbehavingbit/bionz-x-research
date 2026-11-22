@@ -29,14 +29,29 @@ import time
 from pathlib import Path
 
 from tools.research.qemu_boot_probe import Qmp
+from tools.research.qemu_ep0_host import Ep0Host
+from tools.research.qemu_ptp_device_info import get_device_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIRMWARE_MARKER = b"Created HeapAllocator:"
 GET_DEVICE_DESCRIPTOR = "8006000100001200"
+POWERED_SUBMICRO_SHA256 = "3385ec340e931aa7b7dbb954da99e5b6239174ba90441eb2c905f01bcf5bbda9"
+CAPTURED_KERNEL_SHA256 = "d7a9ae09d2195c1b5151e60f3ff1344715b619631cfad608d9a5fcf7a876c618"
+VPH_ENABLE, VPH_OSD_BASE = 0xF3440144, 0xF3441320
+VPH_OSD_ENABLE = 1 << 1
 STATE_COMMAND = ("echo __USB_STATE_{tag}__; grep -i -E 'dwc|usb|fusb' /proc/interrupts; "
                  "ls /sys/class/udc 2>&1; for f in /sys/class/udc/*/state /sys/class/udc/*/current_speed; "
                  "do echo $f=$(cat $f 2>&1); done; dmesg | grep -v AL_EMMC | grep -i -E 'dwc|udc|gadget|ep0|otg'; "
                  "echo __USB_STATE_{tag}_END__")
+STOCK_OWNER_COMMAND = (
+    "echo __USB_STATE_{tag}__; for n in im.elf gui.elf; do "
+    "for p in $(pidof $n); do echo maps-$n-$p; "
+    "grep -E 'lib(UsbControl|Obj|Infra(MscServer|MtpServer|Remote|UsbCmn))|viewUnified2' "
+    "/proc/$p/maps; done; done; echo __USB_STATE_{tag}_END__"
+)
+FIRST_DISCONNECTED_JACK = re.compile(
+    rb"^\[USB startup\] [^\n]*\boffset=00012980\b[^\n]*"
+    rb"\br1=00000001 r2=00000000\b", re.M)
 
 
 # DWC3 model registers read through the guest physical address space (the model's own read handler).
@@ -45,14 +60,57 @@ DWC3_REGISTERS = {"GCTL": 0xF020C110, "GEVNTADRLO0": 0xF020C400, "GEVNTSIZ0": 0x
                   "DEVTEN": 0xF020C708, "DSTS": 0xF020C70C, "DALEPENA": 0xF020C720}
 
 
+def read_register(qmp, address):
+    reply = qmp.request("human-monitor-command", {"command-line": f"xp /1wx {address:#x}"})
+    text = str(reply)
+    match = re.search(r":\s*(0x[0-9a-fA-F]+)", text)
+    return match.group(1) if match else text.strip()
+
+
 def read_registers(qmp) -> dict:
-    values = {}
-    for name, address in DWC3_REGISTERS.items():
-        reply = qmp.request("human-monitor-command", {"command-line": f"xp /1wx {address:#x}"})
-        text = str(reply)
-        match = re.search(r":\s*(0x[0-9a-fA-F]+)", text)
-        values[name] = match.group(1) if match else text.strip()
-    return values
+    return {name: read_register(qmp, address) for name, address in DWC3_REGISTERS.items()}
+
+
+def stock_osd_armed(qmp):
+    enabled = int(read_register(qmp, VPH_ENABLE), 16)
+    base = int(read_register(qmp, VPH_OSD_BASE), 16)
+    return bool(enabled & VPH_OSD_ENABLE and base)
+
+
+def read_native_dwc3_context(qmp):
+    """Read only the fields used before the first original DWC3 delay."""
+    def kernel_word(va):
+        if not 0x60000000 <= va < 0xA0000000 or va & 3:
+            raise ValueError(f"DWC3 context address outside captured linear mapping: {va:#x}")
+        return int(read_register(qmp, va - 0x60000000), 16)
+
+    qmp.request("stop")
+    try:
+        if any(kernel_word(va) != expected for va, expected in (
+                (0x602B1B9C, 0xE1A0C00D), (0x602B1BA0, 0xE92DD9F8), (0x602B1BAC, 0xEBFFF150))):
+            raise ValueError("QEMU guest ARM kernel mapping does not match the pinned image")
+        fusb = kernel_word(0x6051B024)
+        binding = kernel_word(fusb + 0xBC)
+        if binding != 0x604E4E30 or kernel_word(binding + 8) != 0x602B1B9C:
+            raise ValueError("Original FUSB gadget binding is not live")
+        dwc3 = kernel_word(binding + 4)
+        return {
+            "kernel_sha256": CAPTURED_KERNEL_SHA256,
+            "kernel_bias": 0x60000000,
+            "fusb": fusb,
+            "fusb_state": kernel_word(fusb + 0x80),
+            "cid": kernel_word(fusb + 0x84),
+            "vbus": kernel_word(fusb + 0x88),
+            "binding": binding,
+            "callback": 0x602B1B9C,
+            "dwc3": dwc3,
+            "registers": kernel_word(dwc3 + 0x2B4),
+            "outer_sync": kernel_word(0x604C92EC),
+            "l2x0_registers": kernel_word(0x604F7824),
+            "gctl": int(read_register(qmp, DWC3_REGISTERS["GCTL"]), 16),
+        }
+    finally:
+        qmp.request("cont")
 
 
 def digest(path: Path) -> str:
@@ -91,6 +149,16 @@ def run(args) -> dict:
                   captured_hwparams=args.captured_hwparams,
                   limitations=["QEMU model observation; the DWC3 model is a contract model, not hardware.",
                                "The host side sends only the listed lines; nothing is answered for the guest."])
+    stock = args.stock_attach
+    if stock:
+        if args.powered_submicro.stat().st_size != 384:
+            raise ValueError("Expected a 384-byte powered sub-micro replay")
+        report.update(stock_attach=stock, sony_data_transfer_verified=False,
+                      powered_submicro_sha256=digest(args.powered_submicro))
+        if report["powered_submicro_sha256"] != POWERED_SUBMICRO_SHA256:
+            raise ValueError("Powered sub-micro replay identity mismatch")
+        if args.capture_dwc3_context and digest(args.inputs / "nflasha3-Image") != CAPTURED_KERNEL_SHA256:
+            raise ValueError("Kernel identity mismatch for DWC3 context capture")
     with tempfile.TemporaryDirectory(prefix="a6400-usbhost-") as temp:
         scratch = Path(temp)
         monitor, host_path, console = scratch / "qmp", scratch / "usbhost", scratch / "console"
@@ -115,6 +183,32 @@ def run(args) -> dict:
                                + (f" -plugin {plugin}" if plugin else "")))
         if helper:
             env["SETTING_FILES"] = f"{helper}:OTGMODE.ELF"
+        if stock:
+            micro = scratch / "micro.bin"
+            micro.write_bytes(args.powered_submicro.read_bytes())
+            if digest(micro) != POWERED_SUBMICRO_SHA256:
+                raise ValueError("Staged powered sub-micro replay identity mismatch")
+            # Strip launcher overrides inherited from other emulator sessions.
+            env = {name: env[name] for name in (
+                "HOME", "PATH", "ULOGIO", "TIMEOUT", "DWC3_GADGET", "USB_VBUS_TEST",
+                "USB_CID_HIGH", "EVSEL_LATE_US", "A6400_QEMU_DIR",
+                "A6400_QEMU_DATA_DIR", "RUN_DIR", "QEMU_EXTRA")}
+            env.update(SUBMICRO_FRAMES="", SUBMICRO_PAGE="", REAR_CONTROLS="1",
+                       REAR_LCD_DIAGNOSTIC="0", SETTING_FILES="", AVCAM="",
+                       SD_IMAGE="", SD_SHA256="", LIVEVIEW_SOURCE="",
+                       SGC1_EVENT_A="1", CAMPIG_ENABLE_READBACK="1", SERIAL="stdio",
+                       EXTRA="", LC_ALL="C", PYTHONDONTWRITEBYTECODE="1")
+            if args.stock_liveview_bars:
+                env["LIVEVIEW_SOURCE"] = "bars"
+            env["QEMU_EXTRA"] += (f" -M submicro-frames={micro}"
+                                  " -global cxd90045-dwc3.strict-ep0=on"
+                                  " -global cxd90045-dwc3.captured-start-gate=on")
+            if args.stock_ptp_info:
+                env["QEMU_EXTRA"] += " -global cxd90045-dwc3.strict-bulk=on"
+            report["stock_options"] = {name: env[name] for name in (
+                "REAR_CONTROLS", "REAR_LCD_DIAGNOSTIC", "SGC1_EVENT_A",
+                "CAMPIG_ENABLE_READBACK", "LIVEVIEW_SOURCE", "SETTING_FILES",
+                "QEMU_EXTRA")}
         started = time.monotonic()
         deadline = started + args.seconds
 
@@ -168,12 +262,57 @@ def run(args) -> dict:
                 host.sendall((line + "\n").encode("ascii"))
                 note("host_tx", line=line)
 
+            def cable(present):
+                qmp.request("qom-set", {"path": "/machine", "property": "usb-vbus", "value": present})
+                if stock:
+                    readback = qmp.request("qom-get", {"path": "/machine", "property": "usb-vbus"})
+                    if readback is not present:
+                        raise RuntimeError(f"VBUS readback disagrees with requested state {present}")
+                note("vbus", present=present)
+
+            def lcd(tag):
+                image = scratch / f"{tag}.ppm"
+                qmp.request("screendump", {"filename": str(image), "device": "vph", "head": 0})
+                pixels = image.read_bytes()
+                (report_dir / image.name).write_bytes(pixels)
+                note("lcd", tag=tag, sha256=hashlib.sha256(pixels).hexdigest())
+
             try:
                 wait_until(monitor.exists, 30, "QMP socket")
                 qmp = Qmp(monitor, deadline + 10)
-                wait_until(lambda: FIRMWARE_MARKER in console.read_bytes(), 120, "firmware startup marker")
+                if stock == "before-firmware":
+                    cable(True)
+                elif stock == "before-first-view":
+                    wait_until(lambda: FIRST_DISCONNECTED_JACK.search(console.read_bytes()),
+                               170, "original boot-time SetJackStatus(1,0)")
+                    note("original_jack_initialized")
+                    cable(True)
+                wait_until(lambda: FIRMWARE_MARKER in console.read_bytes(), 150 if stock else 120,
+                           "firmware startup marker")
                 note("firmware_marker")
                 wait_until(lambda: b"/ # " in console.read_bytes(), 30, "guest shell")
+                if stock:
+                    wait_until(lambda: stock_osd_armed(qmp), 120, "original OSD plane")
+                    lcd("before_center")
+                    qmp.request("send-key", {
+                        "keys": [{"type": "qcode", "data": "ret"}], "hold-time": 180,
+                    })
+                    note("rear_center")
+                    pump(8)
+                    if args.stock_playback:
+                        qmp.request("send-key", {
+                            "keys": [{"type": "qcode", "data": "p"}], "hold-time": 250,
+                        })
+                        note("rear_play")
+                        pump(8)
+                        if args.stock_resume_shooting:
+                            qmp.request("send-key", {
+                                "keys": [{"type": "qcode", "data": "s"}], "hold-time": 250,
+                            })
+                            note("rear_shutter_half_press")
+                            pump(8)
+                    lcd("before_attach")
+                    guest(STOCK_OWNER_COMMAND, "OWNERS_BEFORE")
                 guest(STATE_COMMAND, "BEFORE")
                 report["registers_before"] = read_registers(qmp)
                 if helper:
@@ -185,28 +324,53 @@ def run(args) -> dict:
                 host.connect(str(host_path))
                 host.settimeout(0.2)
                 note("host_connected")
-                qmp.request("qom-set", {"path": "/machine", "property": "usb-vbus", "value": True})
-                note("vbus", present=True)
+                cable(True)
                 pump(args.settle)
                 report["registers_vbus"] = read_registers(qmp)
+                if args.capture_dwc3_context:
+                    report["native_dwc3_context"] = read_native_dwc3_context(qmp)
                 host_send("CONN")
                 pump(args.settle)
                 report["registers_conn"] = read_registers(qmp)
-                if args.setup:
+                run_observed = bool(stock and int(report["registers_conn"]["DCTL"], 16) & (1 << 31))
+                if args.stock_ptp_info and run_observed:
+                    client = Ep0Host(host, deadline=deadline)
+                    try:
+                        report["enumeration"] = client.enumerate_device()
+                        guest(STATE_COMMAND, "CONFIGURED")
+                        if "/sys/class/udc/dwc3.0/state=configured" not in report["guest_configured"]:
+                            raise ValueError("Original UDC did not enter configured state")
+                        guest(STOCK_OWNER_COMMAND, "PTP_OWNER")
+                        if not re.search(r"/libInfraRemote\.so\s*$", report["guest_ptp_owner"], re.M):
+                            raise ValueError("Original PC Remote service is not mapped")
+                        report["ptp_device_info"] = get_device_info(client, report["enumeration"])
+                        report["sony_data_transfer_verified"] = True
+                    finally:
+                        report["token_events"] = client.events
+                elif args.setup:
                     host_send("SETUP " + args.setup)
                     pump(args.reply_wait)
                 guest(STATE_COMMAND, "ATTACHED")
+                if stock:
+                    lcd("attached")
+                    guest(STOCK_OWNER_COMMAND, "OWNERS_ATTACHED")
+                    if not report["sony_data_transfer_verified"]:
+                        report["stock_attach_boundary"] = (
+                            "no_udc_run" if not run_observed
+                            else "stock_enumeration_and_data_not_verified")
                 host_send("DISC")
-                qmp.request("qom-set", {"path": "/machine", "property": "usb-vbus", "value": False})
-                note("vbus", present=False)
+                cable(False)
                 pump(5)
                 guest(STATE_COMMAND, "AFTER")
                 report["dwc3_trace"] = [line for line in console.read_bytes().decode("utf-8", "replace").splitlines()
                                         if line.startswith("[DWC3 trace]")]
                 report["in_replies"] = [line for line in report["host_lines"] if line.startswith("IN ")]
-                report["status"] = "observed"
                 qmp.request("quit")
                 report["qemu_exit"] = proc.wait(10)
+                if report["qemu_exit"] != 0:
+                    raise RuntimeError(f"QEMU exit status {report['qemu_exit']}")
+                report["status"] = ("boundary" if stock and not report["sony_data_transfer_verified"]
+                                    else "observed")
             except Exception as error:  # report every stop with its reason
                 report["status"] = "stopped"
                 report["stop_reason"] = f"{type(error).__name__}: {error}"
@@ -221,6 +385,7 @@ def run(args) -> dict:
                         proc.wait(10)
                     except subprocess.TimeoutExpired:
                         proc.kill()
+                        proc.wait(10)
                 report["owned_exit"] = proc.poll()
                 report["elapsed_seconds"] = round(time.monotonic() - started, 1)
                 (report_dir / "console.log").write_bytes(console.read_bytes())
@@ -243,9 +408,41 @@ def main(argv=None):
                         help="offline-only ARM helper: issue original OTG SET_MODE(2) before attach")
     parser.add_argument("--captured-hwparams", action="store_true",
                         help="use E0595 physical ILCE-6400 DWC3 hardware-parameter registers")
+    parser.add_argument("--stock-attach", choices=("before-firmware", "before-first-view", "after-notice"),
+                        help="insert cable before firmware startup, at native jack initialization, "
+                             "or after the OSD and a rear-center key")
+    parser.add_argument("--powered-submicro", type=Path,
+                        help="hash-pinned powered A/C/B replay extracted for E0591")
+    parser.add_argument("--stock-ptp-info", action="store_true",
+                        help="require an original PC Remote owner, PTP data and response")
+    parser.add_argument("--capture-dwc3-context", action="store_true",
+                        help="read the original emulated kernel's bound DWC3 prefix fields")
+    parser.add_argument("--stock-liveview-bars", action="store_true",
+                        help="pair stock USB observation with the existing sensor-luma fixture")
+    parser.add_argument("--stock-playback", action="store_true",
+                        help="press the original Play button before late cable insertion")
+    parser.add_argument("--stock-resume-shooting", action="store_true",
+                        help="leave playback using the original half-press input")
     args = parser.parse_args(argv)
+    if bool(args.stock_attach) != bool(args.powered_submicro):
+        parser.error("--stock-attach and --powered-submicro must be used together")
+    if args.stock_attach and args.otg_mode_probe:
+        parser.error("stock attach cannot use the OTG mode helper")
+    if args.stock_attach == "before-first-view" and not args.plugin:
+        parser.error("the first-view schedule needs a matching passive startup trace plugin")
+    if args.stock_ptp_info and not args.stock_attach:
+        parser.error("--stock-ptp-info requires --stock-attach")
+    if args.capture_dwc3_context and not args.stock_attach:
+        parser.error("--capture-dwc3-context requires --stock-attach")
+    if args.stock_liveview_bars and not args.stock_attach:
+        parser.error("--stock-liveview-bars requires --stock-attach")
+    if args.stock_playback and args.stock_attach != "after-notice":
+        parser.error("--stock-playback requires the late --stock-attach after-notice schedule")
+    if args.stock_resume_shooting and not args.stock_playback:
+        parser.error("--stock-resume-shooting requires --stock-playback")
     report = run(args)
-    print(json.dumps({k: report.get(k) for k in ("status", "stop_reason", "in_replies", "elapsed_seconds")}, indent=2))
+    print(json.dumps({k: report.get(k) for k in (
+        "status", "stop_reason", "stock_attach_boundary", "in_replies", "elapsed_seconds")}, indent=2))
     return 0 if report["status"] == "observed" else 2
 
 

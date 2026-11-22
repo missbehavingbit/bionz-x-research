@@ -2,10 +2,10 @@
 import struct
 import unittest
 
-from unicorn.arm_const import UC_ARM_REG_CPSR
+from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_FPEXC, UC_ARM_REG_R1
 
 from src.a6400.execution.arm_atags import build_atags
-from src.a6400.execution.unicorn_machine import UnicornMachine
+from src.a6400.execution.unicorn_machine import MachineError, UnicornMachine
 
 MACHINE_ID = 0x0DA9
 
@@ -68,34 +68,42 @@ class UnicornMachineTests(unittest.TestCase):
                 self.assertEqual(machine.uc.reg_read(UC_ARM_REG_CPSR), expected)
 
     def test_vfp_d16_mvfr0_emulation_is_opt_in(self):
-        import struct
-        from unicorn.arm_const import UC_ARM_REG_R1
-        # Put a vmrs r1, mvfr0 (0xEEF71A10) at kernel_load + 0x100
-        kernel = bytearray(b'\xD3\xF0\x21\xE3' + b'\x00' * 0x200)
-        struct.pack_into('<I', kernel, 0x100, 0xEEF71A10)
-        symbols = {'__boottime_vfp_init': 0x60108000 + 0xE0}
-        default_machine = UnicornMachine(
-            bytes(kernel), b'\x00', b'', machine_id=MACHINE_ID, symbols=symbols
-        )
-        self.assertFalse(default_machine.vfp_d16_mvfr0)
-        self.assertEqual(default_machine.vfp_mvfr0_sites, [])
+        kernel = bytearray(0x254)
+        struct.pack_into('<I', kernel, 0, 0xE321F0D3)
+        probe, other = 0x100, 0x250
+        for offset in (probe, other):
+            struct.pack_into('<I', kernel, offset, 0xEEF71A10)  # vmrs r1, mvfr0
+        base = 0x60108000
+        native_mvfr0 = 0x11110222
+        d16_mvfr0 = 0x10110221
+        for flags, expected in (({}, native_mvfr0), ({'vfp_d16_mvfr0': True}, d16_mvfr0),
+                                ({'qemu_cpu_parity': True}, d16_mvfr0)):
+            with self.subTest(flags=flags):
+                machine = UnicornMachine(
+                    bytes(kernel), b'\x00', b'', machine_id=MACHINE_ID,
+                    symbols={'__boottime_vfp_init': base + 0xE0},
+                    ram_banks=((0, 0x800000),), **flags)
+                self.assertEqual(machine.mask_async_abort_on_irq, 'qemu_cpu_parity' in flags)
+                uc = machine.uc
+                uc.mem_map(base, 0x1000)
+                uc.mem_write(base, bytes(kernel))
+                uc.reg_write(UC_ARM_REG_FPEXC, 1 << 30)
+                for offset, value in ((probe, expected), (other, native_mvfr0)):
+                    pc = base + offset
+                    uc.emu_start(pc, pc + 4, count=1)
+                    self.assertEqual(uc.reg_read(UC_ARM_REG_R1), value)
+                self.assertEqual(machine.vfp_mvfr0_d16_hits, int(bool(flags)))
 
-        parity_machine = UnicornMachine(
-            bytes(kernel), b'\x00', b'', machine_id=MACHINE_ID, symbols=symbols,
-            qemu_cpu_parity=True,
-        )
-        self.assertTrue(parity_machine.vfp_d16_mvfr0)
-        self.assertTrue(parity_machine.mask_async_abort_on_irq)
-        self.assertEqual(parity_machine.entry_cpsr, 0x1D3)
-        self.assertEqual(parity_machine.entry_scr, 0x31)
-        self.assertEqual(parity_machine.vfp_mvfr0_sites, [f'0x{0x60108100:08x}'])
-        parity_machine.uc.reg_write(UC_ARM_REG_R1, 0)
-        # __boottime_vfp_init runs with MMU on at virtual 0x60108100.
-        parity_machine.uc.mem_map(0x60108000, 0x1000)
-        parity_machine.uc.mem_write(0x60108100, struct.pack('<I', 0xEEF71A10))
-        parity_machine.uc.emu_start(0x60108100, 0x60108104, count=1)
-        self.assertEqual(parity_machine.uc.reg_read(UC_ARM_REG_R1), 0x10110221)
-        self.assertEqual(parity_machine.vfp_mvfr0_d16_hits, 1)
+    def test_vfp_d16_override_requires_unambiguous_kernel_probe(self):
+        head = struct.pack('<I', 0xE321F0D3)
+        vmrs = struct.pack('<I', 0xEEF71A10)
+        for body in (b'\0' * 8, vmrs + vmrs):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(MachineError, 'one supported VMRS MVFR0 site'):
+                    UnicornMachine(
+                        head + body, b'\0', b'', machine_id=MACHINE_ID,
+                        symbols={'__boottime_vfp_init': 0x60108004},
+                        ram_banks=((0, 0x800000),), vfp_d16_mvfr0=True)
 
     def test_oracle_mmio_trace_replays_sequence_and_holds_last(self):
         import struct

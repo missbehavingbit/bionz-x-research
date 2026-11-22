@@ -33,7 +33,7 @@
 - **`0x637902f4` (Mode Switch Coordinator):**
   - Validates `[this+0x11c]` (`!= 17`), checks `[this+0x11c]` against `{11, 55, 104, 78, 47}`, resolves `drive_mode_idx` (`r7`) via `0x63cdde38(this+28, [this+0x11c], r2, 19)`, queries `ImagerDrvParam_IMX284` vtable `[+28]` (`0x6378e538`), then invokes:
     - `0x6378fbe4(this, r7)` — reads `ImagerDrvParam` `[+20]` (`120`-byte table), checks `[r0+27]` (`11`, `12`, `14`-bit / lane mode), compares `r6` against `1440` (`0x5a0`) / `1280` (`0x500`), and stores `[this+0x416]` and `[this+0x417]`.
-    - `0x6378ffb4(this, r9)` — **`1H1H` / `1H2H` register writer**: for modes `{11, 55, 47}`, loops over a register-pair table and writes byte `0` vs `1` (`1H1H` vs `1H2H`) directly into `[reg_buf + 0]` (with optional override at `[r2+125]`).
+    - `0x6378ffb4(this, r9)` — **`1H1H` / `1H2H` packet builder**: for mode keys `{11, 55, 47}`, uses option `0` or `1` to select one table byte per packet destination (with optional override at `[r2+125]`). The option number is not itself the byte sent; see the follow-up below.
     - `0x63790004(this, [r5+6])` — checks `[ImagerDrvParam_18B + 0x2a] == 0x1000` (`4096`), setting/clearing bit 1 (`bfi r3, ..., #1, #1`) in the target register packet `[r4+2]`.
 
 ---
@@ -46,4 +46,35 @@
      - **(Option A — Cleanest on-camera):** hook after `Stage_Raw` / before `CaptureEncode_Selector` (or in `Stage_RawPlay` / `RAW -> JPEG` develop) to output a `3000 × 2000` YCbCr/RGB frame directly to JPEG encode, **or**
      - **(Option B — Offline `.ARW` first):** validate the exact `IMX284` black level, `2×2` Super-Pixel math, and `A0`/ARRI color transform on a real a6400 `.ARW` file in `a6400-lut-converter` before writing ARM/Thumb code.
 2. **Hardware `IMX284` `1H1H`/`1H2H` & `Mod 10` (`1996 × 1332`):**
-   - `0x6378ffb4` confirms `1H1H`/`1H2H` is a single-bit/byte register toggle in the `IMX284` register packet table for modes `{11, 55, 47}`. Determining whether `Mod 10` (`1996 × 1332`, `3×3`) performs charge addition or line skipping requires inspecting the register-pair table referenced at `0x63790000` / `0x6378fbe4` or measuring raw pixel SNR on hardware.
+   - Whether `Mod 10` (`1996 × 1332`) performs charge addition or line skipping remains open. The follow-up below rules out that mode using this `1H1H`/`1H2H` packet builder.
+
+## 4. 2026-11-20 follow-up: charge summing is not established by this selector
+
+The captured ILCE-6400 2.00 ORIL (`dd8f8d0cc74ad4b70100e5728cf8b159b5155e7fb50eaf1147b99c9054740209`,
+base `0x635C6000`) uses Thumb entry `0x6379eccc`. Its mode guard and
+write loop match the packaged instructions, but the descriptor pointer was
+resolved independently (`0x6454d154` captured, `0x6452e074` packaged).
+The loop writes eleven bytes into prepared packets (`strb` at `0x6379ed00`).
+For example, the first packet field receives `0x62` or `0x49`, not `0` or `1`.
+
+The bounded Unicorn 2.1.4 probe checked all 19 keys from `0x63e25514` with
+both requested options and two fixture override values (`0xFF` and `0x00`):
+**76/76** cases returned normally. Only keys `0x0B`, `0x37`, and `0x2F`
+(rows 0, 1, and 18, all `6000 × 4000`) wrote packets through this loop.
+`0x44` (row 10, `1996 × 1332`) and the observed preview key `0x01`
+(row 4, `1996 × 570`) returned without those writes. Other paths may
+program packets for those modes.
+
+The separate 32-byte receiver rows copied by `0x6379fe7c` at base
+`0x63e26100` are identical for rows 2, 4, and 10 despite different
+readout geometry. Reverify 0.11.0 refuted equating row 0 (file offset
+`0x860100`) with row 2 (`0x860140`); both rows and the corrected
+comparison are retained in the `imx284-charge-sum-20261120` ledger.
+
+Replay from the repository root with
+`.\venv\Scripts\python.exe -B artifacts\analysis\imx284-charge-sum-20261120\verify_mode_guard.py`.
+The local `mode-guard.json` receipt records fixture state, bounds, and
+outcomes; the source hash was unchanged. No devices were mapped. This is
+not evidence of an outbound sensor transaction, photodiode summing, or
+a low-light gain. Establish on-sensor register semantics or measure
+matched RAW read noise before attempting a `3000 × 2000` hardware mode.

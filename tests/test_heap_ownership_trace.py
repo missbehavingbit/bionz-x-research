@@ -28,6 +28,11 @@ class HeapOwnershipTraceTests(unittest.TestCase):
         self.pointer = 0x11008
         self.mu.mem_write(0x1080, bytes.fromhex('00bffee7'))
 
+    def tearDown(self):
+        self.trace = None
+        self.probe = None
+        self.mu = None
+
     def _function(self, address, name, code):
         self.mu.mem_write(address, bytes.fromhex(code))
         self.mu.hook_add(unicorn.UC_HOOK_CODE, self.trace._entry_hook(name),

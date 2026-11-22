@@ -12,10 +12,10 @@ index c3a505e..9aacc66 100644
  
  /*
 diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
-index 6f5b2ad..0ca4ba4 100644
+index 6f5b2ad..87c4133 100644
 --- a/hw/arm/Kconfig
 +++ b/hw/arm/Kconfig
-@@ -727,3 +727,13 @@ config ARMSSE
+@@ -727,3 +727,14 @@ config ARMSSE
      select UNIMP
      select SSE_COUNTER
      select SSE_TIMER
@@ -27,6 +27,7 @@ index 6f5b2ad..0ca4ba4 100644
 +    select A9MPCORE
 +    select ARM_MPTIMER
 +    select PL011 # UART
++    select SPLIT_IRQ
 +    select UNIMP
 +    select CXD4115_TIMER
 diff --git a/hw/arm/meson.build b/hw/arm/meson.build

@@ -1,12 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
 import 'sony_ptp.dart';
 import 'latency_stats.dart';
+
+const int _wifiFrameMagic = 0xA6405646;
+const int _wifiFrameHdrSize = 24;
+const int _wifiMaxFrameBytes = 2 * 1024 * 1024;
 
 class _ReceivedFrame {
   final Uint8List bytes;
@@ -47,7 +52,11 @@ class CameraController extends ChangeNotifier {
   Map<String, dynamic> state = {};
   ui.Image? image;
   String? bridge;
-  String message = 'Connect Sony α6400 · PC Remote';
+  String? wifiHost;
+  int wifiPort = 9640;
+  Socket? _wifiSocket;
+  bool get isWifiDirect => wifiHost != null;
+  String message = 'Connect Sony α6400 · 5 GHz Wi-Fi or USB';
   bool connected = false, busy = false, connecting = false;
   int _epoch = 0;
   double fps = 0;
@@ -79,37 +88,87 @@ class CameraController extends ChangeNotifier {
     return result;
   }
 
-  Future<void> connect({String? bridgeUrl}) async {
+  (String, int) _parseWifiAddress(String raw) {
+    var s = raw.trim();
+    if (s.startsWith('wifi://')) {
+      s = s.substring(7);
+    } else if (s.startsWith('tcp://')) {
+      s = s.substring(6);
+    }
+    s = s.replaceFirst(RegExp(r'/.*$'), '');
+    if (s.isEmpty) {
+      throw const FormatException('Enter camera IP address (e.g. 192.168.100.17:9640)');
+    }
+    final idx = s.lastIndexOf(':');
+    if (idx > 0 && idx < s.length - 1) {
+      final host = s.substring(0, idx).trim();
+      final port = int.tryParse(s.substring(idx + 1).trim());
+      if (host.isNotEmpty && port != null && port > 0 && port <= 65535) {
+        return (host, port);
+      }
+    }
+    return (s, 9640);
+  }
+
+  Future<void> connect({String? bridgeUrl, String? wifiAddress}) async {
     if (connecting || connected) return;
     connecting = true;
     bridgeSequence = -1;
     _bridgeStreamId = null;
     _pendingFrame = null;
     droppedBeforeDecode = 0;
-    message = bridgeUrl == null
-        ? 'Waiting for USB camera permission…'
-        : 'Connecting to PC…';
+    bridge = null;
+    wifiHost = null;
+    if (wifiAddress != null) {
+      message = 'Connecting 5 GHz Wi-Fi…';
+    } else if (bridgeUrl != null) {
+      message = 'Connecting to PC…';
+    } else {
+      message = 'Waiting for USB camera permission…';
+    }
     notifyListeners();
     final epoch = ++_epoch;
     try {
-      bridge = bridgeUrl?.replaceFirst(RegExp(r'/+$'), '');
-      if (bridge != null) {
+      if (wifiAddress != null) {
+        final (host, port) = _parseWifiAddress(wifiAddress);
+        final sock = await Socket.connect(
+          host,
+          port,
+          timeout: const Duration(seconds: 5),
+        );
+        sock.setOption(SocketOption.tcpNoDelay, true);
+        if (epoch != _epoch) {
+          sock.destroy();
+          return;
+        }
+        wifiHost = host;
+        wifiPort = port;
+        _wifiSocket = sock;
+        connected = true;
+        message = '5 GHZ WI-FI';
+        unawaited(_wifiLoop(epoch, sock));
+      } else if (bridgeUrl != null) {
+        bridge = bridgeUrl.replaceFirst(RegExp(r'/+$'), '');
         final uri = Uri.parse(bridge!);
         if (!['http', 'https'].contains(uri.scheme) || uri.host.isEmpty) {
           throw const FormatException('Enter a valid server URL');
         }
         state = await _json('/api/status');
+        if (epoch != _epoch) return;
+        connected = true;
+        message = 'PC BRIDGE';
+        unawaited(_loop(epoch));
       } else {
         await usb.connect();
         state = usb.snapshot();
+        if (epoch != _epoch) return;
+        connected = true;
+        message = 'USB PTP';
+        unawaited(_loop(epoch));
       }
-      if (epoch != _epoch) return;
-      connected = true;
-      message = bridge == null ? 'USB PTP' : 'PC BRIDGE';
-      unawaited(_loop(epoch));
     } catch (e) {
       message = e.toString();
-      if (bridge == null) {
+      if (bridge == null && wifiHost == null) {
         try {
           await usb.disconnect();
         } catch (_) {}
@@ -117,6 +176,100 @@ class CameraController extends ChangeNotifier {
     } finally {
       connecting = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> _wifiLoop(int epoch, Socket initialSocket) async {
+    Socket? sock = initialSocket;
+    var frames = 0;
+    final clock = Stopwatch()..start();
+    var lastArriveUs = _pipelineClock.elapsedMicroseconds;
+
+    while (connected && epoch == _epoch) {
+      try {
+        if (sock == null) {
+          final nextSock = await Socket.connect(
+            wifiHost!,
+            wifiPort,
+            timeout: const Duration(seconds: 4),
+          );
+          nextSock.setOption(SocketOption.tcpNoDelay, true);
+          if (epoch != _epoch || !connected) {
+            nextSock.destroy();
+            break;
+          }
+          sock = nextSock;
+          _wifiSocket = sock;
+          message = '5 GHZ WI-FI';
+          notifyListeners();
+        }
+
+        var buf = Uint8List(0);
+        var offset = 0;
+
+        await for (final chunk in sock) {
+          if (epoch != _epoch || !connected) break;
+          final avail = buf.length - offset;
+          if (avail == 0) {
+            buf = chunk;
+            offset = 0;
+          } else {
+            final merged = Uint8List(avail + chunk.length);
+            merged.setRange(0, avail, buf, offset);
+            merged.setRange(avail, avail + chunk.length, chunk);
+            buf = merged;
+            offset = 0;
+          }
+
+          while (buf.length - offset >= _wifiFrameHdrSize) {
+            final bd = ByteData.sublistView(buf, offset, offset + _wifiFrameHdrSize);
+            final magic = bd.getUint32(0, Endian.little);
+            final jpegLen = bd.getUint32(8, Endian.little);
+            if (magic != _wifiFrameMagic ||
+                jpegLen == 0 ||
+                jpegLen > _wifiMaxFrameBytes) {
+              throw StateError(
+                'Invalid 5 GHz frame header magic=0x${magic.toRadixString(16)} len=$jpegLen',
+              );
+            }
+            final total = _wifiFrameHdrSize + jpegLen;
+            if (buf.length - offset < total) break;
+
+            final frameBytes = Uint8List.fromList(
+              buf.sublist(offset + _wifiFrameHdrSize, offset + total),
+            );
+            offset += total;
+
+            final nowUs = _pipelineClock.elapsedMicroseconds;
+            latency.add('camera_to_phone_fetch', (nowUs - lastArriveUs) / 1000);
+            lastArriveUs = nowUs;
+
+            if (_pendingFrame != null) droppedBeforeDecode++;
+            _pendingFrame = _ReceivedFrame(frameBytes, nowUs);
+            _kickDecode(epoch);
+            frames++;
+            fps = frames * 1000 / clock.elapsedMilliseconds.clamp(1, 1 << 30);
+          }
+
+          if (offset == buf.length) {
+            buf = Uint8List(0);
+            offset = 0;
+          }
+        }
+      } catch (e) {
+        if (epoch != _epoch || !connected) break;
+        message = 'Reconnecting 5 GHz Wi-Fi… ($e)';
+        notifyListeners();
+      } finally {
+        try {
+          sock?.destroy();
+        } catch (_) {}
+        if (_wifiSocket == sock) _wifiSocket = null;
+        sock = null;
+      }
+      if (connected && epoch == _epoch) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
     }
   }
 
@@ -347,7 +500,17 @@ class CameraController extends ChangeNotifier {
     connected = false;
     ++_epoch;
     _pendingFrame = null;
-    if (bridge == null) {
+    final ws = _wifiSocket;
+    _wifiSocket = null;
+    final wasUsb = bridge == null && wifiHost == null;
+    wifiHost = null;
+    bridge = null;
+    if (ws != null) {
+      try {
+        ws.destroy();
+      } catch (_) {}
+    }
+    if (wasUsb) {
       try {
         await usb.disconnect();
       } catch (_) {}

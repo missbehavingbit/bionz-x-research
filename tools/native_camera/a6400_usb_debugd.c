@@ -33,8 +33,11 @@
 #include <time.h>
 #include <sys/ioctl.h>
 #include <sys/ptrace.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 
 #define FRAME 4096
 #define DATA (FRAME-32)
@@ -67,6 +70,7 @@ _Static_assert(sizeof(struct registration)==12,"registration ABI");
 _Static_assert(sizeof(struct transfer)==20,"transfer ABI");
 static volatile sig_atomic_t stopping;
 static volatile int g_dbg_active;
+static volatile int g_tcp_active;
 static void stop_requested(int sig) { (void)sig; stopping=1; }
 static int debug_monotonic(struct timespec *value) {
     return syscall(SYS_clock_gettime,CLOCK_MONOTONIC,value);
@@ -570,11 +574,84 @@ static void dispatch(const struct packet *q,struct packet *r) {
         r->arg0=q->arg0;
         r->length=snprintf((char*)r->data,DATA,
             "PONG protocol=2 nonce=0x%08x pid=%d transport=%s\n",
-            q->arg0,getpid(),g_dbg_active?"a6400_dbg":"usb_extcmd");
+            q->arg0,getpid(),g_tcp_active?"tcp":(g_dbg_active?"a6400_dbg":"usb_extcmd"));
         break;
     case 255: stopping=1; break;
     default: r->status=-ENOSYS; break;
     }
+}
+
+static int tcp_listen_open(void) {
+    const char *env = getenv("A6400_TCP_PORT");
+    int port = (env && *env) ? atoi(env) : 4640;
+    if (port <= 0 || port > 65535) return -1;
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    if (srv < 0) return -1;
+    int yes = 1;
+    syscall(SYS_setsockopt, srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    syscall(SYS_fcntl, srv, F_SETFD, FD_CLOEXEC);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(srv, 4) != 0) {
+        close(srv);
+        return -1;
+    }
+    dprintf(2, "tcp transport listening port=%d pid=%d\n", port, getpid());
+    return srv;
+}
+
+static int tcp_read_exact(int fd, void *buf, size_t len) {
+    unsigned char *p = (unsigned char *)buf;
+    size_t got = 0;
+    while (got < len && !stopping) {
+        struct pollfd pfd = {fd, POLLIN, 0};
+        if (poll(&pfd, 1, 2000) <= 0) return -1;
+        ssize_t n = read(fd, p + got, len - got);
+        if (n == 0) return -1;
+        if (n < 0) { if (errno == EINTR || errno == EAGAIN) continue; return -1; }
+        got += (size_t)n;
+    }
+    return got == len ? 0 : -1;
+}
+
+static int tcp_write_exact(int fd, const void *buf, size_t len) {
+    const unsigned char *p = (const unsigned char *)buf;
+    size_t sent = 0;
+    while (sent < len && !stopping) {
+        ssize_t n = write(fd, p + sent, len - sent);
+        if (n <= 0) {
+            if (n < 0 && (errno == EINTR || errno == EAGAIN)) { usleep(1000); continue; }
+            return -1;
+        }
+        sent += (size_t)n;
+    }
+    return sent == len ? 0 : -1;
+}
+
+static void tcp_serve(int srv) {
+    static struct packet tcp_request, tcp_response;
+    g_tcp_active = 1;
+    while (!stopping) {
+        struct pollfd pfd = {srv, POLLIN, 0};
+        int r = poll(&pfd, 1, 500);
+        if (r <= 0) continue;
+        int cli = accept(srv, NULL, NULL);
+        if (cli < 0) continue;
+        int nodelay = 1;
+        syscall(SYS_setsockopt, cli, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        syscall(SYS_fcntl, cli, F_SETFD, FD_CLOEXEC);
+        while (!stopping) {
+            if (tcp_read_exact(cli, &tcp_request, FRAME) != 0) break;
+            dispatch(&tcp_request, &tcp_response);
+            if (tcp_write_exact(cli, &tcp_response, FRAME) != 0) break;
+        }
+        close(cli);
+    }
+    g_tcp_active = 0;
+    close(srv);
 }
 
 static int ephemeral_ram_session(void) {
@@ -635,6 +712,19 @@ int main(void) {
     dprintf(2,"debug registered pid=%d uid=%d feature=0x23 protocol=2\n",getpid(),getuid());
     static struct packet request,response,dbg_request,dbg_response;
     int dbg=-1; time_t dbg_last_attempt=0;
+    int tcp_srv=tcp_listen_open();
+    pid_t tcp_pid=-1;
+    if (tcp_srv>=0) {
+        tcp_pid=fork();
+        if (tcp_pid==0) {
+            close(fd);
+            close(lock);
+            tcp_serve(tcp_srv);
+            _exit(0);
+        }
+        close(tcp_srv);
+        tcp_srv=-1;
+    }
     while(!stopping) {
         if (dbg<0) {
             time_t now=time(0);
@@ -669,6 +759,7 @@ int main(void) {
         result=transfer_frame(fd,0xc014eb03u,&response);
         if(result) dprintf(2,"debug response failed result=%d\n",result);
     }
+    if (tcp_pid>0) { kill(tcp_pid,SIGTERM); waitpid(tcp_pid,NULL,0); }
     if (dbg>=0) { close(dbg); dbg=-1; }
     g_dbg_active=0;
     uint16_t feature=0x23;

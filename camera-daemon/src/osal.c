@@ -397,6 +397,51 @@ int a6400_dmm_free_unit(struct a6400_dmm *d, uint32_t handle)
     return dmm_simple_op(d, (uint16_t)A6400_DMM_OP_FREE, handle);
 }
 
+int a6400_dmm_ref_unit(struct a6400_dmm *d, uint32_t unit_type,
+                       uint32_t handle, uint16_t *out_val)
+{
+    uint8_t *p;
+    void *msg = NULL, *reply = NULL;
+    uint16_t op = (uint16_t)A6400_DMM_OP_REF;
+    uint16_t h = (uint16_t)handle;
+    int rc, status;
+
+    if (!d || !d->uipc || d->uipc->fd < 0)
+        return -EINVAL;
+    if (!handle || handle == 0xffffu)
+        return -EINVAL;
+
+    rc = a6400_uipc_valloc(d->uipc, A6400_UIPC_Q_DMM, &msg, 80);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 80);
+    memcpy(p + 0x00, &op, sizeof op);
+    memcpy(p + 0x02, &h, sizeof h);
+    memcpy(p + 0x04, &unit_type, sizeof unit_type);
+    put_reply_qid(msg, d->uipc->reply_qid);
+
+    rc = a6400_uipc_send(d->uipc, A6400_UIPC_Q_DMM, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(d->uipc, A6400_UIPC_Q_DMM, msg);
+        return -EIO;
+    }
+    rc = a6400_uipc_recv(d->uipc, d->uipc->reply_qid, &reply, 800);
+    if (rc != 0 || !reply)
+        return rc != 0 ? rc : -EPROTO;
+
+    status = (int)read_status(reply);
+    if (out_val) {
+        uint16_t v = 0;
+
+        memcpy(&v, (const uint8_t *)reply + 4, sizeof v);
+        *out_val = v;
+    }
+    (void)a6400_uipc_free_msg(d->uipc, d->uipc->reply_qid, reply);
+    return status;
+}
+
 /* ---- DataflowInfra ------------------------------------------------------- */
 
 static void fill_dataflow_header(uint8_t *hdr, uint32_t reply_id,
@@ -446,7 +491,8 @@ int a6400_scalar_set_path(struct a6400_dmm *d, const struct a6400_scalar_path_cf
     v16 = 0x0100; memcpy(payload + 0x02, &v16, sizeof v16);
     v16 = 0x0044; memcpy(payload + 0x04, &v16, sizeof v16);
     v16 = 1;      memcpy(payload + 0x06, &v16, sizeof v16);
-    v32 = 0;      memcpy(payload + 0x08, &v32, sizeof v32);
+    v32 = (cfg->enable == 2) ? 6u : (cfg->enable ? 2u : 1u);
+    memcpy(payload + 0x08, &v32, sizeof v32);
     v16 = 0;      memcpy(payload + 0x0c, &v16, sizeof v16);
     payload[0x0e] = 0;
     payload[0x0f] = (uint8_t)A6400_DF_SELECTOR_PATH; /* feeder:459 */
@@ -460,9 +506,9 @@ int a6400_scalar_set_path(struct a6400_dmm *d, const struct a6400_scalar_path_cf
     v32 = cfg->param_val;
     memcpy(payload + 0x18, &v32, sizeof v32);
     payload[0x1c] = 0;
-    payload[0x1d] = 1;
+    payload[0x1d] = (cfg->pin_no == 0xffu) ? 0u : (cfg->pin_no ? cfg->pin_no : 1u);
     payload[0x1e] = 4;
-    payload[0x1f] = 1;
+    payload[0x1f] = 0; /* libInfraStreamingServer.so:0x111f8 sets +0x1f = 0 */
     payload[0x40] = (uint8_t)(cfg->enable ? 1 : 0);
 
     rc = a6400_uipc_send(d->uipc, A6400_UIPC_Q_SCALAR, msg);
@@ -475,6 +521,53 @@ int a6400_scalar_set_path(struct a6400_dmm *d, const struct a6400_scalar_path_cf
         return rc != 0 ? rc : -EPROTO;
 
     /* The original handler's status word sits 12 bytes into the payload. */
+    memcpy(&status, (const uint8_t *)reply + A6400_DATAFLOW_HEADER_SIZE + 12,
+           sizeof status);
+    (void)a6400_uipc_free_msg(d->uipc, d->uipc->reply_qid, reply);
+    return status;
+}
+
+int a6400_scalar_set_liveview(struct a6400_dmm *d, int enable, uint32_t timeout_ms)
+{
+    uint8_t *p, *payload;
+    void *msg = NULL, *reply = NULL;
+    uint16_t v16;
+    uint32_t v32;
+    int status = -EIO;
+    int rc;
+
+    if (!d || !d->uipc || d->uipc->fd < 0 || !timeout_ms)
+        return -EINVAL;
+
+    a6400_uipc_purge(d->uipc);
+    rc = a6400_uipc_valloc(d->uipc, A6400_UIPC_Q_SCALAR, &msg, 40);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 40);
+    fill_dataflow_header(p, d->uipc->reply_qid, 20);
+
+    payload = p + A6400_DATAFLOW_HEADER_SIZE;
+    v16 = 0x2009; memcpy(payload + 0x00, &v16, sizeof v16);
+    v16 = 0x0100; memcpy(payload + 0x02, &v16, sizeof v16);
+    v16 = 0x0014; memcpy(payload + 0x04, &v16, sizeof v16);
+    v16 = 1;      memcpy(payload + 0x06, &v16, sizeof v16);
+    v32 = 0;      memcpy(payload + 0x08, &v32, sizeof v32);
+    v16 = 0;      memcpy(payload + 0x0c, &v16, sizeof v16);
+    payload[0x0e] = 0;
+    payload[0x0f] = (uint8_t)A6400_DF_SELECTOR_LIVEVIEW;
+    payload[0x10] = (uint8_t)(enable ? 1 : 0);
+
+    rc = a6400_uipc_send(d->uipc, A6400_UIPC_Q_SCALAR, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(d->uipc, A6400_UIPC_Q_SCALAR, msg);
+        return -EIO;
+    }
+    rc = a6400_uipc_recv(d->uipc, d->uipc->reply_qid, &reply, timeout_ms);
+    if (rc != 0 || !reply)
+        return rc != 0 ? rc : -EPROTO;
+
     memcpy(&status, (const uint8_t *)reply + A6400_DATAFLOW_HEADER_SIZE + 12,
            sizeof status);
     (void)a6400_uipc_free_msg(d->uipc, d->uipc->reply_qid, reply);
@@ -546,5 +639,232 @@ int a6400_scalar_get_jpeg(struct a6400_dmm *d, uint32_t timeout_ms,
         out->handle2 = handle2;
     }
     (void)a6400_uipc_free_msg(d->uipc, d->uipc->reply_qid, reply);
+    return 0;
+}
+
+int a6400_df_get_pin_info(struct a6400_uipc *u, uint32_t qid,
+                          uint32_t pin_type, uint32_t pin_dir, uint32_t pin_no,
+                          uint32_t out_words[8], uint32_t timeout_ms)
+{
+    uint8_t *p, *payload;
+    void *msg = NULL, *reply = NULL;
+    uint16_t v16;
+    int rc;
+
+    if (!u || u->fd < 0 || !out_words)
+        return -EINVAL;
+    memset(out_words, 0, 32);
+
+    a6400_uipc_purge(u);
+    rc = a6400_uipc_valloc(u, qid, &msg, 40);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 40);
+    fill_dataflow_header(p, u->reply_qid, 20);
+
+    payload = p + A6400_DATAFLOW_HEADER_SIZE;
+    v16 = 0x1000; memcpy(payload + 0x00, &v16, sizeof v16);
+    v16 = 0x0000; memcpy(payload + 0x02, &v16, sizeof v16);
+    v16 = 0x0014; memcpy(payload + 0x04, &v16, sizeof v16);
+    v16 = 0x0002; memcpy(payload + 0x06, &v16, sizeof v16);
+    memcpy(payload + 0x08, &pin_type, 4);
+    memcpy(payload + 0x0c, &pin_dir, 4);
+    memcpy(payload + 0x10, &pin_no, 4);
+
+    rc = a6400_uipc_send(u, qid, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(u, qid, msg);
+        return -EIO;
+    }
+    rc = a6400_uipc_recv(u, u->reply_qid, &reply, timeout_ms);
+    if (rc != 0 || !reply)
+        return rc != 0 ? rc : -EPROTO;
+
+    memcpy(out_words, (const uint8_t *)reply + A6400_DATAFLOW_HEADER_SIZE, 32);
+    (void)a6400_uipc_free_msg(u, u->reply_qid, reply);
+    return 0;
+}
+
+int a6400_df_pin_connect(struct a6400_uipc *u, uint32_t qid,
+                         const uint32_t src_pin[4], const uint32_t dst_pin[4],
+                         uint32_t *out_status, uint32_t timeout_ms)
+{
+    uint8_t *p, *payload;
+    void *msg = NULL, *reply = NULL;
+    uint16_t v16;
+    uint32_t status = 0xffffffffu;
+    int rc;
+
+    if (!u || u->fd < 0 || !src_pin || !dst_pin)
+        return -EINVAL;
+
+    a6400_uipc_purge(u);
+    rc = a6400_uipc_valloc(u, qid, &msg, 60);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 60);
+    fill_dataflow_header(p, u->reply_qid, 40);
+
+    payload = p + A6400_DATAFLOW_HEADER_SIZE;
+    v16 = 0x1000; memcpy(payload + 0x00, &v16, sizeof v16);
+    v16 = 0x0001; memcpy(payload + 0x02, &v16, sizeof v16);
+    v16 = 0x0028; memcpy(payload + 0x04, &v16, sizeof v16);
+    v16 = 0x0002; memcpy(payload + 0x06, &v16, sizeof v16);
+    memcpy(payload + 0x08, src_pin, 16);
+    memcpy(payload + 0x18, dst_pin, 16);
+
+    rc = a6400_uipc_send(u, qid, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(u, qid, msg);
+        return -EIO;
+    }
+    rc = a6400_uipc_recv(u, u->reply_qid, &reply, timeout_ms);
+    if (rc != 0 || !reply)
+        return rc != 0 ? rc : -EPROTO;
+
+    memcpy(&status, (const uint8_t *)reply + A6400_DATAFLOW_HEADER_SIZE + 24, 4);
+    if (out_status)
+        *out_status = status;
+    (void)a6400_uipc_free_msg(u, u->reply_qid, reply);
+    return 0;
+}
+
+int a6400_df_pin_disconnect(struct a6400_uipc *u, uint32_t qid,
+                            uint32_t pin_type, uint32_t pin_dir, uint32_t pin_no,
+                            uint32_t *out_status, uint32_t timeout_ms)
+{
+    uint8_t *p, *payload;
+    void *msg = NULL, *reply = NULL;
+    uint16_t v16;
+    uint32_t status = 0xffffffffu;
+    int rc;
+
+    if (!u || u->fd < 0)
+        return -EINVAL;
+
+    a6400_uipc_purge(u);
+    rc = a6400_uipc_valloc(u, qid, &msg, 40);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 40);
+    fill_dataflow_header(p, u->reply_qid, 20);
+
+    payload = p + A6400_DATAFLOW_HEADER_SIZE;
+    v16 = 0x1000; memcpy(payload + 0x00, &v16, sizeof v16);
+    v16 = 0x0002; memcpy(payload + 0x02, &v16, sizeof v16);
+    v16 = 0x0014; memcpy(payload + 0x04, &v16, sizeof v16);
+    v16 = 0x0002; memcpy(payload + 0x06, &v16, sizeof v16);
+    memcpy(payload + 0x08, &pin_type, 4);
+    memcpy(payload + 0x0c, &pin_dir, 4);
+    memcpy(payload + 0x10, &pin_no, 4);
+
+    rc = a6400_uipc_send(u, qid, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(u, qid, msg);
+        return -EIO;
+    }
+    rc = a6400_uipc_recv(u, u->reply_qid, &reply, timeout_ms);
+    if (rc != 0 || !reply)
+        return rc != 0 ? rc : -EPROTO;
+
+    memcpy(&status, (const uint8_t *)reply + A6400_DATAFLOW_HEADER_SIZE + 24, 4);
+    if (out_status)
+        *out_status = status;
+    (void)a6400_uipc_free_msg(u, u->reply_qid, reply);
+    return 0;
+}
+
+int a6400_scalar_set_mode_0464(struct a6400_dmm *d, uint16_t mode,
+                               uint32_t rate_fps, uint32_t width,
+                               uint8_t comp_level, uint8_t pin_no,
+                               uint32_t timeout_ms)
+{
+    uint8_t *p, *payload;
+    void *msg = NULL, *reply = NULL;
+    uint16_t v16;
+    uint32_t v32;
+    int rc, status = 0;
+
+    if (!d || !d->uipc || d->uipc->fd < 0)
+        return -EINVAL;
+
+    a6400_uipc_purge(d->uipc);
+    rc = a6400_uipc_valloc(d->uipc, 0x01670464u, &msg, 84);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 84);
+    put_reply_qid(msg, d->uipc->reply_qid);
+    fill_dataflow_header(p, d->uipc->reply_qid, 64);
+
+    payload = p + A6400_DATAFLOW_HEADER_SIZE;
+    v16 = 0x2009; memcpy(payload + 0x00, &v16, sizeof v16);
+    v16 = 0x0001; memcpy(payload + 0x02, &v16, sizeof v16);
+    v16 = 0x0040; memcpy(payload + 0x04, &v16, sizeof v16);
+    v16 = 0x0001; memcpy(payload + 0x06, &v16, sizeof v16);
+    v16 = mode;   memcpy(payload + 0x0c, &v16, sizeof v16);
+    v16 = (uint16_t)(rate_fps << 8); memcpy(payload + 0x10, &v16, sizeof v16);
+    payload[0x12] = 1;
+    payload[0x13] = comp_level;
+    v16 = (uint16_t)width; memcpy(payload + 0x14, &v16, sizeof v16);
+    v32 = 300u;   memcpy(payload + 0x18, &v32, sizeof v32);
+    payload[0x1d] = pin_no;
+
+    rc = a6400_uipc_send(d->uipc, 0x01670464u, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(d->uipc, 0x01670464u, msg);
+        return -EIO;
+    }
+    rc = a6400_uipc_recv(d->uipc, d->uipc->reply_qid, &reply, timeout_ms);
+    if (rc != 0 || !reply)
+        return rc != 0 ? rc : -EPROTO;
+
+    memcpy(&status, (const uint8_t *)reply + A6400_DATAFLOW_HEADER_SIZE + 8, sizeof status);
+    (void)a6400_uipc_free_msg(d->uipc, d->uipc->reply_qid, reply);
+    return status;
+}
+
+int a6400_scalar_push_yc(struct a6400_dmm *d, uint16_t handle,
+                         uint32_t unit_type)
+{
+    uint8_t *p, *payload;
+    void *msg = NULL;
+    uint16_t v16;
+    int rc;
+
+    if (!d || !d->uipc || d->uipc->fd < 0)
+        return -EINVAL;
+    if (!handle || handle == 0xffffu)
+        return -EINVAL;
+
+    rc = a6400_uipc_valloc(d->uipc, A6400_UIPC_Q_SCALAR, &msg, 48);
+    if (rc != 0)
+        return rc;
+
+    p = (uint8_t *)msg;
+    memset(p, 0, 48);
+    put_reply_qid(msg, 0x01670464u);
+    fill_dataflow_header(p, 0x01670464u, 28);
+
+    payload = p + A6400_DATAFLOW_HEADER_SIZE;
+    v16 = 0x2009; memcpy(payload + 0x00, &v16, sizeof v16);
+    v16 = 0x9010; memcpy(payload + 0x02, &v16, sizeof v16);
+    v16 = 28;     memcpy(payload + 0x04, &v16, sizeof v16);
+    v16 = 1;      memcpy(payload + 0x06, &v16, sizeof v16);
+    memcpy(payload + 0x10, &handle, sizeof handle);
+    memcpy(payload + 0x14, &unit_type, sizeof unit_type);
+
+    rc = a6400_uipc_send(d->uipc, A6400_UIPC_Q_SCALAR, msg);
+    if (rc != 0) {
+        (void)a6400_uipc_free_msg(d->uipc, A6400_UIPC_Q_SCALAR, msg);
+        return -EIO;
+    }
     return 0;
 }

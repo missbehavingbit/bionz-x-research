@@ -87,9 +87,12 @@ OBJECT_DECLARE_SIMPLE_TYPE(CxdDwc3State, CXD90045_DWC3)
 #define DEPEVT_XFERINPROG   2U
 #define DEPEVT_XFERNOTREADY 3U
 #define DEPEVT_EPCMDCMPLT   7U
+#define DEPEVT_STATUS_SHORT (1U << 1)
+#define DEPEVT_STATUS_LST   (1U << 3)
 
 #define TRB_CTRL_HWO        (1U << 0)
 #define TRB_CTRL_LST        (1U << 1)
+#define TRB_CTRL_CHN        (1U << 2)
 #define TRB_CTRL_IOC        (1U << 11)
 
 typedef struct CxdDwc3Trb {
@@ -767,34 +770,55 @@ nak:
 #define TRBCTL_NORMAL         1U
 #define TRBCTL_LINK           8U
 
-static CxdDwc3Ep *strict_resolve_ep(CxdDwc3State *s, uint32_t ep_idx)
+static CxdDwc3Ep *strict_resolve_bulk_in_ep(CxdDwc3State *s, uint32_t ep_idx,
+                                            bool *ambiguous)
 {
-    CxdDwc3Ep *ep = &s->eps[ep_idx];
-    if (ep->trb_active || ep->cfg1 != 0) {
-        return ep;
-    }
-    for (uint32_t j = 2; j < DWC3_MAX_EPS; j++) {
-        if (((s->eps[j].cfg1 >> 25) & 0x1FU) == ep_idx) {
-            return &s->eps[j];
+    CxdDwc3Ep *match = NULL;
+
+    *ambiguous = false;
+    for (uint32_t i = 2; i < DWC3_MAX_EPS; i++) {
+        if (((s->dalepena & (1U << i)) || (s->dalepena & (1U << ep_idx))) &&
+            ((s->eps[i].cfg1 >> 25) & 0x1FU) == ep_idx) {
+            if (match) {
+                *ambiguous = true;
+                return NULL;
+            }
+            match = &s->eps[i];
         }
     }
-    return ep;
+    if (match) {
+        return match;
+    }
+    if (s->dalepena & (1U << ep_idx)) {
+        return &s->eps[ep_idx];
+    }
+    return NULL;
 }
 
 static void strict_bulk_in(CxdDwc3State *s, uint32_t ep_idx)
 {
-    CxdDwc3Ep *ep = strict_resolve_ep(s, ep_idx);
+    bool ambiguous = false;
+    CxdDwc3Ep *ep = strict_resolve_bulk_in_ep(s, ep_idx, &ambiguous);
     CxdDwc3Trb trb;
     char reply[64];
     uint32_t kind, capacity;
     uint64_t address;
 
-    if (!s->host_connected || !(s->dctl & DCTL_RUN_STOP) ||
-        !(s->dalepena & (1U << ep_idx))) {
+    if (!s->host_connected || !(s->dctl & DCTL_RUN_STOP)) {
         snprintf(reply, sizeof(reply), "NAK %u\n", ep_idx);
         strict_reply(s, reply);
         return;
     }
+    if (ambiguous) {
+        strict_reply(s, "ERROR ambiguous-bulk-in-endpoint\n");
+        return;
+    }
+    if (!ep) {
+        snprintf(reply, sizeof(reply), "NAK %u\n", ep_idx);
+        strict_reply(s, reply);
+        return;
+    }
+    uint32_t phys_ep = (uint32_t)(ep - s->eps);
     if (ep->stalled) {
         snprintf(reply, sizeof(reply), "STALL %u\n", ep_idx);
         strict_reply(s, reply);
@@ -866,7 +890,6 @@ static void strict_bulk_in(CxdDwc3State *s, uint32_t ep_idx)
         ep->trb_active = false;
     }
     ep->nrdy_pending = false;
-    uint32_t phys_ep = (uint32_t)(ep - s->eps);
     dwc3_push_depevt(s, phys_ep, DEPEVT_XFERCOMPLETE,
                      (trb.ctrl & TRB_CTRL_LST) ? 8U : 0U, 0);
     dwc3_emit_host_in(s, ep_idx, data, capacity);
@@ -874,11 +897,120 @@ static void strict_bulk_in(CxdDwc3State *s, uint32_t ep_idx)
     return;
 nak:
     if (!ep->nrdy_pending &&
-        ((ep->cfg1 & (1U << 10)) || (s->dalepena & (1U << ep_idx)))) {
-        dwc3_push_depevt(s, (uint32_t)(ep - s->eps), DEPEVT_XFERNOTREADY, 0, 0);
+        ((ep->cfg1 & (1U << 10)) || (s->dalepena & (1U << phys_ep)))) {
+        dwc3_push_depevt(s, phys_ep, DEPEVT_XFERNOTREADY, 0, 0);
         ep->nrdy_pending = true;
     }
     snprintf(reply, sizeof(reply), "NAK %u\n", ep_idx);
+    strict_reply(s, reply);
+}
+
+static void strict_bulk_out(CxdDwc3State *s, uint32_t logical,
+                            const uint8_t *payload, uint32_t length)
+{
+    CxdDwc3Ep *ep = NULL;
+    CxdDwc3Trb trb;
+    char reply[64];
+    uint32_t phys = 0, ctrl, capacity, max_packet;
+    uint32_t ring_bytes = s->gevntsiz & 0xFFFCU;
+    uint64_t ring = ((uint64_t)s->gevntadrhi << 32) | s->gevntadrlo;
+    uint64_t address;
+
+    if (!s->host_connected || !(s->dctl & DCTL_RUN_STOP)) {
+        goto nak;
+    }
+    for (uint32_t i = 2; i < DWC3_MAX_EPS; i += 2) {
+        if ((s->dalepena & (1U << i)) &&
+            ((s->eps[i].cfg1 >> 25) & 0x1FU) == logical) {
+            if (ep) {
+                strict_reply(s, "ERROR ambiguous-bulk-out-endpoint\n");
+                return;
+            }
+            ep = &s->eps[i];
+            phys = i;
+        }
+    }
+    if (!ep) {
+        goto nak;
+    }
+    if (((ep->cfg0 >> 1) & 3U) != 2 || !(ep->cfg1 & (1U << 8))) {
+        strict_reply(s, "ERROR unsupported-bulk-out-endpoint\n");
+        return;
+    }
+    if (ep->stalled) {
+        snprintf(reply, sizeof(reply), "STALL %u\n", logical);
+        strict_reply(s, reply);
+        return;
+    }
+    if (!ring || ring_bytes < 4 || !strict_ram_range(ring, ring_bytes) ||
+        s->gevnt_head >= ring_bytes || s->gevntcount + 4 > ring_bytes ||
+        !address_space_access_valid(&address_space_memory, ring + s->gevnt_head,
+                                    4, true, MEMTXATTRS_UNSPECIFIED)) {
+        strict_reply(s, "ERROR event-ring-unavailable\n");
+        return;
+    }
+    if (!ep->trb_active || !ep->trb_addr) {
+        goto notify_nak;
+    }
+    if ((ep->trb_addr & 15U) || !strict_ram_range(ep->trb_addr, sizeof(trb)) ||
+        dma_memory_read(&address_space_memory, ep->trb_addr, &trb,
+                        sizeof(trb), MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+        strict_reply(s, "ERROR trb-dma-read\n");
+        return;
+    }
+    ctrl = le32_to_cpu(trb.ctrl);
+    if (!(ctrl & TRB_CTRL_HWO)) {
+        goto notify_nak;
+    }
+    capacity = le32_to_cpu(trb.size);
+    if (((ctrl >> 4) & 0x3fU) != TRBCTL_NORMAL ||
+        (ctrl & (TRB_CTRL_LST | TRB_CTRL_CHN)) != TRB_CTRL_LST ||
+        capacity > 1024) {
+        strict_reply(s, "ERROR unsupported-bulk-out-trb\n");
+        return;
+    }
+    max_packet = (ep->cfg0 >> 3) & 0x7ffU;
+    /* A full packet with residual capacity would not complete this TRB. */
+    if (!length || length > capacity || length > max_packet ||
+        (length == max_packet && length < capacity)) {
+        strict_reply(s, "ERROR unsupported-bulk-out-length\n");
+        return;
+    }
+    address = ((uint64_t)le32_to_cpu(trb.bph) << 32) | le32_to_cpu(trb.bpl);
+    if (!strict_ram_range(address, capacity) ||
+        (address < ep->trb_addr + sizeof(trb) && ep->trb_addr < address + capacity) ||
+        (address < ring + ring_bytes && ring < address + capacity) ||
+        (ep->trb_addr < ring + ring_bytes && ring < ep->trb_addr + sizeof(trb)) ||
+        !address_space_access_valid(&address_space_memory, ep->trb_addr,
+                                    sizeof(trb), true, MEMTXATTRS_UNSPECIFIED) ||
+        dma_memory_write(&address_space_memory, address, payload,
+                         length, MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+        strict_reply(s, "ERROR payload-dma-write\n");
+        return;
+    }
+    trb.size = cpu_to_le32(capacity - length);
+    trb.ctrl = cpu_to_le32(ctrl & ~TRB_CTRL_HWO);
+    if (dma_memory_write(&address_space_memory, ep->trb_addr, &trb,
+                         sizeof(trb), MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+        strict_reply(s, "ERROR trb-dma-write\n");
+        return;
+    }
+    ep->trb_active = false;
+    ep->nrdy_pending = false;
+    dwc3_push_depevt(s, phys, DEPEVT_XFERCOMPLETE,
+                     DEPEVT_STATUS_LST |
+                     (length < max_packet ? DEPEVT_STATUS_SHORT : 0), 0);
+    snprintf(reply, sizeof(reply), "ACK %u %u\n", logical, length);
+    strict_reply(s, reply);
+    return;
+
+notify_nak:
+    if (!ep->nrdy_pending && (ep->cfg1 & (1U << 10))) {
+        dwc3_push_depevt(s, phys, DEPEVT_XFERNOTREADY, 0, 0);
+        ep->nrdy_pending = true;
+    }
+nak:
+    snprintf(reply, sizeof(reply), "NAK %u\n", logical);
     strict_reply(s, reply);
 }
 
@@ -910,6 +1042,18 @@ static void strict_host_line(CxdDwc3State *s, const char *line)
             strict_token(s, 0, false, data, length);
         } else {
             strict_reply(s, "ERROR out-encoding\n");
+        }
+    } else if (s->strict_bulk && !strncmp(line, "OUT ", 4)) {
+        char *end;
+        unsigned long ep_idx = strtoul(line + 4, &end, 10);
+        if (!g_ascii_isdigit(line[4]) || *end != ' ' ||
+            ep_idx < 2 || ep_idx >= DWC3_MAX_EPS ||
+            dwc3_ep_is_in(ep_idx)) {
+            strict_reply(s, "ERROR unsupported-host-command\n");
+        } else if (!strict_hex(end + 1, data, &length) || !length) {
+            strict_reply(s, "ERROR out-encoding\n");
+        } else {
+            strict_bulk_out(s, ep_idx, data, length);
         }
     } else {
         strict_reply(s, "ERROR unsupported-host-command\n");

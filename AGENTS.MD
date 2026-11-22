@@ -18,7 +18,7 @@ Build an evidence-backed, multi-device Sony BIONZ X (`CXD90045`) environment in 
 ## 3. Current technical checkpoint
 
 See [docs/INDEX.md](docs/INDEX.md) and [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) for the full map. Active workstreams:
-- **L2 Kernel Boot (`UnicornMachine`):** `E0533` — native CP15/TLB access removes re-entrant helper execution and manual Thumb warm-up. Two original `nflasha1` replays reach BusyBox `_start` (`0x0000C438`, `CPSR=0x60000030`) and `/bin/ash` echo/pwd roundtrips; next is the separate post-`uname` child/COW exception, not the historical linker entry.
+- **L2 Kernel Boot (`UnicornMachine`):** `E0653`, `E0656`, `E0676`, `E0677` — `nflasha1` completes post-`uname` child/COW roundtrips and D16 `AT_HWCAP` parity; captured `nflasha3` main firmware boots through stock `/sbin/init`, 9 mounts, 39 `.ko` modules, `LIRO` `entry_main`, `im.elf` `DMP_2D_Initialize : 0`, and `/bin/ash`. `--qemu-peripherals` includes the QEMU SYSV/VPH frame clock, evsel `ext-vd`, SIO channel-3 start/done, GPIO port-1 input `0x32`, and ADC done with released-key results `0x3FF`. Single-core `cpu 1..3 offline`; no Unicorn GUI frame; the `ObjMic` replay is still open.
 - **L3 User-Space (`InterpreterProbe`):** `E0526`, `E0530`, `E0534` — 88+ threads and historical allocator abort; isolated constructor fits `0x4C`, so the prior pool-overrun explanation is unproven. Strict GLES stops on unknown shared contents; original USB startup reaches FSM 7 but stops at OTG SET_MODE.
 - **Track B Physical UVC/PTP (`054C:0322`):** `E0468`, `E0471`, `E0476` — Run B25 `S1` root-caused EP0 Status-OUT NAK window; `E0476` status pre-arm module (`dcc2f64f…`, `117/8/0`, Unicorn `8/8 PASS`) awaits explicit user GO for Run B26.
 - **Multi-Device Platform (`CXD90045`):** `E0477–E0489`, `E0506–E0509` — 13 bodies / 9 kernels mapped + `ILCE-6400A` 1.01 reference qualification and USBSTOR native `GetModelInfo` (`0032858730`, 2.727 ms); `TargetProfile` registry in `src/a6400/targets/`.
@@ -37,6 +37,7 @@ See [docs/INDEX.md](docs/INDEX.md) and [docs/CURRENT_STATE.md](docs/CURRENT_STAT
 
 - Before deriving a new contract or repeating research, consult [docs/RELATED_REPOSITORIES.md](docs/RELATED_REPOSITORIES.md) for relevant upstream work. Pin useful findings to exact commits and identity-matched evidence; upstream claims are leads, not verified local contracts or authorization to run tools.
 - Use small components and shared path/memory rules (`project_paths.py`). Prefer `rg`, constructed fixtures, and focused ABI/state/error/provenance/ARM checks. Generated fixtures belong under `artifacts/tests/`.
+- Pass the repository root URI explicitly as `workspaceRoot` to Pylance MCP tools that accept it. Discover the URI with `pylanceWorkspaceRoots` if needed; see [Pylance MCP troubleshooting](CONTRIBUTING.MD#pylance-mcp).
 - Launch first-party scripts as modules from the repository root (`python -m tools.research.<tool>`, `python -m legacy.<prototype>`).
 
 ```powershell

@@ -115,3 +115,11 @@ Take the two `osal_snd_msg` rows and find the receiver of their queue ids in the
 `capability_path.path_between`. If a receiver exists, the producer-consumer pair becomes a traced
 capability; if not, it is another write-only path like the Eye AF field in E0478, and the pattern
 generalises.
+
+## Superseded (2026-11-20)
+
+The table and every figure in this record are superseded by
+[E0663](0663-callgraph-plt-correction-and-real-ipc-table.md). The 29 sites are not IPC calls: a
+fixed 12-byte PLT stride gave each import its neighbour's name, and objdump shows 25 of the 29
+calling `MWF::RsrcAcsr::Acquire`. The corrected table has 763 IPC call sites, 544 with a
+constant. `ipc-edges-a6400.tsv` is kept unchanged as the failed receipt.

@@ -7,9 +7,10 @@ parity with the GitHub Actions ``guardrails`` job.
 from __future__ import annotations
 
 import argparse
+import ast
+import contextlib
 import io
 import os
-import py_compile
 import re
 import struct
 import subprocess
@@ -23,6 +24,7 @@ from project_paths import PROJECT_ROOT
 FORBIDDEN_EXTENSION_RE = re.compile(
     r"\.(so|ko|elf|bin|img|raw|dat|tar|ckpt|dmp|etl)$", re.IGNORECASE
 )
+FORBIDDEN_PUBLIC_PREFIXES = ("custom_os/", "docs/CUSTOM_OS")
 MAX_TRACKED_FILE_BYTES = 2 * 1024 * 1024  # 2 MiB
 ELF_MAGIC = b"\x7fELF"
 
@@ -133,22 +135,63 @@ def _is_first_party_py(rel: Path) -> bool:
 
 
 def check_py_compile(root: Path, files: list[Path] | None = None) -> CheckResult:
-    """Compile first-party Python files to catch syntax errors."""
+    """Compile first-party Python files in memory to catch syntax errors."""
     rel_files = files if files is not None else tracked_files(root)
     py_files = [rel for rel in rel_files if _is_first_party_py(rel) and (root / rel).is_file()]
     errors: list[str] = []
     for rel in py_files:
+        full = root / rel
         try:
-            py_compile.compile(str(root / rel), doraise=True)
-        except py_compile.PyCompileError as exc:
-            errors.append(f"{rel.as_posix()}: {exc.msg}")
+            source = full.read_bytes()
+            compile(source, rel.as_posix(), "exec")
+        except (OSError, SyntaxError, ValueError) as exc:
+            msg = getattr(exc, "msg", None) or str(exc)
+            errors.append(f"{rel.as_posix()}: {msg}")
     if errors:
         return CheckResult("py_compile", False, "; ".join(errors[:5]))
     return CheckResult("py_compile", True, f"Compiled {len(py_files)} Python files")
 
 
+def check_test_discovery_guard(root: Path, files: list[Path] | None = None) -> CheckResult:
+    """Ensure every tests/**/test_*.py file defines test classes and no bare top-level test_* funcs."""
+    rel_files = files if files is not None else tracked_files(root)
+    test_files = [
+        rel
+        for rel in rel_files
+        if len(rel.parts) >= 2
+        and rel.parts[0] == "tests"
+        and rel.name.startswith("test_")
+        and rel.suffix == ".py"
+        and (root / rel).is_file()
+    ]
+    issues: list[str] = []
+    for rel in test_files:
+        posix = rel.as_posix()
+        try:
+            tree = ast.parse((root / rel).read_text(encoding="utf-8"), filename=posix)
+        except (OSError, SyntaxError) as exc:
+            issues.append(f"{posix}: parse error ({exc})")
+            continue
+        top_funcs = [
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+        ]
+        if top_funcs:
+            issues.append(f"{posix}: top-level {top_funcs[0]}() outside TestCase")
+            continue
+        classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+        if not classes:
+            issues.append(f"{posix}: no TestCase class (0 tests discovered)")
+    if issues:
+        return CheckResult("test_discovery_guard", False, "; ".join(issues[:5]))
+    return CheckResult(
+        "test_discovery_guard", True, f"Verified {len(test_files)} test modules define TestCase classes"
+    )
+
+
 def check_forbidden_files(root: Path, files: list[Path] | None = None) -> CheckResult:
-    """Reject large tracked files, forbidden binary extensions, and ELF binaries."""
+    """Reject large tracked files, private Custom OS paths, binary extensions, and ELF binaries."""
     rel_files = files if files is not None else tracked_files(root)
     violations: list[str] = []
     checked = 0
@@ -158,6 +201,9 @@ def check_forbidden_files(root: Path, files: list[Path] | None = None) -> CheckR
             continue
         checked += 1
         posix = rel.as_posix()
+        if posix.startswith(FORBIDDEN_PUBLIC_PREFIXES):
+            violations.append(f"forbidden private path: {posix}")
+            continue
         if FORBIDDEN_EXTENSION_RE.search(posix):
             violations.append(f"forbidden extension: {posix}")
             continue
@@ -275,6 +321,20 @@ def check_guardrail_tests(root: Path, include_self: bool = True) -> CheckResult:
 
 def check_status_svg_sync(root: Path) -> CheckResult:
     """Verify docs/images/status_a6400.svg matches STATUS_SNAPSHOT."""
+    if root == PROJECT_ROOT:
+        from tools.research import render_research_status
+
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = render_research_status.main(["--check"])
+        if rc != 0:
+            msg = (err.getvalue() or out.getvalue()).strip().splitlines()
+            return CheckResult(
+                "status_svg_sync", False, msg[-1] if msg else "render_research_status --check failed"
+            )
+        return CheckResult("status_svg_sync", True, "docs/images/status_a6400.svg matches STATUS_SNAPSHOT")
+
     proc = subprocess.run(
         [sys.executable, "-m", "tools.research.render_research_status", "--check"],
         cwd=str(root),
@@ -310,6 +370,7 @@ def run_all_checks(root: Path = PROJECT_ROOT, include_self: bool = True) -> list
     files = tracked_files(root)
     return [
         check_py_compile(root, files),
+        check_test_discovery_guard(root, files),
         check_forbidden_files(root, files),
         check_markdown_links(root, files),
         check_status_svg_sync(root),

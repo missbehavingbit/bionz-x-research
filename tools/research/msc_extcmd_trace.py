@@ -18,9 +18,10 @@ from unicorn import (UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_MODE_ARM,
 from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC,
                                UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,
                                UC_ARM_REG_R4, UC_ARM_REG_R5, UC_ARM_REG_R6,
-                               UC_ARM_REG_R10, UC_ARM_REG_SP, UC_CPU_ARM_CORTEX_A9)
+                               UC_ARM_REG_R8, UC_ARM_REG_R10, UC_ARM_REG_R11,
+                               UC_ARM_REG_SP, UC_CPU_ARM_CORTEX_A9)
 
-from tools.research.a6400a_native_readonly import MODEL_CDB, MODEL_REQUEST
+from tools.research.a6400a_native_readonly import MODEL_REQUEST
 from tools.research.storage_trace import module_relocations
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,13 +80,16 @@ def linked_window(image: dict, base: int, calls: dict[int, tuple[str, int]]) -> 
 
 
 class ReadinessControl:
-    def __init__(self, driver: dict, *, present=True, mask=0, feature=1, opcode=0x7A):
-        if not 0 <= mask <= 3 or not 0 <= feature <= 65535 or not 0 <= opcode <= 255:
+    def __init__(self, driver: dict, *, present=True, mask=0, feature=1, opcode=0x7A,
+                 command_feature=1):
+        if (not 0 <= mask <= 3 or not 0 <= feature <= 65535
+                or not 0 <= opcode <= 255 or not 0 <= command_feature <= 65535):
             raise ValueError("Invalid declared lookup/readiness fixture")
         if driver["symbols"].get("get_inquiry_state") != (0x50C, 48):
             raise ValueError("Unsupported original readiness-function layout")
         self.driver = driver
         self.present = present
+        self.command_feature = command_feature
         self.uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         self.uc.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_A9)
         code = linked_window(driver, CODE, {
@@ -97,7 +101,7 @@ class ReadinessControl:
         self.uc.mem_map(LOOKUP, 8192, 5)
         self.uc.mem_map(DATA, 0x10000, 3)
         self.uc.mem_map(STACK, 0x10000, 3)
-        self.uc.mem_write(CDB, MODEL_CDB)
+        self.uc.mem_write(CDB, b"\x7a" + struct.pack("<H", command_feature) + bytes(9))
         self.uc.mem_write(NODE + 8, bytes([opcode, 0]) + struct.pack("<H", feature))
         self.write32(NODE + 0x14, mask)
         self.allowed = []
@@ -192,7 +196,8 @@ class ReadinessControl:
                            (CODE + 0x1978, CODE + 0x1984), (CODE + 0x19C4, CODE + 0x19D0)])
         raw = bytes(self.uc.mem_read(SENSE, 4))
         result.update(
-            direction=direction, readiness_mask_before=before,
+            direction=direction, command_feature=self.command_feature,
+            readiness_mask_before=before,
             readiness_mask_after=self.read32(NODE + 0x14),
             original_state_result=self.state,
             sense=None if self.state == 2 else [raw[0], raw[3], raw[2]],
@@ -354,22 +359,158 @@ def reply_timeout_controls(devinfo: bytes, usbcmd: bytes) -> dict:
             "scope": "original callback windows and pure packing functions; no model-info build, backup read, IPC or driver call"}
 
 
-def controls(driver: dict, storage: dict) -> dict:
+def status_controls(driver: dict, *, feature: int = 1) -> list[dict]:
     rows = []
     for present, mask in [(False, 0)] + [(True, mask) for mask in range(4)]:
         for direction in (1, 2):
-            result = ReadinessControl(driver, present=present, mask=mask).status(direction)
+            result = ReadinessControl(driver, present=present, mask=mask, feature=feature,
+                                      command_feature=feature).status(direction)
             expected = 0 if not present else 2 if mask & direction else 1
             sense = [5, 0x20, 0] if not present else None if expected == 2 else [9, 0x81, 0x81]
             if (result["original_state_result"] != expected or result["sense"] != sense
                     or result["readiness_writes"] or result["readiness_mask_after"] != mask):
                 raise AssertionError("Original status decision differs from the decoded contract")
             rows.append({"present_fixture": present, **result})
-    for key in ({"feature": 2}, {"opcode": 0x7B}):
-        result = ReadinessControl(driver, mask=3, **key).status(1)
+    for key in ({"feature": (feature + 1) & 0xFFFF}, {"opcode": 0x7B}):
+        result = ReadinessControl(driver, mask=3, feature=key.get("feature", feature),
+                                  opcode=key.get("opcode", 0x7A),
+                                  command_feature=feature).status(1)
         if result["original_state_result"] != 0 or result["sense"] != [5, 0x20, 0]:
             raise AssertionError("A different command key was treated as the registered fixture")
         rows.append({"different_key_fixture": key, **result})
+    return rows
+
+
+def registration_fields_control(driver: dict, *, feature: int = 0x23,
+                                receive_size: int = 4096, send_size: int = 4096) -> dict:
+    if (not 0 <= feature <= 65535 or not 0 < receive_size <= 0xFFFFFFFF
+            or not 0 < send_size <= 0xFFFFFFFF):
+        raise ValueError("Invalid registration field fixture")
+    control = ReadinessControl(driver)
+    context, waitqueue, frame = DATA + 0x6000, DATA + 0x8000, DATA + 0x9000
+    registration = struct.pack("<BBHII", 0x7A, 0, feature, receive_size, send_size)
+    control.uc.mem_write(NODE, b"\xA5" * 0x4C)
+    control.uc.mem_write(context, b"\xA5" * 8)
+    control.write32(DEVICE + 0xA8, context)
+    control.uc.mem_write(frame - 0x40, registration)
+    run = control.run(CODE + 0xDAC, CODE + 0xE14, {
+        UC_ARM_REG_R4: NODE, UC_ARM_REG_R5: 0, UC_ARM_REG_R6: DEVICE,
+        UC_ARM_REG_R8: waitqueue, UC_ARM_REG_R11: frame,
+    }, [(CODE + 0xDAC, CODE + 0xE14)])
+    observed = {
+        "context_active": control.read32(context),
+        "context_opcode": control.uc.mem_read(context + 4, 1)[0],
+        "context_feature": struct.unpack("<H", bytes(control.uc.mem_read(context + 6, 2)))[0],
+        "node_opcode": control.uc.mem_read(NODE + 8, 1)[0],
+        "node_feature": struct.unpack("<H", bytes(control.uc.mem_read(NODE + 10, 2)))[0],
+        "receive_size": control.read32(NODE + 0xC),
+        "send_size": control.read32(NODE + 0x10),
+        "readiness_mask": control.read32(NODE + 0x14),
+        "waitqueue_pointer": control.read32(NODE + 0x34),
+    }
+    expected = {
+        "context_active": 1, "context_opcode": 0x7A, "context_feature": feature,
+        "node_opcode": 0x7A, "node_feature": feature, "receive_size": receive_size,
+        "send_size": send_size, "readiness_mask": 0, "waitqueue_pointer": waitqueue,
+    }
+    if observed != expected:
+        raise AssertionError("Original Create field initialization differs from the supplied registration")
+    return {
+        **run, "stop": "create_fields_before_mutex_initialization",
+        "registration_12_bytes": registration.hex(), "observed": observed,
+        "scope": ("Original Create field writes after declared user-copy/allocation fixtures; "
+                  "no allocation, mutex initialization, node append or registration executed"),
+    }
+
+
+def list_delete_control(driver: dict) -> dict:
+    control = ReadinessControl(driver, feature=0x23)
+    context, head, other = DATA + 0x6000, DATA + 0x7000, DATA + 0x8000
+    helpers = LOOKUP + 0x200
+    calls = {
+        0x418: ("get_extcmd_this", helpers),
+        0x420: ("_mutex_lock", helpers + 4),
+        0x440: ("get_extcmd_this", helpers),
+        0x448: ("_mutex_unlock", helpers + 8),
+    }
+    control.uc.mem_write(CODE, linked_window(driver, CODE, calls))
+    for address, next_node, previous_node in (
+            (head, NODE, other), (NODE, other, head), (other, head, NODE)):
+        control.write32(address, next_node)
+        control.write32(address + 4, previous_node)
+    control.uc.mem_write(other + 8, b"\x7a\0\x01\0")
+    events = []
+
+    def fixture(cpu, address, size, user):
+        if address == helpers:
+            events.append({"callee_fixture": "get_extcmd_this", "result": context})
+            cpu.reg_write(UC_ARM_REG_R0, context)
+        elif address in (helpers + 4, helpers + 8):
+            argument = cpu.reg_read(UC_ARM_REG_R0)
+            if argument != context + 0x1C:
+                raise AssertionError("Original list deletion used a different mutex object")
+            events.append({"callee_fixture": "_mutex_lock" if address == helpers + 4
+                           else "_mutex_unlock", "argument": argument})
+        else:
+            raise RuntimeError("Unsupported list-deletion helper")
+        cpu.reg_write(UC_ARM_REG_PC, cpu.reg_read(UC_ARM_REG_LR))
+
+    hook = control.uc.hook_add(UC_HOOK_CODE, fixture, begin=helpers, end=helpers + 8)
+    try:
+        start, size = driver["symbols"]["list_delete_node"]
+        run = control.run(CODE + start, RETURN, {UC_ARM_REG_R0: NODE},
+                          [(CODE + start, CODE + start + size), (helpers, helpers + 12)])
+    finally:
+        control.uc.hook_del(hook)
+    links = {
+        "head_next": control.read32(head), "head_previous": control.read32(head + 4),
+        "other_next": control.read32(other), "other_previous": control.read32(other + 4),
+        "removed_next": control.read32(NODE), "removed_previous": control.read32(NODE + 4),
+    }
+    if (run["return_register"] != 0 or links != {
+            "head_next": other, "head_previous": other, "other_next": head,
+            "other_previous": head, "removed_next": 0x100, "removed_previous": 0x200}):
+        raise AssertionError("Original list deletion did not preserve the surviving node")
+    return {
+        **run, "links": links, "helper_fixtures": events,
+        "removed_feature": 0x23,
+        "surviving_feature": struct.unpack("<H", bytes(control.uc.mem_read(other + 10, 2)))[0],
+        "scope": ("Original list_delete_node on a constructed two-node list with explicit "
+                  "context/mutex callee fixtures; not Destroy, module unload or live cleanup proof"),
+    }
+
+
+def debugger_abi_controls(driver: dict) -> dict:
+    if driver["symbols"].get("extcmd_ioctl") != (0xBF4, 4192):
+        raise ValueError("Unsupported original ioctl-function layout")
+    routes = []
+    for name, command, end in (
+            ("create", 0xC00CEB00, 0xCBC), ("destroy", 0xC002EB01, 0xE94),
+            ("receive", 0xC014EB02, 0xF5C), ("send", 0xC014EB03, 0x1200)):
+        control = ReadinessControl(driver)
+        run = control.run(CODE + 0xBF4, CODE + end, {
+            UC_ARM_REG_R0: DEVICE, UC_ARM_REG_R1: command, UC_ARM_REG_R2: ARG,
+        }, [(CODE + 0xBF4, CODE + 0xCBC)])
+        routes.append({**run, "operation": name, "ioctl": hex(command),
+                       "stop": "ioctl_route_before_user_access_check"})
+    return {
+        "scope": "Offline original debugger ABI windows with declared fixtures, not hardware qualification",
+        "ioctl_routes": routes,
+        "registration_fields": registration_fields_control(driver),
+        "feature_0x23_status_cases": status_controls(driver, feature=0x23),
+        "list_delete": list_delete_control(driver),
+        "deployment_qualified": False,
+        "unverified": [
+            "Live module identity, permissions and command registration",
+            "Actual allocation, locking, waitqueues, transfer and Destroy lifecycle",
+            "Payload/libc compatibility and a body-specific nonpersistent launch/recovery path",
+            "Stock module finalization and unload safety",
+        ],
+    }
+
+
+def controls(driver: dict, storage: dict) -> dict:
+    rows = status_controls(driver)
     sequence = ReadinessControl(driver).arm_sequence()
     if [row["after"] for row in sequence["transitions"]] != [2, 3, 1, 0]:
         raise AssertionError("Original ready-bit arming/clearing sequence differs")
@@ -389,6 +530,8 @@ def main(argv=None) -> int:
     parser.add_argument("--storage", type=Path, default=KMOD / "usbg_storage.ko")
     parser.add_argument("--usbcmd", type=Path, default=KMOD.parent / "lib" / "libusbcmd.so")
     parser.add_argument("--devinfo", type=Path, default=KMOD.parent / "lib" / "libInfraDevInfoSender.so")
+    parser.add_argument("--debugger-abi", action="store_true",
+                        help="Also execute bounded debugger ioctl, registration-field and list-deletion fixtures")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     out = args.output_dir.resolve()
@@ -405,6 +548,8 @@ def main(argv=None) -> int:
         report["controls"] = controls(driver, storage)
         report["reply_lifetime"] = reply_timeout_controls(args.devinfo.read_bytes(),
                                                          args.usbcmd.read_bytes())
+        if args.debugger_abi:
+            report["debugger_abi"] = debugger_abi_controls(driver)
         report.update(usbcmd_sha256=USBCMD_SHA, devinfo_sha256=DEVINFO_SHA)
         report["status"] = "passed_fixture_controls"
     except (OSError, ValueError, RuntimeError, AssertionError, UcError) as error:

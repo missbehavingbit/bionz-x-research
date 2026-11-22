@@ -1,5 +1,6 @@
 """Original-process USB startup guards; no camera or physical-media access."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import struct
@@ -12,6 +13,7 @@ from unicorn import arm_const as arm
 
 from project_paths import PROJECT_ROOT
 from src.a6400.execution.guest_filesystem import UnsupportedFilesystem
+from src.a6400.execution.guest_fusb_startup import CapturedFusbStartup, KERNEL_SHA256, check_dwc3_context
 from src.a6400.execution.guest_threads import GuestThreads
 from tests.test_interpreter_probe import make_elf
 from tools.research.emulator_session import build_boot_session
@@ -43,6 +45,22 @@ def observer():
 
 
 class ProcessUsbStartupGuardTests(unittest.TestCase):
+    def test_captured_otg_kernel_requires_exact_identity(self):
+        with self.assertRaisesRegex(ValueError, 'Captured FUSB kernel identity mismatch'):
+            CapturedFusbStartup(bytes(4_085_888))
+
+    def test_native_reset_context_refuses_other_role_or_mmio_alias(self):
+        context = dict(kernel_sha256=KERNEL_SHA256, kernel_bias=0x60000000,
+                       fusb=0x689E9600, fusb_state=2, cid=1, vbus=1,
+                       binding=0x604E4E30, callback=0x602B1B9C, dwc3=0x689E5810,
+                       registers=0xB0880100, outer_sync=0x6011A5D0, l2x0_registers=0xF8002000,
+                       gctl=0)
+        check_dwc3_context(context)
+        for field, value in (('cid', 0), ('gctl', 0x800), ('registers', 0xA0010020),
+                             ('l2x0_registers', 0xF8004000), ('dwc3', 0xF020C100)):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'bound reset profile'):
+                check_dwc3_context({**context, field: value})
+
     def test_checkpoint_identity_is_pinned_before_restore(self):
         root = PROJECT_ROOT / 'artifacts' / 'tests' / 'usb-gadget-startup'
         root.mkdir(parents=True, exist_ok=True)
@@ -166,15 +184,20 @@ class ProcessUsbStartupGuardTests(unittest.TestCase):
 
 CHECKPOINT = os.environ.get('A6400_USB_PROCESS_CHECKPOINT')
 CHECKPOINT_SHA256 = os.environ.get('A6400_USB_PROCESS_CHECKPOINT_SHA256')
+CAPTURED_KERNEL = os.environ.get('A6400_USB_CAPTURED_KERNEL')
+QEMU_CONTEXT = os.environ.get('A6400_USB_QEMU_CONTEXT')
+QEMU_CONTEXT_SHA256 = os.environ.get('A6400_USB_QEMU_CONTEXT_SHA256')
 
 
 @unittest.skipUnless(CHECKPOINT and CHECKPOINT_SHA256,
                      'explicit trusted original-process checkpoint and SHA-256 are not supplied')
 class OriginalProcessUsbStartupTests(unittest.TestCase):
-    def replay(self, *, function=4, budget=500000):
+    def replay(self, *, function=4, budget=500000, captured_fusb=None):
         path = checked_checkpoint(Path(CHECKPOINT), CHECKPOINT_SHA256)
         args = build_parser().parse_args([*BOOT_OPTIONS, '--load-checkpoint', str(path)])
         probe = build_boot_session(args).probe
+        if captured_fusb is not None:
+            probe.usb_otgcore.captured_fusb_startup = captured_fusb
         replay = ProcessUsbStartup(probe, instruction_budget=budget)
         return replay.execute(exercise_startup=True, function=function)
 
@@ -205,6 +228,46 @@ class OriginalProcessUsbStartupTests(unittest.TestCase):
                             if entry['function'] == 'start_gadget')
         self.assertEqual(native_start['returned'], 0xFFFFFFFB)
         self.assertEqual(report['final_state']['gadgets'], [])
+
+    @unittest.skipUnless(CAPTURED_KERNEL, 'captured FUSB kernel not supplied')
+    def test_original_fusb_set_mode_uses_the_right_selector(self):
+        fusb = CapturedFusbStartup(Path(CAPTURED_KERNEL).read_bytes())
+        self.assertEqual(fusb.set_mode(1)['speed_selector'], 1)
+        self.assertEqual(fusb.set_mode(2)['speed_selector'], 0)
+
+    @unittest.skipUnless(CAPTURED_KERNEL, 'captured FUSB kernel not supplied')
+    def test_connected_guard_reaches_bound_dwc3_without_acknowledging_start(self):
+        report = self.replay(captured_fusb=CapturedFusbStartup(Path(CAPTURED_KERNEL).read_bytes()))
+        self.assertEqual(report['status'], 'boundary')
+        boundary = report['boundary']['original_boundary']
+        self.assertEqual(boundary['reason'], 'usb_otgcore_dwc3_gadget_probe_unmodelled')
+        self.assertEqual((boundary['kernel_pc'], boundary['callback_pc']), (0x602ACB04, 0x602B1B9C))
+        self.assertNotIn('returned', boundary)
+        self.assertEqual(report['final_state']['gadgets'][0]['created'], 0)
+        self.assertFalse(report['setconfig_delivered'])
+
+    @unittest.skipUnless(CAPTURED_KERNEL, 'captured FUSB kernel not supplied')
+    def test_gate_clear_returns_native_ebusy_without_reaching_dwc3(self):
+        fusb = CapturedFusbStartup(Path(CAPTURED_KERNEL).read_bytes(), gate_clear_control=True)
+        fusb.set_mode(2)
+        observation = fusb.start_guard()
+        self.assertEqual(observation['returned'], -16)
+        self.assertNotIn('callback_pc', observation)
+
+    @unittest.skipUnless(CAPTURED_KERNEL and QEMU_CONTEXT and QEMU_CONTEXT_SHA256,
+                         'explicit native QEMU DWC3 context and digest are not supplied')
+    def test_original_dwc3_probe_reaches_cache_sync_but_does_not_acknowledge_e305(self):
+        path = checked_checkpoint(Path(QEMU_CONTEXT), QEMU_CONTEXT_SHA256)
+        context = json.loads(path.read_bytes())['native_dwc3_context']
+        fusb = CapturedFusbStartup(Path(CAPTURED_KERNEL).read_bytes(), qemu_context=context)
+        report = self.replay(captured_fusb=fusb)
+        boundary = report['boundary']['original_boundary']
+        self.assertEqual(boundary['reason'], 'usb_otgcore_outer_cache_sync_unmodelled')
+        self.assertEqual(boundary['l2x0_sync_address'], 0xF8002730)
+        self.assertEqual((boundary['old_gctl'], boundary['prepared_gctl']), (0, 0x800))
+        self.assertFalse(boundary['gctl_write_completed'])
+        self.assertNotIn('returned', boundary)
+        self.assertEqual(report['final_state']['gadgets'][0]['created'], 0)
 
 
 if __name__ == '__main__':

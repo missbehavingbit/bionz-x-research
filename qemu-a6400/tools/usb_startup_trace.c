@@ -26,6 +26,27 @@ static void observe(unsigned cpu,void *opaque) {
     GByteArray *data=g_byte_array_new();
     if(!qemu_plugin_read_memory_vaddr(pc,data,16) || data->len!=16 ||
        memcmp(data->data,sites[site].bytes,16)) {g_byte_array_unref(data);return;}
+#ifdef USB_STOCK_TRACE
+    if (sites[site].offset == 0x8622c6 || sites[site].offset == 0x8624b0) {
+        uint32_t frame;
+        g_byte_array_set_size(data, 0);
+        if (!regs[cpu][7] || !qemu_plugin_read_register(regs[cpu][7], data) ||
+            data->len != 4) {
+            g_byte_array_unref(data);
+            return;
+        }
+        memcpy(&frame, data->data, sizeof(frame));
+        frame = GUINT32_FROM_LE(frame);
+        /* Original message key at I-InputMain's fixed Thumb frame slot. */
+        g_byte_array_set_size(data, 0);
+        if (frame < 0x10000 || frame >= 0x5fffff00 ||
+            !qemu_plugin_read_memory_vaddr(frame + 0xdc, data, 4) ||
+            data->len != 4 || memcmp(data->data, "\x01\x00\x00\x07", 4)) {
+            g_byte_array_unref(data);
+            return;
+        }
+    }
+#endif
     counts[cpu][site]++;
     GString *row=g_string_new(NULL);
     g_string_append_printf(row,"[USB startup] cpu=%u kind=%s pc=%08x offset=%08x",cpu,

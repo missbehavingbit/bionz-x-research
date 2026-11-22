@@ -17,8 +17,8 @@ from src.a6400.execution.guarded_bytes import UnverifiedGuestData
 
 def _nflasha_image(text):
     number, sep, path = text.partition('=')
-    if number not in ('4', '23') or not sep or not path:
-        raise argparse.ArgumentTypeError('expected 4=<path> or 23=<path> (only nflasha4 and nflasha23 are supported)')
+    if number not in ('1', '2', '4', '23') or not sep or not path:
+        raise argparse.ArgumentTypeError('expected 1=<path>, 2=<path>, 4=<path>, or 23=<path>')
     return int(number), path
 
 
@@ -61,8 +61,8 @@ def build_parser():
                         help='stop on unsupplied backup replies (default); preset-backed services requests against authentic BK4 preset; unverified-ack reproduces historical experimental acknowledgements')
     parser.add_argument('--graphics-service', choices=('stop', 'authentic-grm'), default='stop',
                         help='stop on unsupplied graphics allocator replies (default); authentic-grm services requests against verified gl_common pool')
-    parser.add_argument('--grm-pools', choices=('gl-common-only', 'captured-e0044'), default='gl-common-only',
-                        help='authentic-grm pool policy: default single gl_common pool, or the captured E0044 six-pool table (opt-in)')
+    parser.add_argument('--grm-pools', choices=('gl-common-only', 'captured-e0044', 'captured-wbi-dmm'), default='gl-common-only',
+                        help='authentic-grm pool policy: default single gl_common pool, captured E0044 six-pool table, or WBI nflasha5 DMM/GRM pool table including OSD A/B (opt-in)')
     parser.add_argument('--null-page', choices=('stop', 'read-zero'), default='stop',
                         help='stop on NULL pointer access (default); read-zero maps read-only zero page at 0x0 (handling MonCtrl debug print flag checks in libMWF)')
     parser.add_argument('--proc-overlay', choices=('stop', 'experimental-empty'), default='stop',
@@ -215,11 +215,13 @@ def build_parser():
     parser.add_argument('--mmca-char-device', choices=('stop', 'driver-bound'), default='stop',
                         help='stop on /dev/mmca-char (default); driver-bound binds /dev/mmca-char (250:0..2) and /dev/ms-char (249:0)')
     parser.add_argument('--gles-device', choices=('stop', 'kernel-bound', 'kernel-bound-decoded',
-                                                  'kernel-bound-tgid'), default='stop',
+                                                  'kernel-bound-tgid', 'kernel-bound-sugilite'), default='stop',
                         help='stop on /dev/dmpgles2 (default); kernel-bound binds /dev/dmpgles2 with verified '
                              'TASK_SIZE 0x5f000000; kernel-bound-decoded additionally uses the grm_gles.ko-decoded '
                              'GPES ioctl semantics; kernel-bound-tgid selects original TGID completion/reset '
-                             'and selective wake semantics, without assumed engine events '
+                             'and selective wake semantics, without assumed engine events; '
+                             'kernel-bound-sugilite adds verified sugilite_open first-open 4-byte header zeroing '
+                             'and clean-room Sugilite PSC0/PPF/P3D + IRQ 76 execution '
                              '(fresh boot or unused pre-open checkpoint required)')
     parser.add_argument('--nanosleep-policy', choices=('immediate', 'block', 'timed'), default='immediate',
                         help='threads policy sleep handling: immediate return (default baseline) or block the '
@@ -235,6 +237,8 @@ def build_parser():
     parser.add_argument('--load-checkpoint', type=Path, default=None, help='load emulator snapshot from file before execution')
     parser.add_argument('--display-contract', choices=('none', 'camera-e0074-e0044'), default='none',
                         help='opt-in read-only display surface extraction; camera-e0074-e0044 registers the evidence-backed OSD/Sugilite contract')
+    parser.add_argument('--display-output-dir', type=Path, default=None,
+                        help='optional directory to save PNGs of all non-zero mapped display surfaces')
     parser.add_argument('--mmap-eof', choices=('zero-fill', 'sigbus'), default='zero-fill',
                         help='file mappings past EOF: zero-fill (historical) or sigbus (Linux: access to a page wholly past EOF faults)')
     parser.add_argument('--file-overlay', action='append', default=[], metavar='GUEST=HOST',
@@ -307,6 +311,19 @@ def main():
             parser.error('--uipc-rcv-timeout modeled requires the threads syscall policy')
         probe.uipc.rcv_timeout_policy = 'modeled'
         probe.report['uipc_rcv_timeout'] = 'modeled'
+        deadlines = probe.uipc.__dict__.setdefault('rcv_deadlines', {})
+        waiters = probe.threads.__dict__.setdefault('timer_waiters', {})
+        for tid, th in probe.threads.threads.items():
+            if (th.state == 'blocked_uipc'
+                    and th.regs.get(arm.UC_ARM_REG_R1) == 0x80000007
+                    and tid not in waiters):
+                arg_ptr = th.regs.get(arm.UC_ARM_REG_R2, 0)
+                if accessible(probe.mu, arg_ptr, 16, unicorn.UC_PROT_READ):
+                    tmo = struct.unpack('<I', bytes(probe.mu.mem_read(arg_ptr + 12, 4)))[0]
+                    if 0 < tmo < 0x80000000:
+                        dl = probe.instructions + tmo * 1000
+                        deadlines[tid] = dl
+                        waiters[tid] = dl
     apply_file_overlays(probe, args.file_overlay)
     if hasattr(probe, 'mmap'):
         probe.mmap.eof_policy = args.mmap_eof
@@ -569,10 +586,25 @@ def main():
         if frame is not None:
             from PIL import Image
             report['display_frame'] = frame.metadata()
-            out = PROJECT_ROOT / 'artifacts/reports' / f"display-{frame.surface.name}.png"
-            out.parent.mkdir(parents=True, exist_ok=True)
+            out_dir = args.display_output_dir or (PROJECT_ROOT / 'artifacts/reports')
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out = out_dir / f"display-{frame.surface.name}.png"
             Image.frombytes('RGBA', (frame.surface.width, frame.surface.height), frame.rgba).save(out)
             print(f"[+] Display frame captured from guest memory: {frame.surface.name} ({frame.status}) -> {out}")
+            if args.display_output_dir is not None:
+                all_frames = []
+                for surf_key, surf in probe.display.surfaces.items():
+                    sf = probe.capture_display(key=surf_key)
+                    if sf is not None:
+                        meta = sf.metadata()
+                        nz = sum(1 for b in sf.raw if b != 0)
+                        meta['nonzero_bytes'] = nz
+                        if nz > 0 or sf.status == 'written':
+                            sp = args.display_output_dir / f"{surf.name}.png"
+                            Image.frombytes('RGBA', (sf.surface.width, sf.surface.height), sf.rgba).save(sp)
+                            meta['png_path'] = str(sp)
+                        all_frames.append(meta)
+                report['display_all_surfaces'] = all_frames
         else:
             print("[!] Display contract active but no mapped display surface was found.")
     out_file = args.report
@@ -580,6 +612,16 @@ def main():
     tty = getattr(probe, 'tty', None)
     if tty is not None:
         probe.report.setdefault('tty_device', {}).update(tty.describe())
+    gles_dev = getattr(probe, 'gles', None)
+    if gles_dev is not None and getattr(gles_dev, 'sugilite_gpu', None) is not None:
+        report['sugilite_gpu'] = {
+            'engine_completions': gles_dev.engine_completions,
+            'dev_a8_pending': gles_dev.dev_a8,
+            'dev_event_seq': gles_dev.dev_event_seq,
+            'shared_header_zeroed': gles_dev.shared_header_zeroed,
+            'shared_unknown_remaining': len(gles_dev.shared_unknown),
+            **gles_dev.sugilite_gpu.describe(),
+        }
     # Also covers a checkpoint saved under a cap and resumed without the flag; no-op on plain lists.
     probe.finalize_record_logs(report)
     if 'syscall_record_limit' in report:

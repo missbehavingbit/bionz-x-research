@@ -20,7 +20,7 @@ sys.path.insert(0, str(root))
 from tools.research.pack_mod import extract_elf_text, pack_smod, fnv1a_32  # noqa: E402
 
 B = Path(sys.argv[1])
-SHIM = 0x05662760
+SHIM = 0x05662800
 SET_TEXT, SET_MODE = 0x157356D0, 0x1573BA68
 ANCHOR = 0x1615EC40
 MENU, NODES, STUBS, TARGETS, V1CODE = 0x30000000, 0x31000000, 0x32000000, 0x33000000, 0x34000000
@@ -528,9 +528,14 @@ if len(sys.argv) > 4 and layout_aware:
     live = bytes(cam.m.mem_read(base, code_size))
     moved_words = {o: (struct.unpack_from("<I", live, o)[0] - struct.unpack_from("<I", code_file, o)[0]) & 0xFFFFFFFF
                    for o in range(0, code_size, 4) if live[o:o + 4] != code_file[o:o + 4]}
-    want = {0x14: VB, 0x64: OB & 0xFFFFFFFF, 0x4c4: CB, 0xa20: OB & 0xFFFFFFFF}
-    check(all(moved_words.get(o) == d for o, d in want.items()),
-          f"literal words moved by their library ({len(moved_words)} words; view, libObj bss, CautionConfig, trampoline)")
+    # Find known references by value; compiler changes can move literal pools.
+    want = {0x15B91431: VB, 0x0713D000: OB, 0x16C183E8: CB, 0x06309D55: OB}
+    literals = {o: word for o, (word,) in enumerate(struct.iter_unpack("<I", code_file))
+                if word in want or word == 0x06308D31}
+    check(want.keys() <= set(literals.values())
+          and all(moved_words.get(o * 4) == (want.get(value, OB) & 0xFFFFFFFF)
+                  for o, value in literals.items()),
+          f"known references (including the singleton accessor when present) moved by their library")
     check(set(moved_words.values()) <= {VB, OB & 0xFFFFFFFF, CB}, "no word moved by anything else")
     cam.press(0)
     check(all(bytes(cam.m.mem_read(t + OB, 12)) == o for t, o in MTF_HOOKS), "OFF restores both moved prologues")

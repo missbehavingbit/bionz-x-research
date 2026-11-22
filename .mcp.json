@@ -3,13 +3,13 @@
     "pyghidra": {
       "type": "stdio",
       "command": "${SystemRoot}\\System32\\wsl.exe",
-      "args": ["--exec", "/usr/bin/python3", "-u", "-m", "tools.research.mcp_workspace", "pyghidra"],
+      "args": ["--distribution", "REA-Ubuntu-24.04", "--exec", "/usr/bin/python3", "-u", "-m", "tools.research.mcp_workspace", "pyghidra"],
       "tools": ["list_project_binaries", "list_project_binary_metadata", "import_binary", "decompile_function", "list_xrefs", "gen_callgraph", "list_exports", "list_imports", "read_bytes", "search_strings", "search_symbols_by_name", "search_code"]
     },
     "ghidra": {
       "type": "stdio",
       "command": "${SystemRoot}\\System32\\wsl.exe",
-      "args": ["--exec", "/usr/bin/python3", "-u", "-m", "tools.research.mcp_workspace", "ghidra"],
+      "args": ["--distribution", "REA-Ubuntu-24.04", "--exec", "/usr/bin/python3", "-u", "-m", "tools.research.mcp_workspace", "ghidra"],
       "tools": ["get_metadata", "find_functions", "get_entry_points", "get_functions", "get_xrefs_to", "get_function_call_graph", "list_strings", "list_program_items", "create_project", "open_project", "list_projects", "import_file", "list_open_programs", "analyze_dataflow", "analyze_control_flow", "get_struct_layout"]
     },
     "reverify": {

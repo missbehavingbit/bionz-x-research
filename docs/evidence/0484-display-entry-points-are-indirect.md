@@ -105,3 +105,10 @@ Walk the dispatch table: find where `ObjDisplay_Create`'s address is stored, whi
 holds it, and what writes that structure. A direct-call graph cannot answer this; a data-flow
 search from the stored address can, and it is the natural next step rather than a deeper call
 trace.
+
+## Superseded figures (2026-11-20)
+
+[E0663](0663-callgraph-plt-correction-and-real-ipc-table.md) found four decoding defects in the
+call graph used here. The finding of this record stands on thirteen bodies: no direct call
+reaches any `ObjDisplay_*` symbol. The figures do not: the input handler has 4 callees, all named
+(not 15, two named), and the graph has 538,081 calls with 2,785 named at both ends (not 6,713).

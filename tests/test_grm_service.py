@@ -1026,5 +1026,56 @@ class TestGrmMaLegacyCheckpointRestore(unittest.TestCase):
         self.assertNotIn('telemetry', restored.events[-1])
 
 
+class TestGrmMaCapturedWbiDmmPolicy(unittest.TestCase):
+    """Opt-in captured-wbi-dmm WBI nflasha5 OSD A/B and mspace pool contract."""
+
+    def setUp(self):
+        from src.a6400.execution.grm_service import POOL_POLICY_CAPTURED_WBI_DMM
+        self.memory = {}
+        self.msg_ptr = 0x9800
+        self.service = GrmMaService(pool_policy=POOL_POLICY_CAPTURED_WBI_DMM,
+                                    telemetry_policy=TELEMETRY_E0302)
+        self.uipc = _FakeUipc()
+
+    def _reader(self, addr: int, size: int) -> bytes:
+        return bytes(self.memory.get(addr + i, 0) for i in range(size))
+
+    def _writer(self, addr: int, data: bytes):
+        for i, b in enumerate(data):
+            self.memory[addr + i] = b
+
+    def _sync(self, request: bytes) -> bytes:
+        self._writer(self.msg_ptr, request)
+        self.service.handle_uipc_sync_message(self._reader, self._writer, self.msg_ptr, 64)
+        return self._reader(self.msg_ptr, 64)
+
+    def test_sequential_0x4092e_opens_select_osd_a_then_osd_b_and_whole_unit_alloc(self):
+        # DMM async open claims 0x041C then 0x0420; GRM sync open opens OSD A then OSD B.
+        self._writer(self.msg_ptr, _dmm_request(0x4092E, 0x01706003, req_id=1))
+        ev_a = self.service.handle_dmm_message(self._reader, self._writer, self.msg_ptr, self.uipc)
+        self._writer(self.msg_ptr, _dmm_request(0x4092E, 0x01706003, req_id=2))
+        ev_b = self.service.handle_dmm_message(self._reader, self._writer, self.msg_ptr, self.uipc)
+        self.assertEqual(ev_a['phys_base'], '0x23a80000')
+        self.assertEqual(ev_b['phys_base'], '0x23b16000')
+
+        rep_a = self._sync(_open_request(0x4092E))
+        rep_b = self._sync(_open_request(0x4092E))
+        status_a, phys_a, size_a, handle_a = struct.unpack_from('<iIII', rep_a, 28)
+        status_b, phys_b, size_b, handle_b = struct.unpack_from('<iIII', rep_b, 28)
+        self.assertEqual((status_a, phys_a, size_a, handle_a), (0, 0x23A80000, 0x96000, 0x60B7F360))
+        self.assertEqual((status_b, phys_b, size_b, handle_b), (0, 0x23B16000, 0x96000, 0x60B7F2A0))
+
+        # Whole-unit OSD pool returns 0x23A80000 once, rejects second alloc while busy, and re-serves after free.
+        alloc1 = self._sync(_alloc_request(handle_a, 0x96000))
+        self.assertEqual(struct.unpack_from('<iI', alloc1, 16), (0, 0x23A80000))
+        alloc_busy = self._sync(_alloc_request(handle_a, 0x96000))
+        self.assertEqual(struct.unpack_from('<iI', alloc_busy, 16), (-1, 0))
+
+        free_req = struct.pack('<HH5I', 10, 0, handle_a, 0x23A80000, 0, 0, 0).ljust(64, b'\x00')
+        self.assertEqual(struct.unpack_from('<i', self._sync(free_req), 16)[0], 0)
+        alloc2 = self._sync(_alloc_request(handle_a, 0x96000))
+        self.assertEqual(struct.unpack_from('<iI', alloc2, 16), (0, 0x23A80000))
+
+
 if __name__ == '__main__':
     unittest.main()

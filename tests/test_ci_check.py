@@ -10,6 +10,7 @@ from tools.research.ci_check import (
     check_forbidden_files,
     check_markdown_links,
     check_py_compile,
+    check_test_discovery_guard,
     format_markdown_summary,
     iter_relative_markdown_links,
 )
@@ -50,6 +51,32 @@ class TestCiCheck(unittest.TestCase):
             res_size = check_forbidden_files(root, [Path("huge.json")])
             self.assertFalse(res_size.passed)
             self.assertIn("exceeds 2 MiB", res_size.detail)
+
+            (root / "custom_os").mkdir()
+            (root / "custom_os/secret.py").write_text("x = 1\n", encoding="utf-8")
+            res_priv = check_forbidden_files(root, [Path("custom_os/secret.py")])
+            self.assertFalse(res_priv.passed)
+            self.assertIn("forbidden private path", res_priv.detail)
+
+    def test_discovery_guard_rejects_empty_and_bare_function_test_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tests").mkdir()
+            (root / "tests/test_ok.py").write_text(
+                "import unittest\nclass Ok(unittest.TestCase):\n    def test_x(self): pass\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(check_test_discovery_guard(root, [Path("tests/test_ok.py")]).passed)
+
+            (root / "tests/test_empty.py").write_text("", encoding="utf-8")
+            res_empty = check_test_discovery_guard(root, [Path("tests/test_empty.py")])
+            self.assertFalse(res_empty.passed)
+            self.assertIn("no TestCase class", res_empty.detail)
+
+            (root / "tests/test_bare.py").write_text("def test_foo():\n    assert True\n", encoding="utf-8")
+            res_bare = check_test_discovery_guard(root, [Path("tests/test_bare.py")])
+            self.assertFalse(res_bare.passed)
+            self.assertIn("outside TestCase", res_bare.detail)
 
     def test_markdown_links_ignores_code_and_catches_broken_relative_targets(self) -> None:
         sample = "\n".join(

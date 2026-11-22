@@ -1,9 +1,11 @@
 """Offline checks for the QEMU mod development tools (no QEMU, guest or camera access)."""
+import os
 import re
 import struct
 import sys
 import unittest
 from pathlib import Path, PurePosixPath
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "qemu-a6400" / "tools"))
@@ -74,6 +76,78 @@ class ToolbarActions(unittest.TestCase):
         for bad in (b"junk", b"SMOD" + struct.pack("<I", 3) + bytes(60)):
             with self.assertRaises(ValueError):
                 rear_panel.check_smod(bad)
+
+
+class RearControls(unittest.TestCase):
+    def test_wheel_and_lever_bypass_the_timed_key_queue(self):
+        from rear_panel import press_control
+        for name, qcode in (("wheel-left", "bracket_left"), ("wheel-right", "bracket_right"),
+                            ("af-lever", "b"), ("eye-sensor", "e")):
+            with self.subTest(control=name):
+                qmp = Mock()
+                press_control(qmp, name)
+                key = {"type": "qcode", "data": qcode}
+                qmp.command.assert_called_once_with("input-send-event", events=[
+                    {"type": "key", "data": {"key": key, "down": True}},
+                    {"type": "key", "data": {"key": key, "down": False}},
+                ])
+
+    def test_menu_direction_and_af_button_keep_the_debounce_hold(self):
+        from rear_panel import press_control
+        for name, qcode in (("menu", "m"), ("exposure", "down"), ("af-button", "a")):
+            with self.subTest(control=name):
+                qmp = Mock()
+                press_control(qmp, name)
+                qmp.command.assert_called_once_with(
+                    "send-key", keys=[{"type": "qcode", "data": qcode}], **{"hold-time": 180})
+
+    def test_panel_uses_stock_display_selection_unless_diagnostic_lcd_requested(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import rear_panel
+
+        captured_envs = []
+
+        class DummyProc:
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(cmd, **kwargs):
+            captured_envs.append(kwargs["env"])
+            return DummyProc()
+
+        for diagnostic_lcd, expected, timing in (
+            (False, "0", None),
+            (True, "1", "-accel tcg,thread=multi"),
+        ):
+            with self.subTest(diagnostic_lcd=diagnostic_lcd), tempfile.TemporaryDirectory() as tmp:
+                scratch = Path(tmp)
+                args = SimpleNamespace(
+                    log=scratch / "panel.log",
+                    stock=False,
+                    diagnostic_lcd=diagnostic_lcd,
+                    uvc_test=False,
+                    inputs=None,
+                    loader=None,
+                    mod=[],
+                )
+                server = SimpleNamespace(server_port=8640)
+                with patch.dict(os.environ), \
+                        patch.object(rear_panel.subprocess, "Popen", side_effect=fake_popen), \
+                        patch.object(rear_panel, "Qmp", return_value=SimpleNamespace(close=lambda: None)):
+                    os.environ.pop("A6400_TIMING", None)
+                    if timing is not None:
+                        os.environ["A6400_TIMING"] = timing
+                    rear_panel.serve(args, scratch, server)
+                self.assertEqual(captured_envs[-1]["REAR_LCD_DIAGNOSTIC"], expected)
+                self.assertEqual(
+                    captured_envs[-1]["QEMU_EXTRA"].partition(" -qmp ")[0],
+                    timing or "-icount shift=0,sleep=on",
+                )
 
 
 class RelocationTable(unittest.TestCase):

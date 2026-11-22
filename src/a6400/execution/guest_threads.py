@@ -188,7 +188,7 @@ class GuestThreads:
             if self.threads[tid].state == 'runnable':
                 return tid
         waiters = getattr(self, 'timer_waiters', None)
-        if waiters:
+        if waiters and self.threads[self.current_tid].state != 'running':
             # Idle CPU: jump the guest clock to the earliest timer deadline (applied by the probe at its next syscall).
             deadline = min(waiters.values())
             self.clock_floor = max(getattr(self, 'clock_floor', 0), deadline)

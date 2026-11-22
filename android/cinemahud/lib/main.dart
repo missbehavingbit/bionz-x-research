@@ -441,7 +441,7 @@ class _MonitorState extends State<Monitor>
     ),
   );
   Future<void> connectDialog() async {
-    final controller = TextEditingController(text: 'http://127.0.0.1:8080');
+    final controller = TextEditingController(text: '192.168.100.17:9640');
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -456,7 +456,8 @@ class _MonitorState extends State<Monitor>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'USB: connect the Sony camera directly to this phone with an OTG cable. Camera USB mode: PC Remote.',
+                '5 GHz Wi-Fi: direct low-latency TCP stream from a6400-lived (e.g. 192.168.100.17:9640). '
+                'PC Bridge: http://PC-IP:8080. USB: OTG cable in PC Remote mode.',
                 style: TextStyle(fontSize: 12, color: muted),
               ),
               const SizedBox(height: 18),
@@ -464,8 +465,8 @@ class _MonitorState extends State<Monitor>
                 controller: controller,
                 style: const TextStyle(fontSize: 13),
                 decoration: const InputDecoration(
-                  labelText: 'PC bridge address',
-                  hintText: 'http://PC-address:8080',
+                  labelText: 'Camera Wi-Fi (IP:9640) or PC bridge URL',
+                  hintText: '192.168.100.17:9640',
                 ),
               ),
             ],
@@ -483,12 +484,19 @@ class _MonitorState extends State<Monitor>
             },
             child: const Text('PC BRIDGE'),
           ),
-          FilledButton(
+          TextButton(
             onPressed: () {
               Navigator.pop(context);
               unawaited(camera.connect());
             },
             child: const Text('USB CAMERA'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+              unawaited(camera.connect(wifiAddress: controller.text.trim()));
+            },
+            child: const Text('5 GHZ WI-FI'),
           ),
         ],
       ),
@@ -901,7 +909,11 @@ class _MonitorState extends State<Monitor>
                       const SizedBox(width: 6),
                       Text(
                         camera.connected
-                            ? (camera.bridge == null ? 'USB PTP' : 'PC BRIDGE')
+                            ? (camera.isWifiDirect
+                                ? '5 GHZ WI-FI'
+                                : (camera.bridge == null
+                                    ? 'USB PTP'
+                                    : 'PC BRIDGE'))
                             : 'OFFLINE',
                         style: const TextStyle(
                           fontSize: 10,

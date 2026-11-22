@@ -7,8 +7,11 @@ from unittest import mock
 
 from tools.research.a6400a_native_readonly import (
     INQUIRY_CDB, MODEL_CDB, MODEL_REQUEST, A6400A, IDENTITIES, CameraIdentity,
-    admit_request, build_discover, parse_model_info, NativeTransport, ScsiPacket,
+    admit_request, build_discover, parse_model_info, NativeTransport, ScsiCommandError, ScsiPacket,
     SonyBusy, main, probe_identity, read_model_info, select_target,
+)
+from tools.research.a6400a_debugger_presence import (
+    DEBUGGER_CDB, PresenceTransport, probe_debugger_channel,
 )
 
 
@@ -104,6 +107,82 @@ class CommandAdmissionTests(unittest.TestCase):
         self.assertEqual(result["model_info"]["model"], "ILCE-6400A")
         self.assertNotIn("SECR", repr(result))
         self.assertFalse(result["model_info"]["serial_retained"])
+
+
+class DebuggerPresenceTests(unittest.TestCase):
+    def test_default_transport_refuses_channel_before_any_device_ioctl(self):
+        transport = object.__new__(NativeTransport)
+        transport.handle = 1
+        transport._ioctl = mock.Mock()
+        with self.assertRaises(ValueError):
+            transport.exchange(DEBUGGER_CDB, read_size=4096)
+        transport._ioctl.assert_not_called()
+
+    def test_presence_read_uses_one_native_in_transfer_with_the_exact_frame_bound(self):
+        transport = object.__new__(PresenceTransport)
+        transport.handle = 1
+        transport.operations = []
+        calls = []
+
+        def missing_channel(code, input_buffer, input_size, output_buffer, output_size):
+            packet = ctypes.cast(output_buffer, ctypes.POINTER(ScsiPacket)).contents
+            calls.append((packet.sptd.DataIn, packet.sptd.DataTransferLength,
+                          bytes(packet.sptd.Cdb)[:packet.sptd.CdbLength]))
+            packet.sptd.ScsiStatus = 2
+            packet.sptd.DataTransferLength = 0
+            packet.sense[2], packet.sense[12], packet.sense[13] = 5, 0x20, 0
+
+        transport._ioctl = missing_channel
+        result = probe_debugger_channel(transport)
+        self.assertEqual(calls, [(1, 4096, DEBUGGER_CDB)])
+        self.assertEqual(len(transport.operations), 1)
+        self.assertEqual(result["status"], "illegal_command_no_usable_channel")
+        self.assertFalse(result["debugger_verified"])
+
+    def test_presence_transport_refuses_out_other_sizes_and_storage_commands(self):
+        transport = object.__new__(PresenceTransport)
+        transport.handle = 1
+        transport._ioctl = mock.Mock()
+        for command, data_out, read_size in (
+                (DEBUGGER_CDB, bytes(4096), 0), (DEBUGGER_CDB, None, 512),
+                (b"\x7a\x24" + bytes(10), None, 4096),
+                (b"\x28" + bytes(9), None, 4096), (b"\x2a" + bytes(9), bytes(4096), 0)):
+            with self.subTest(command=command, read_size=read_size), self.assertRaises(ValueError):
+                transport.exchange(command, data_out=data_out, read_size=read_size)
+        transport._ioctl.assert_not_called()
+
+    def test_missing_or_busy_channel_is_one_observation_not_a_debugger(self):
+        for error, expected in (
+                (ScsiCommandError(2, [5, 0x20, 0], 0), "illegal_command_no_usable_channel"),
+                (SonyBusy("busy"), "sony_busy_no_in_response")):
+            with self.subTest(expected=expected):
+                transport = mock.Mock()
+                transport.exchange.side_effect = error
+                result = probe_debugger_channel(transport)
+                self.assertEqual(result["status"], expected)
+                self.assertFalse(result["debugger_verified"])
+                transport.exchange.assert_called_once_with(DEBUGGER_CDB, read_size=4096)
+
+    def test_other_sense_or_partial_illegal_command_is_not_reinterpreted(self):
+        for error in (ScsiCommandError(2, [6, 0x29, 0], 0),
+                      ScsiCommandError(2, [5, 0x20, 0], 4), OSError("transport failed")):
+            with self.subTest(error=error):
+                transport = mock.Mock()
+                transport.exchange.side_effect = error
+                with self.assertRaises(type(error)):
+                    probe_debugger_channel(transport)
+                self.assertEqual(transport.exchange.call_count, 1)
+
+    def test_unsolicited_response_is_not_a_handshake_and_short_data_is_rejected(self):
+        transport = mock.Mock()
+        transport.exchange.return_value = bytes(4096)
+        result = probe_debugger_channel(transport)
+        self.assertEqual(result["status"], "response_available_not_a_handshake")
+        self.assertFalse(result["debugger_verified"])
+        self.assertEqual(result["response_bytes"], 4096)
+        transport.exchange.return_value = bytes(32)
+        with self.assertRaisesRegex(ValueError, "Short debugger-channel"):
+            probe_debugger_channel(transport)
 
 
 class ModelResponseTests(unittest.TestCase):

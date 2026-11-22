@@ -1,6 +1,10 @@
 # Local runtime and caches
 venv/
 .venv/
+.venv-gui/
+.venv-packager/
+.venv-debugger/
+.cache/
 __pycache__/
 *.py[cod]
 /hs_err_pid*.log
@@ -97,3 +101,5 @@ android-client-ref/.gradle/
 
 # Private Custom OS repository (separate nested Git repo)
 /custom_os/
+
+/qemu-a6400/zve10-menu.inputs.local.json

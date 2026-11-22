@@ -1,7 +1,7 @@
-/* Mod Loader v2 shim: /usr/lib/libtestcmd.so RX zero tail (live 0x0566275c..0x05663000). */
+/* Mod Loader v2 shim: /usr/lib/libtestcmd.so RX zero tail (0x05662800..0x05663000, clears FW 2.00 EOF 0x2790). */
 SECTIONS
 {
-    . = 0x05662760;
+    . = 0x05662800;
     .text : {
         *(.text.slot)
         *(.text.slotb)

@@ -35,17 +35,29 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define SHIM_ADDR       0x05662760u
-#define SHIM_CAP        2208u
-#define HOOK_SET_ROOT   0x15b91654u
-#define HOOK_REFRESH    0x15b91a80u
-#define HOOK_OPEN_ITEM  0x15b92044u
-#define RECT_TBL1_SLOT6 0x15de8a04u
-#define RECT_TBL2_SLOT6 0x15de8a84u
-#define REQ_MAGIC       0x5132484du /* "ML2Q" */
-#define REF_VIEW_BASE   0x155e6000u
-#define REF_TESTCMD_BASE 0x05660000u
-#define MAX_RELOCS      256u
+#define SHIM_ADDR             0x05662800u
+#define SHIM_CAP              2048u
+#define REQ_MAGIC             0x5132484du /* "ML2Q" */
+#define REF_VIEW_BASE         0x155e6000u
+#define REF_TESTCMD_BASE      0x05660000u
+#ifdef MLV2_TARGET_A6100
+#define HOOK_SET_ROOT         (REF_VIEW_BASE + 0x5acc0cu)
+#define HOOK_REFRESH          (REF_VIEW_BASE + 0x5ad038u)
+#define HOOK_OPEN_ITEM        (REF_VIEW_BASE + 0x5ad5fcu)
+#define RECT_TBL1_SLOT6       (REF_VIEW_BASE + 0x803984u)
+#define RECT_TBL2_SLOT6       (REF_VIEW_BASE + 0x803a04u)
+#define RECT_TBL1_SLOT6_FW200 (REF_VIEW_BASE + 0x803984u)
+#define RECT_TBL2_SLOT6_FW200 (REF_VIEW_BASE + 0x803a04u)
+#else
+#define HOOK_SET_ROOT         0x15b91654u
+#define HOOK_REFRESH          0x15b91a80u
+#define HOOK_OPEN_ITEM        0x15b92044u
+#define RECT_TBL1_SLOT6       0x15de8a04u
+#define RECT_TBL2_SLOT6       0x15de8a84u
+#define RECT_TBL1_SLOT6_FW200 0x15de8a64u
+#define RECT_TBL2_SLOT6_FW200 0x15de8ae4u
+#endif
+#define MAX_RELOCS            256u
 
 static const unsigned char orig_set_root[16] = {
     0x04, 0x46, 0x00, 0xaf, 0x51, 0xb1, 0x00, 0xf5, 0xc2, 0x33, 0x03, 0xf5, 0x2b, 0x73, 0x19, 0x60};
@@ -53,6 +65,10 @@ static const unsigned char orig_refresh[16] = {
     0x2d, 0xe9, 0xf0, 0x4f, 0x9b, 0xb0, 0x06, 0xaf, 0x04, 0x46, 0x07, 0xf1, 0x20, 0x00, 0x4f, 0xf0};
 static const unsigned char orig_open_item[12] = {
     0x00, 0xf5, 0xc2, 0x33, 0x03, 0xf5, 0x2c, 0x73, 0x2d, 0xe9, 0xf0, 0x43};
+static const unsigned char orig_rect_prefix[48] = {
+    0x11, 0x00, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00, 0x67, 0x00, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00,
+    0xbd, 0x00, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00, 0x13, 0x01, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00,
+    0x69, 0x01, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00, 0xbf, 0x01, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00};
 static const unsigned char orig_rect[8] = {0};
 static const unsigned char patch_rect[8] = {0x15, 0x02, 0x00, 0x00, 0x5b, 0x00, 0x42, 0x00};
 
@@ -267,7 +283,7 @@ static int find_target(void) {
 static int maps_ok(void) {
     return mapped(SHIM_AT, SHIM_CAP, "/libtestcmd.so", "x") &&
            mapped(V(HOOK_SET_ROOT), V(HOOK_OPEN_ITEM) + 16 - V(HOOK_SET_ROOT), "/viewUnified2.so", "x") &&
-           mapped(V(RECT_TBL1_SLOT6), V(RECT_TBL2_SLOT6) + 8 - V(RECT_TBL1_SLOT6), "/viewUnified2.so", "");
+           mapped(V(RECT_TBL1_SLOT6), V(RECT_TBL2_SLOT6_FW200) + 8 - V(RECT_TBL1_SLOT6), "/viewUnified2.so", "");
 }
 
 /* "fnv FILE": size and FNV-1a of a file, for checking transfers on guests without hash tools. */
@@ -345,13 +361,24 @@ int main(int argc, char **argv) {
     if (strcmp(cave, "zero")) { result = -12; goto done; }
     if ((op == 1 && strcmp(state, "stock")) || (op == 2 && strcmp(state, "v1"))) { result = -13; goto done; }
     const unsigned char *rect_from = op == 1 ? orig_rect : patch_rect;
-    if (memcmp(cur_rect1, rect_from, 8) || memcmp(cur_rect2, rect_from, 8)) { result = -14; goto done; }
+    uint32_t rect1_addr = V(RECT_TBL1_SLOT6), rect2_addr = V(RECT_TBL2_SLOT6);
+    if (memcmp(cur_rect1, rect_from, 8) || memcmp(cur_rect2, rect_from, 8)) {
+        unsigned char pre1[48], pre2[48], fw_r1[8], fw_r2[8];
+        if (readmem(fd, V(RECT_TBL1_SLOT6_FW200) - 48u, pre1, 48) ||
+            readmem(fd, V(RECT_TBL1_SLOT6_FW200), fw_r1, 8) ||
+            readmem(fd, V(RECT_TBL2_SLOT6_FW200) - 48u, pre2, 48) ||
+            readmem(fd, V(RECT_TBL2_SLOT6_FW200), fw_r2, 8)) { result = -11; goto done; }
+        if (memcmp(pre1, orig_rect_prefix, 48) || memcmp(pre2, orig_rect_prefix, 48) ||
+            memcmp(fw_r1, rect_from, 8) || memcmp(fw_r2, rect_from, 8)) { result = -14; goto done; }
+        rect1_addr = V(RECT_TBL1_SLOT6_FW200);
+        rect2_addr = V(RECT_TBL2_SLOT6_FW200);
+    }
     if ((result = pcs_clear())) goto done;
 
     struct patch plan[6] = {
         {SHIM_AT, h[3], zeros, shim},
-        {V(RECT_TBL1_SLOT6), 8, rect_from, patch_rect},
-        {V(RECT_TBL2_SLOT6), 8, rect_from, patch_rect},
+        {rect1_addr, 8, rect_from, patch_rect},
+        {rect2_addr, 8, rect_from, patch_rect},
         {V(HOOK_SET_ROOT), 16, op == 1 ? orig_set_root : v1_sr, v2_sr},
         {V(HOOK_REFRESH), 16, op == 1 ? orig_refresh : v1_rf, v2_rf},
         {V(HOOK_OPEN_ITEM), 12, op == 1 ? orig_open_item : v1_oi, v2_oi},

@@ -1,6 +1,38 @@
 # QEMU `sony-a6400`: findings and next steps
 
 **Declared stimulus:** opt-in, default-off `gate-force-probe=on` (`GATE_FORCE_PROBE=1`) one-shot patches the exact av-cam step-26 producer cbz at PA `0x03874fd0` to a NOP (`cond. PROBE gate-force`), not a fix.
+**Declared stimulus:** opt-in, default-off `entry-force-probe=on` (`ENTRY_FORCE_PROBE=1`) makes the first av-cam entry take the r0 = 1 path while the camera-control state is 240 (`cond. PROBE entry-force`), not a fix.
+
+## PL011 UART3 at 0xF2003000 (2026-11-21 / L0098)
+
+The stock kernel's udif table (VA `0x604DB3D4`, name pointer `0x6044A054` =
+`"uart3"`) gives base `0xF2003000` (`0x604DB4C8`), end `0xF2003FFF`
+(`0x604DB4CC`) and IRQ `120` (`0x78` at `+0x128`, `0x604DB4FC`). The camera's
+`/proc/interrupts` agrees: GIC 120 is `cxd900x0-uart` (25,253 hits), while
+IRQ 150 is `liro-150` with 0 hits (QEMU's certified boot still registers
+UART0/`ttyAM0` on IRQ 150). The `uart_devs[3]` AMBA probe read the PrimeCell ID block at
+`0xF2003FE0..0xF2003FFC` through the `cxd90045.unmodelled` catch-all (eight
+32-bit reads, offsets `0x2003FE0..0x2003FFC`) and got 0, so the baseline
+serial console says `cxd900x0_init: amba_device_register(uart_devs[3])
+failed.` (120 s baseline, line 78).
+
+The board now maps a second stock PL011 at `0xF2003000` (size `0x1000`, GIC
+SPI 88 = IRQ 120, `serial_hd(1)` = NULL because only one `-serial` is
+passed); UART0/console is unchanged. No wrapper is needed: QEMU's `pl011`
+already returns the kernel's expected IDs, PID `0x00141011` and CID
+`0xB105F00D`. qtest (`tests/test_qemu_uart3.py`, qemu sha256
+`5708b5f9…f43d9`) reads both devices' IDs, checks UART0's idle flag register
+(`0x90`), and uses an unowned page (`0xF2004000`) as the catch-all positive
+control; 7/7 checks pass.
+
+A 120 s boot with the certified env (qemu sha256 `5708b5f9…f43d9`, model
+sha256 `e668e8d6…3d9`) now logs `uart3: ttyAM1 at MMIO 0xf2003000 (irq = 120)
+is a AMBA/PL011` and no `amba_device_register` failure. Against a same-commit
+baseline (qemu sha256 `204b4d08…734de7`), exactly the eight ID reads retire
+(87 -> 79 distinct catch-all read offsets; 627 writes unchanged; no new
+offset), and the final sequencer state is identical (index 42, step
+`0x897F`, status/mirror `0x0102`, top/b5_top/b5_opd 1, 43 steps). Console and
+all other devices are untouched.
 
 ## Opt-in bus error in the reserved first MiB (2026-11-19 / E0647)
 
@@ -89,6 +121,20 @@ boot stays at step 26 while unmodelled addresses fall from 2,322 to 1,310.
 The model is on by default; opt-in live view still overlays it at priority
 -400. Not re-run here and not checked on a physical camera. See
 [E0637](../docs/evidence/0637-camcore-f301-contributor-boot-score.md).
+
+## CamCore 0xF3020800 window (2026-11-21 / L0090)
+
+The certified baseline 120 s boot logs 90 distinct catch-all pairs at
+`0xF3020800..0xF3020BFF`, the 1 KiB after the 0x800-byte AIF model at
+`0xF3020000`: 89 write-only offsets and one read-modify-write word `+0xB80`.
+`cxd90045-camcore` now mounts a 0x400-byte sub-window there (priority -600) with
+one block-relative rule per offset: Z0 for the write-only offsets, RF for
+`+0xB80` (all 74 reads are followed by a write; readers `0x63784AB4/0x63784A74`).
+An offset without a rule inside the window still logs as unmodelled. The
+post-change boot has 0 catch-all pairs in the window and the same final
+sequencer state (`index 42`, `step 0x897F`, `status/mirror 0x0102`,
+`top/b5_top/b5_opd 1`, 43 steps); qtest 7/7 (a ruled write is silent, the
+unruled `+0xBF0` still logs).
 
 ## Contributor boot scores for merged emulator patches (2026-11-19 / E0614–E0618)
 
@@ -484,8 +530,16 @@ uses captured firmware and opt-in `LIVEVIEW_SOURCE`. Sgc1 raster end drives
 guest-armed CamPig completion; original firmware publishes and consumes fresh
 Ydet records. Guest-launched RC0 DMA fills ch51 and the rear LCD shows the
 exact test chart outside the OSD. A matched phase-only boot had black video.
-The captured sequencer still waits at step 26 (`0x0323`/`0x0320`); this does
-not verify release of the older packaged step-32 wait.
+The [separate packaged replay](../docs/evidence/0591-qemu-a6400-first-live-view-frame.md#separate-sequencer-replays-2026-11-19)
+holds step 32 (`0x032E`/`0x0326`) with the phase-only control. With bars,
+the original guard reads 1 and reaches step 42. The reconstructed replay uses
+the packaged ORIL and preset rather than the historical disk image. With
+the frozen sub-micro reply, captured settings wait at step 26
+(`0x0323`/`0x0320`) on a separate original lens-state predicate. With the opt-in
+[lens rail reply](../docs/evidence/0591-qemu-a6400-first-live-view-frame.md#captured-step-26-sub-micro-lens-rail-acknowledgement),
+the captured replay's original guard accepts `0x0323` and advances to
+step 42. The matched frozen-reply control stays at 26 with fresh Ydet.
+This models the supply status only, not lens communication or autofocus.
 
 **Rear-monitor milestone:** [E0572](../docs/evidence/0572-qemu-a6400-rear-lcd-layout-on-panel.md)
 captures the original `LayoutST_NORMAL_WITH_INFO_LR` on QEMU console 0
@@ -500,17 +554,97 @@ sub-micro and TPU paths. The original firmware opens MENU and responds to
 directional and center input, including a normal center press to dismiss
 the NTSC notice in the live-view replay.
 
+The [E0573 follow-up](../docs/evidence/0573-qemu-a6400-rear-panel-controls.md#2026-11-18-follow-up)
+removes the panel's virtual-time hold queue from wheel turns and selector
+toggles. The [stock wheel follow-up](../docs/evidence/0573-qemu-a6400-rear-panel-controls.md#follow-up-stock-wheel-detents-2026-11-19)
+verifies opposite selection moves with four native TPU phase counts per
+detent. AF/MF--AEL switch and button input reach the driver; an application
+action in both positions remains unverified.
+
 [E0574](../docs/evidence/0574-qemu-a6400-blank-panel-recovery.md) confirmed
 the panel was receiving real black frames in a long-running instance.
 A fresh instance recovered the original menu. In a separate replay,
 boot-time blanks had zero ch53 base and both OSD buffers were empty.
-The late blank still needs a same-run register and buffer capture.
+
+[E0651](../docs/evidence/0651-qemu-a6400-stock-finder-monitor-rear-lcd.md)
+identifies GPIO `P0.2` (`Backup` `0x00F90427/28`, polled by `av-cam`
+`0x6361ac28` -> `KEY_OTHER_EYE_CONTACT = 0x708B`) as the active-low EVF eye
+sensor. With `P0.2` idled high by `REAR_CONTROLS=1`, unmodified firmware
+(`REAR_LCD_DIAGNOSTIC=0`) returns `1` from `0x40a374`, passes device `1` to
+`0x40aa5c`, sets manager device `0` at `0x40fde4`, and renders the rear-LCD
+layouts (`LayoutST_NORMAL_WITH_INFO_LR`, `LayoutST_NORMAL_INFO_OFF_LR`,
+`LayoutST_NORMAL_LEVEL_LR`) via stock `FINDER/MONITOR` (`Auto` and
+`Monitor(Manual)`). `rear_panel.py` now defaults to stock selection.
+
+[E0652](../docs/evidence/0652-qemu-a6400-late-black-screen-scanout-capture.md)
+captures VPH/SYSV registers and both OSD buffers across the late black-screen
+failure: when `Power Save Start Time` expires with `Bluetooth Rmt Ctrl` `Off`,
+the guest logs `EV OFF add_off_factor: 0x8`, runs `EV SET_PANEL_OUT`, clears
+`0xf3440144` bits 0/1 to `0x3000230`, zero-fills active `ch53` buffer A
+(`0x23a80000`) while leaving backbuffer B (`0x23b16000`) stale, deactivates
+`modelCamera`, and blocks in `Mt F00_010_libObj.so`. QEMU's VPH/SYSV scanout
+continues running; the guest stopped drawing.
+
+The [S1 follow-up](../docs/evidence/0652-qemu-a6400-late-black-screen-scanout-capture.md#follow-up-body-shutter-input-and-save-boundary)
+returns the stock shooting OSD after Auto Power Save with half-press on
+`P0.1`. MENU did not wake the display, and the OSD stayed visible after S1
+release. Captured step 26 was unchanged. The stock menu setting changed
+in the UI, and the [explicit native commit](../docs/evidence/0652-qemu-a6400-late-black-screen-scanout-capture.md#follow-up-settings-survive-an-explicit-native-commit-2026-11-19)
+wrote `Backup.bin`; a fresh process restored the identical `Off` menu
+from those persisted bytes. Automatic power-off commit and
+application-level AF/MF--AEL behavior remain unverified.
 
 [E0575](../docs/evidence/0575-qemu-mod-loader-v2-compatibility-boundary.md)
 qualifies the Mod Loader v2 target mismatch. QEMU runs `im.elf` as PID 144
 in the observed boot, with Sony library bases different from the current
 physical guard. Its unchanged ARM check returns `-5 identity/maps` in
 the guest. See [the mod development workflow](MOD_DEVELOPMENT.md).
+
+## Virtual removable media (2026-11-18 / E0650)
+
+[E0650](../docs/evidence/0650-qemu-virtual-media-gates.md) adds an opt-in
+MMC0 slot with QMP insertion/ejection. The native SD test verifies active-low
+`MODEREAD` bit 24 and sector persistence after process restart without changing
+internal eMMC. With live sub-micro slot A detect and the correct absent
+Memory Stick bit, the stock driver now registers `mmca10p1` and the file
+service mounts `/dev/mmca`. Initial replays read sectors covering the
+seeded JPEG but queued the second `ModelBrowser` initialization behind
+recorder teardown. The initial mounted shutter trial issued no SD writes.
+Separately, a checked opt-in `IDT_CAM` preload supplies the original
+auxiliary image at PA `0x20152000`. It resolves the captured final
+step-42 mismatch (`0x0102` wanted, `0x0118` reported): original
+`IDT_TOP` initializes, `IDT_OPD` is armed, module 1 reports `0x0102`,
+and the native sequencer clears the stage. The internal `0x0302`
+notification is sent and dequeued. The opt-in `DDRB_CONTROL=1` model
+services the subsequent native UPM idle-to-active transition: DMM
+returns the allocation-rule reply, the native EE acknowledgement opens
+the camera's deferred queue, and the second stock `ModelBrowser`
+initialization completes in a mounted run. The firmware prepares an
+image database on the disposable SD. Separately, `DFS_CONTROL=1`
+completes the observed clock switch at `0xF2916000`, allowing native
+UPM and DMM rule 0 to return. The stock Folder View now finds the seed
+and reaches the still decoder filter. `ZMA1_STARTUP=1` recognizes the
+original boot program and supplies its startup interrupt. With
+`ZMA1_JPEG_FILL=1`, the separate native DGI fill callback completes and
+its wait returns success. The firmware still does not display the
+seeded JPEG; the stock LCD says **Unable to display**. Recorder teardown
+can retain a pin `0xB` reference. Opt-in `SHUTTER_EDGE_IRQ=1` latches the
+two body GPIO pulses in the virtual GIC. With that policy, two mounted JPEG
+self-timer runs reach the original `STILL_CAPTURE_START_CMD` before release;
+no capture completion, encoding or new photo is verified.
+The virtual OHCI Mass Storage
+test proves enumeration and basic reads for a non-Sony fixture; the Sony
+DWC3 gadget remains a separate prerequisite for USB-dependent mods.
+See [scenario instructions](README.md#offline-sd-and-usb-scenarios).
+
+The DFS build passes 50 focused checks. QEMU `ba71c8f8e5eb...` passes
+all six native live-view/DDR/DFS/SA tests; the full WSL suite reports
+2,187 tests with 78 skips and no failures. After the body shutter edge
+policy, `1858a1bb7de7...` passes 52 focused checks and full discovery runs
+2,188 tests (78 skipped, no failures).
+An earlier WSL run had one Unicorn virtual-TLB assertion failure; the
+isolated test and final suite passed without a change to that test.
+The captured eMMC, ORIL, and original virtual SD fixture re-hash unchanged.
 
 ## Captured-input qualification (2026-11-16 / E0524)
 

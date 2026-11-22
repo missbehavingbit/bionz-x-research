@@ -25,12 +25,12 @@ def main():
             sym = dyn.get_symbol(r['r_info_sym'])
             plt_syms.append((r['r_offset'], sym.name))
         
-        # In ARM ELF, PLT entries start at .plt section sh_addr + 20, 12 bytes each
-        plt_sec = elf.get_section_by_name('.plt')
-        plt_base = plt_sec['sh_addr']
-        for i, (got_offset, name) in enumerate(plt_syms):
-            call_addr = plt_base + 20 + i * 12
-            print(f"  PLT {hex(call_addr)} (GOT {hex(got_offset)}): {name}")
+        # Entries are not a fixed 12 bytes apart: a Thumb-reached entry carries a 4-byte
+        # "bx pc; nop" prefix, so a stride table names 51 of im.elf's 58 entries wrongly (E0663).
+        # Decode each entry's own GOT slot instead.
+        from tools.research.arm_plt import resolve_arm_plt
+        for call_addr, entry in sorted(resolve_arm_plt(elf).items()):
+            print(f"  PLT {hex(call_addr)} (GOT {hex(entry['got'])}): {entry['name']}")
         elf = ELFFile(f)
         text_sec = elf.get_section_by_name('.text')
         text_data = text_sec.data()

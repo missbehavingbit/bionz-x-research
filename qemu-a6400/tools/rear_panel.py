@@ -135,7 +135,23 @@ KEYS = {
     "wheel-right": "bracket_right",
     "play": "p",
     "delete": "delete",
+    "eye-sensor": "e",
+    "shutter-half": "s",
+    "shutter-full": "spc",
+    "power-lever": "power",
 }
+
+
+def press_control(qmp, name):
+    key = {"type": "qcode", "data": KEYS[name]}
+    if name in ("wheel-left", "wheel-right", "af-lever", "eye-sensor", "power-lever"):
+        # These latch on key-down; don't queue them behind virtual-time key holds.
+        qmp.command("input-send-event", events=[
+            {"type": "key", "data": {"key": key, "down": down}}
+            for down in (True, False)
+        ])
+    else:
+        qmp.command("send-key", keys=[key], **{"hold-time": 180})
 
 
 class Qmp:
@@ -212,12 +228,11 @@ def serve(args, scratch, server):
     monitor = scratch / "qmp"
     frame = scratch / "lcd.ppm"
     origin = f"http://127.0.0.1:{server.server_port}"
+    timing = os.environ.get("A6400_TIMING", "-icount shift=0,sleep=on")
     env = dict(os.environ, RUN_DIR=str(scratch / "run"), TIMEOUT="0",
-               REAR_CONTROLS="1", REAR_LCD_DIAGNOSTIC=str(int(not args.stock)),
-               QEMU_EXTRA=f"{os.environ.get('A6400_TIMING', '-icount shift=0,sleep=on')} "
-                          f"-qmp unix:{monitor},server=on,wait=off")
-    # A6400_TIMING overrides the timing options (default icount, E0522 section 0.6), for example
-    # A6400_TIMING="-accel tcg,thread=multi" for multi-threaded TCG speed measurements.
+               REAR_CONTROLS="1",
+               REAR_LCD_DIAGNOSTIC=str(int(bool(getattr(args, "diagnostic_lcd", False)))),
+               QEMU_EXTRA=f"{timing} -qmp unix:{monitor},server=on,wait=off")
     if args.inputs:
         env["A6400_QEMU_DATA_DIR"] = str(moddev.ensure_linux_inputs(args.inputs))
         env["ULOGIO"] = ""                    # the captured /setting already has its ulogio.bin
@@ -284,7 +299,7 @@ def serve(args, scratch, server):
                 console = moddev.Console(scratch / "serial", args.log.with_suffix(".serial.log"), process)
 
                 def nudge():
-                    qmp.command("send-key", keys=[{"type": "qcode", "data": KEYS["menu"]}], **{"hold-time": 180})
+                    press_control(qmp, "menu")
 
                 extra_files = []
                 setup_cmds = []
@@ -383,8 +398,7 @@ def serve(args, scratch, server):
                     return
                 name = path.removeprefix("/press/")
                 if path == f"/press/{name}" and name in KEYS:
-                    qmp.command("send-key", keys=[{"type": "qcode", "data": KEYS[name]}],
-                                **{"hold-time": 180})
+                    press_control(qmp, name)
                     handler.reply("text/plain", b"")
                 elif path in ("/emu/pause", "/emu/resume"):
                     qmp.command("stop" if path == "/emu/pause" else "cont")
@@ -527,7 +541,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8640)
     parser.add_argument("--log", type=Path, required=True, help="New QEMU serial log path")
-    parser.add_argument("--stock", action="store_true", help="Use the stock firmware display selection")
+    parser.add_argument("--stock", action="store_true", help="Use the stock firmware display selection (default)")
+    parser.add_argument("--diagnostic-lcd", action="store_true",
+                        help="Apply the E0572 diagnostic display-controller sector edit on the disposable overlay")
     parser.add_argument("--inputs", type=Path, help="Prepared camera-captured inputs (qemu_boot_inputs prepare)")
     parser.add_argument("--loader", type=Path, help="Mod Loader v2 build directory to install and watch")
     parser.add_argument("--mod", type=Path, action="append", default=[], help="SMOD file to load and hot-reload")

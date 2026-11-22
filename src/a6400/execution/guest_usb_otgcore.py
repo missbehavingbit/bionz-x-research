@@ -64,6 +64,11 @@ Reply provenance (E0299 task-7):
     - SET_SELECT_PORT with a non-zero port index (needs the hardware port
       count in driver byte+0x2c).
 
+The diagnostic original-process runner can explicitly scope a captured ARM
+FUSB guard to this policy. It executes SET_MODE's actual callback and either
+returns the original gate-clear EBUSY or stops before the unmodelled UDC call.
+The experimental guard is not attached by default or saved in checkpoints.
+
 Gadget function-descriptor table (E0303 / task C5): the opt-in
 ``function_policy='descriptor-table'`` (``configured_functions=('mass-storage',)``
 by default) parses the verified 64-byte SET_CONFIG layout and selects functions
@@ -853,6 +858,15 @@ class GuestUsbOtgCore:
                                           'name': 'USB_OTGCORE_IOCTL_SET_MODE',
                                           'mode': mode, 'returned': -22})
                 return -22
+            captured = getattr(self, 'captured_fusb_startup', None)
+            if captured is not None:
+                self._require_captured_fusb_state(cmd)
+                observation = captured.set_mode(mode)
+                self.transactions.append({
+                    'operation': 'ioctl', 'cmd': cmd,
+                    'name': 'USB_OTGCORE_IOCTL_SET_MODE',
+                    'source': 'captured-kernel-arm-callback', **observation})
+                return observation['returned']
             raise UnsupportedUsbOtgCore(
                 'usb_otgcore_set_mode_reply_not_derivable',
                 cmd=cmd,
@@ -860,12 +874,11 @@ class GuestUsbOtgCore:
                 arg=arg,
                 requested_size=1,
                 request_field=f'mode={mode}',
-                reply_layout='int32 return of driver ops vtable +0x3c (r1=mode-1)',
+                reply_layout='int32 return of driver ops vtable +0x3c (r1=2-mode)',
                 kernel_evidence=('vmlinux usb_otgcore_ioctl 0x602b7bd0: copy 1 byte; '
                                  'store driver+0x2e; call driver->ops[+0x3c]; return that result'),
-                missing_evidence=('the UDC driver ops object registered with usb_otgcore is '
-                                  'not located in retained evidence; its return depends on '
-                                  'gadget controller state'))
+                missing_evidence=('no identity-qualified FUSB callback and bound-controller '
+                                  'state are supplied by this policy'))
 
         if cmd == USB_OTGCORE_IOCTL_SET_FLAG:
             self._check_user_pointer(arg)
@@ -969,6 +982,23 @@ class GuestUsbOtgCore:
                                       'name': 'CMD_0xe312', 'returned': 0})
             return 0
 
+        captured = getattr(self, 'captured_fusb_startup', None)
+        if cmd == USB_OTGCORE_IOCTL_CMD_0XE305 and captured is not None:
+            self._require_captured_fusb_state(cmd)
+            if captured.requested_mode != 2:
+                raise UnsupportedUsbOtgCore('usb_otgcore_captured_gadget_mode_not_selected',
+                                            cmd=cmd, arg=arg, mode=captured.requested_mode)
+            observation = captured.start_guard()
+            returned = 'returned' in observation
+            self.transactions.append({'operation': 'ioctl' if returned else 'boundary', 'cmd': cmd,
+                                      'source': 'e0597-connected-start-guard', **observation})
+            if returned:
+                return observation['returned']
+            reason = ('usb_otgcore_outer_cache_sync_unmodelled' if 'l2x0_sync_address' in observation
+                      else 'usb_otgcore_dwc3_gadget_probe_unmodelled')
+            raise UnsupportedUsbOtgCore(reason,
+                                        cmd=cmd, arg=arg, **observation)
+
         if cmd in USB_OTGCORE_VERIFIED_CALLBACK_BOUNDARY_COMMANDS:
             raise UnsupportedUsbOtgCore(
                 'usb_otgcore_driver_callback_reply_not_derivable',
@@ -986,6 +1016,15 @@ class GuestUsbOtgCore:
         self.transactions.append({'operation': 'ioctl', 'cmd': cmd, 'name': 'UNKNOWN',
                                   'returned': -25})
         return -25
+
+    def _require_captured_fusb_state(self, cmd):
+        if (not self.started or self.port_desc is None or self.selected_port != 0
+                or len(self.owners) != 1
+                or next(iter(self.owners.values()))['flags'] != 2):
+            raise UnsupportedUsbOtgCore('usb_otgcore_captured_startup_state_mismatch',
+                                        cmd=cmd, started=self.started,
+                                        selected_port=self.selected_port,
+                                        owners=len(self.owners))
 
     # ------------------------------------------- gadget function selection
     @staticmethod

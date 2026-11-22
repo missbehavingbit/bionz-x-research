@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import queue
 import subprocess
 import threading
@@ -40,18 +40,36 @@ def wsl_path(path):
     return '/mnt/' + path.drive[0].lower() + path.as_posix()[2:]
 
 
+def session_command(profile=None):
+    launcher = os.environ.get('A6400_REA_LAUNCHER')
+    if launcher is not None:
+        if not PurePosixPath(launcher).is_absolute() or '\0' in launcher:
+            raise ValueError('A6400_REA_LAUNCHER must be an absolute Linux executable path')
+        command = [launcher, 'mcp']
+    else:
+        profile = rea_profile() if profile is None else profile
+        command = [
+            'env',
+            'GHIDRA_INSTALL_DIR=' + profile['ghidra'],
+            'JAVA_HOME=' + profile['java'],
+            'REA_GHIDRA_STARTUP_TIMEOUT_MS=330000', profile['node'],
+            profile['entry'], '--mcp']
+    if os.name != 'posix':
+        distribution = os.environ.get('A6400_REA_WSL_DISTRO')
+        prefix = ['wsl.exe']
+        if distribution is not None:
+            if not distribution.strip() or '\0' in distribution:
+                raise ValueError('A6400_REA_WSL_DISTRO must name an installed WSL distribution')
+            prefix += ['--distribution', distribution]
+        command = prefix + ['--exec'] + command
+    return command
+
+
 class Session:
     def __init__(self, stderr, toolchain=None):
         self.toolchain = rea_profile(toolchain)
-        command = [
-            'env',
-            'GHIDRA_INSTALL_DIR=' + self.toolchain['ghidra'],
-            'JAVA_HOME=' + self.toolchain['java'],
-            'REA_GHIDRA_STARTUP_TIMEOUT_MS=330000', self.toolchain['node'],
-            self.toolchain['entry'], '--mcp']
-        if os.name != 'posix':
-            command = ['wsl.exe', '--exec'] + command
-        self.process = subprocess.Popen(command,
+        self.command = session_command(self.toolchain)
+        self.process = subprocess.Popen(self.command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr)
         self.messages = queue.Queue()
         self.ident = 0
@@ -158,6 +176,7 @@ def main():
                     else:
                         if session is None:
                             session = Session(stderr, toolchain=args.toolchain)
+                            report['launch_command'] = session.command
                             save('initialize.json', session.request('initialize', {'protocolVersion': '2024-11-05',
                                  'capabilities': {}, 'clientInfo': {'name': 'a6400-local-research', 'version': '1'}}))
                             session.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})

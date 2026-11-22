@@ -19,8 +19,8 @@
 #include <unistd.h>
 
 static uint32_t vb, tb;
-#define SHIM_ADDR (0x05662760u + tb)
-#define SHIM_CAP 2208u
+#define SHIM_ADDR (0x05662800u + tb)
+#define SHIM_CAP 2048u
 #define HOOK_SET_ROOT (0x15b91654u + vb)
 #define HOOK_REFRESH (0x15b91a80u + vb)
 #define HOOK_OPEN_ITEM (0x15b92044u + vb)

@@ -1,0 +1,147 @@
+{
+  "classification": "external local replay; not an upstream stock-boot milestone",
+  "date": "2026-11-21",
+  "frames": [
+    {
+      "colors": 224,
+      "framebuffer": "0x22c48000",
+      "height": 480,
+      "png": "english-menu.png",
+      "png_sha256": "0454bcbb1e262bdcff1252171a9e247bb39313ae8e914bdc74faa76278daa3aa",
+      "qmp_matches_guest_memory": true,
+      "raw_sha256": "2a87fa9405312a096e9cd8b3d3300ccb387172e481934613dddbd69fdd879189",
+      "width": 640
+    },
+    {
+      "colors": 248,
+      "framebuffer": "0x22c48000",
+      "height": 480,
+      "png": "english-menu-page2.png",
+      "png_sha256": "a909285bfcd4be0d52282e551fd521cb68bc666e98d4ee21f2f167147d67e9cd",
+      "qmp_matches_guest_memory": true,
+      "raw_sha256": "7677771b57f301bed93f8c5a64f7aa816591550142962b70a53cf2c304d75bff",
+      "width": 640
+    }
+  ],
+  "inputs": [
+    {
+      "completed_frame": 31,
+      "function": 2,
+      "native_action": 3,
+      "overlay": 0,
+      "sequence": 1,
+      "tid": 181
+    },
+    {
+      "completed_frame": 34,
+      "function": 1,
+      "native_action": 2,
+      "overlay": 0,
+      "sequence": 2,
+      "tid": 181
+    },
+    {
+      "completed_frame": 35,
+      "function": 3,
+      "native_action": 4,
+      "overlay": 0,
+      "sequence": 3,
+      "tid": 181
+    },
+    {
+      "completed_frame": 41,
+      "function": 4,
+      "native_action": 5,
+      "overlay": 0,
+      "sequence": 4,
+      "tid": 181
+    }
+  ],
+  "language": "English",
+  "limitations": [
+    "AP-only adapted startup, not stock /sbin/init reaching its menu",
+    "English bank-path overlay preserves captured settings; not an English camera-region conversion",
+    "Physical buttons, live view, capture, recording, USB/PTP and stock power management unverified",
+    "Some focused-row redraws after vertical input remain incomplete",
+    "Compatible CPU profile is broader than the camera default; cause of the adapter dependency unresolved"
+  ],
+  "profile": "adapted-original-menu",
+  "reference": {
+    "base_cpio_sha256": "e6be5fdd14b03f94816fa08e4ded4370a1f72753572813c6e49d46b14ada038c",
+    "head": "42554a639e005455a1cc492744bd77341e7c41d2",
+    "preexisting_worktree_changes": true,
+    "repository": "https://github.com/chocotan/zve10-qemu",
+    "source_sha256": {
+      "LICENSE": "44b810ad806833aec8dcefb3579015ff8926c6403749fe76def260a198c357fd",
+      "scripts/menu_build.py": "cf9f48f7a9c9019917c1dfad53116184b1a06fa73eee950ae87118d916e162c1",
+      "scripts/win_prepare.py": "9e6fc0ed677766ff818a6bbc0cb3666f7ce5a9c2093760ae811cea42eb6402b7",
+      "source/initramfs/init-ui.sh": "d92da603dc6812186330e6d23cc03c7211d642c6894adeb519f2732d4e476011",
+      "source/menu/a7c2/native_entry.h": "7805f2da89100f301d6e30b1cba2374c4f6d4cbf599a5caf6f6f2f7e4e561b9f",
+      "source/menu/a7c2/native_entry.inc": "4d34719d67b068bc16db5913fad4d8f55370a57f4e7a81456713262c07262deb",
+      "source/menu/a7c2/transport.h": "bef3223e738f0edaea8a7ffd8380d6d06fa2bcdee58bcf35891234dbb6312801",
+      "source/menu/a7c2/transport.inc": "c8e57e5106478b31970b72cb21a35824019c1cfc97ebbf2c109ce9807d5139b3",
+      "source/menu/capture_table_model.h": "ce1995095b109f3e3ca2a9bb120e6d324166fc6ebc6763abfc22591a41d40c75",
+      "source/menu/menu_hooks.inc": "d2c872621df1faa0b6ad137267e2d0dfc8f6b75af62d4ac3e54d5adab89c3b2b",
+      "source/menu/menu_shell.c": "0365ed6d49fe05fbea5aaae7bc40fc71737ed9fa5640ae77e9c8bf87a00471c7",
+      "source/menu/menu_shell.h": "27746d24bc944d273a6f7b2becd209afd5166c6aad4f733c55f1c9e27f2752ce",
+      "source/menu/native_entry.h": "6e261668ac99b84a614fc6b4f57fa83a9049edf931b445721c34a9a9c8e22a9d",
+      "source/menu/native_entry.inc": "2ac6d42e84eee7dc364170aba6a433037a8bfeb9aeb47a12b12f70e4cc7c31bf",
+      "source/menu/original.inc": "fccfa3307158417ddb57e843656394b9c1549a53236fc213d764678884f834b1",
+      "source/menu/shoot_fill.h": "decb101ab04e84a0461ea626c6b1f4a4fc1a4db7e2a8d68f9545e3b2e7f426db",
+      "source/menu/transport.h": "bef3223e738f0edaea8a7ffd8380d6d06fa2bcdee58bcf35891234dbb6312801",
+      "source/menu/transport.inc": "27a78c27e535d390c3d7c76ae1c15c8364944ae1bba88898587b78771ee268eb",
+      "source/ui/ui-draw-probe.h": "6e09e191501902c8121108c6e1cb0e7b82bc423261fc863c8d67242c7e134bf1",
+      "source/ui/ui-font-probe.h": "181afc251de0fc3f04d8251f08b8b72ee71774e9b64dc9af6d8a864770deb8fc",
+      "source/ui/ui-gemini-backend.h": "bd3b62e2e4ed9b5d0cda55019eab92666b77a18dfe2243b7de4c1c7ed0ebb80e",
+      "source/ui/ui-gemini-raster.h": "977e2b82bc879d61af9656852bf01a78d0896831733137c88e6b3c8cae53b7a7",
+      "source/ui/ui-headless.h": "5a06412a55c54a7f8645ef2552fbff80a41221e9437ca6ca6527318d1ad66429",
+      "source/ui/ui-image-decode.h": "3b33c82f18df30e3d89a87a44759327c1bd7d37f66fa784a62aa3e2e6c738e9f",
+      "source/ui/ui-lz77.h": "434c6d5a3a07c36879873217273518638586408bbcb0838027cd6e3dd8b397bd",
+      "source/ui/ui-observe.c": "20fe5f88bbb8b7d104b1a85064b5bc72218739a8d36a5bdbd074a4f0fe49dcb1",
+      "source/ui/ui-present.h": "a17052e6a25b5176bba110b140849da09828a25a57a73df4007d2c7f029559e7",
+      "source/ui/ui-raster.h": "f1a3a74d3a763c8d1ffc45dd6b94192f0dc419780b7a73db2973062cf8c6f719",
+      "source/ui/ui-slow-clear.h": "0399c9e5b37a53ea6876752214f2f8fc2a11297d5132ea8914212858beafb202"
+    },
+    "ui_kernel_image_sha256": "017f52165f8c46e6ceea62f7410472ba742f563fc712d0013c138aefe0bfb33b"
+  },
+  "shutdown": {
+    "guest_transport_stopped": true,
+    "qemu_returncode": 0
+  },
+  "source_sha256": {
+    "emulator/boot_stub.py": "656083371eddcd477fc84852b0a2f99dbbcab6a31782053cd4aaa2c2dde609db",
+    "emulator/build_menu.py": "574d308708c5a9f52b283845ecf6306ba7b60d4d340c95e69458a5e496547a3a",
+    "emulator/menu.py": "11a11ef9f889620428757549b90baf2e18dc32fa81f2833e73bcd68867fa3bc3",
+    "emulator/menu_osd.h": "653620bb8fcff1e4d9b0ed2dd8e263d0aa33fe0d92e18ecd761453bddacea4ce",
+    "emulator/qemu/hw/arm/zve10-osd.h": "beab523c5b57e666752f63d8a53030572970b552a19a43b07a0590abb611fb81",
+    "emulator/qemu/hw/arm/zve10.c": "95aa6723402846863b6ddfcbf906df23bbf4d7454c73975a5c4d417af7ca0d19",
+    "emulator/runner.py": "fcfcc525c36d2a516ec9eab6ca565ce31ae0c17fff91c327a97884bbc4dae900",
+    "emulator/stock_boot.py": "3d8b11bc5ccd2e20d7c9b89e87e964917b85b22f1765c684a738de1286c7338f",
+    "emulator/storage.py": "5efd524707447032f9a109e51999bbc3150e9cd055322767ede5acd65a6e99eb",
+    "tests/e2e_qemu/test_menu_runtime.py": "ca619f6f0565163fb6b9b3e54c91415b6eb11378a84cf0098f623c3da9e5803e"
+  },
+  "source_state": {
+    "implementation_uncommitted_at_observation": true,
+    "local_base_commit": "11d8b25983898801270217fa04f1aaca73f5e55b",
+    "public_clean_checkout_reproduction_available": false,
+    "repository": "https://github.com/qn06142/zv-e10-re"
+  },
+  "stock_normal_boot": false,
+  "text_banks": {
+    "usr/share/app/string_japanese.uxc": {
+      "original_bank": "usr/share/app/string_english.uxc",
+      "sha256": "ec072d004f0891ed15b020e4cc78f8cb0be0d3698457b80abfc30e6b39b24d61"
+    },
+    "usr/share/app/string_japanese_f.uxc": {
+      "original_bank": "usr/share/app/string_english_f.uxc",
+      "sha256": "74cc3c94af7a679156f0d19fb316ab20f0edca1d47a52c47015b7ad3bd5ab6a2"
+    }
+  },
+  "upstream_replay_performed": false,
+  "verification": {
+    "menu_e2e": "1 passed in 102.80s",
+    "qmp_matches_guest_memory": true,
+    "reference_r3_ok": true,
+    "stock_cpu_and_housekeeping": "20 passed, 4 subtests passed in 16.28s"
+  }
+}

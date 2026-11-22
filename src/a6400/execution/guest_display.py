@@ -382,6 +382,18 @@ class DisplayModel:
         self.states[key].record(pc, tid, instruction)
         return key
 
+    def note_physical_write(self, phys_addr: int, size: int, pc: int, tid: Optional[int],
+                            instruction: Optional[int]) -> Optional[str]:
+        """Record a DMA/physical write to any verified display surface."""
+        if size <= 0:
+            return None
+        hit: Optional[str] = None
+        for key, surface in self.surfaces.items():
+            if phys_addr < surface.physical_base + surface.byte_size and surface.physical_base < phys_addr + size:
+                self.states[key].record(pc, tid, instruction)
+                hit = key
+        return hit
+
     # -- selection / reading ------------------------------------------
     def mapped_surfaces(self) -> List[Tuple[str, DisplaySurface, DisplayMapping]]:
         result = []
@@ -421,10 +433,33 @@ class DisplayModel:
         return 'unwritten'
 
     def read_frame(self, memory_reader: Callable[[int, int], bytes], key: Optional[str] = None,
-                   instruction: Optional[int] = None) -> Optional[Frame]:
+                   instruction: Optional[int] = None,
+                   physical_reader: Optional[Callable[[int, int], Optional[bytes]]] = None) -> Optional[Frame]:
         """Read one frame from guest memory.  Never invents or pads bytes."""
         selection = self.select() if key is None else next(
             ((k, s, m) for k, s, m in self.mapped_surfaces() if k == key), None)
+        if selection is None and physical_reader is not None:
+            candidates = (
+                [(k, self.surfaces[k]) for k in (key,) if k in self.surfaces]
+                if key is not None
+                else [(k, s) for k, s in self.surfaces.items() if s.role == 'display' and self.states[k].count > 0]
+            )
+            if candidates:
+                best_k, best_s = max(
+                    candidates,
+                    key=lambda item: (self.states[item[0]].count, self.states[item[0]].last_instruction or -1),
+                )
+                raw_dma = physical_reader(best_s.physical_base, best_s.byte_size)
+                if raw_dma is not None and len(raw_dma) == best_s.byte_size:
+                    rgba = decode_surface(best_s, raw_dma)
+                    status = self.raw_status(best_k, raw_dma)
+                    return Frame(
+                        surface=best_s, raw=raw_dma, rgba=rgba, virtual_start=0,
+                        physical_start=best_s.physical_base, instruction=instruction,
+                        status=status, provenance=self.states[best_k].to_dict(),
+                        content_sha256=hashlib.sha256(rgba).hexdigest(),
+                        raw_sha256=hashlib.sha256(raw_dma).hexdigest(),
+                    )
         if selection is None:
             return None
         name, surface, mapping = selection

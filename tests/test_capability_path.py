@@ -90,20 +90,20 @@ class RealLibraryTests(unittest.TestCase):
             self.skipTest("no libObj.so under A6400_UNPACKED_ROOT")
         self.libs = hits
 
-    def test_input_to_display_path_is_found_or_reported_absent(self) -> None:
-        # Both outcomes are findings: a path proves the route, and its absence within the depth
-        # bound says the route leaves libObj.so, which is itself worth recording.
+    def test_no_direct_call_path_reaches_the_display_entry(self) -> None:
+        # E0484, re-measured with the corrected graph in E0663: ObjDisplay_Create has no direct
+        # caller on any body, so no direct-call walk from the input handler can reach it. A path
+        # appearing here would mean either the graph or that finding changed.
         from callgraph import build_callgraph
 
         found = {}
         for lib in self.libs:
             graph = build_callgraph(lib)
             path = path_between(graph, "snd_InfraInputEvent_to_InputServant",
-                                "ObjDisplay_Start", max_depth=6)
+                                "ObjDisplay_Create", max_depth=12)
             if path:
-                found[lib.parts[-9]] = path
-        # This asserts the walk runs and returns a consistent shape, not that a route exists.
-        self.assertIsInstance(found, dict)
+                found[str(lib)] = path
+        self.assertEqual(found, {})
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@
   "npm_version": "12.2.2",
   "workspace_mcp": {
     "root": "/home/administrator/a6400-mcp-tools/20261117",
+    "ghidra_install_root": "~/a6400-mcp-tools/20261121",
     "python": "/usr/bin/python3",
     "python_version": "3.14.4",
     "servers": {

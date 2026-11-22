@@ -171,7 +171,18 @@ never moved. A mod that compares such a pointer must still be checked on each ta
 
 ## Limits
 
-- The board has no touch-panel input, so touch handlers do not run in QEMU.
+For USB-dependent mods, the [offline media scenarios](README.md#offline-sd-and-usb-scenarios)
+verify enumeration and basic Mass Storage reads on a separate fixture.
+Do not treat that as Sony gadget compatibility. Require the original
+Sony gadget to enumerate and complete a basic MSC or PTP read before
+testing streaming.
+
+- There is no QMP absolute-pointer handler for a physical touchscreen.
+  An explicit [native touch report replay](../docs/evidence/mods/2026-11-19-firmware-qualification.md#native-touch-follow-up)
+  supplies down/move/up below `InputService::callback_tp` instead. The
+  matched v2 ON/OFF controls cover tab taps, horizontal swipes, page dots,
+  row selection/opening, and popup highlighting/dismissal. They do not
+  qualify controller hardware, popup setting commits, or vertical scrolling.
 - The guest tmpfs at `/tmp_bt` and the `/setting` staging exist only in the disposable overlay.
 - A QEMU pass covers the tested contract. Camera use still needs an explicit go-ahead and a
   RAM-only verification for physical peripherals and timing.

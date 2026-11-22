@@ -220,6 +220,39 @@ class VirtualTlbTest(unittest.TestCase):
         self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 0x55667788)
         self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR), 0x30)
 
+    def test_mm_fault_return_does_not_fetch_stale_ifar(self):
+        machine = make_machine(ram_banks=((0, 0x800000),), mmio_ranges=(),
+                               sram=(0xFE000000, 0x1000))
+        uc = machine.uc
+        machine._mmu_enabled = True
+        machine._cached_ttbr0 = 0x10000
+        machine.last_ifar = 0x04162978  # The previous executable is not mapped here.
+        pc = 0x60116E9C
+        uc.mem_write(machine._kernel_phys(pc), bytes.fromhex('330010e30090a0e1'))
+        uc.reg_write(UC_ARM_REG_R0, 0)  # Successful handle_mm_fault return.
+        uc.reg_write(UC_ARM_REG_R4, 0x00058CEC)
+        uc.emu_start(pc, pc + 8, count=2)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_PC), pc + 8)
+        self.assertEqual(machine.tlb_fill_misses, 0)
+        self.assertEqual(machine.mm_fault_returns[-1]['addr'], '0x00058cec')
+
+    def test_user_return_flush_does_not_fetch_the_fault_page(self):
+        pc = 0x6010DF34
+        machine = make_machine(ram_banks=((0, 0x800000),), mmio_ranges=(),
+                               sram=(0xFE000000, 0x1000), symbols={'ret_to_user': pc})
+        uc = machine.uc
+        machine._mmu_enabled = True
+        machine._pte_dirty = True
+        machine._last_fault_page = 0x0402F000
+        machine._cached_ttbr0 = 0x10000
+        uc.cpr_write(15, 0, 2, 0, 0, 0, False, 0x10000)
+        uc.reg_write(UC_ARM_REG_SP, 0x60030000)
+        uc.mem_write(machine._kernel_phys(pc), bytes.fromhex('0100a0e3'))  # mov r0, #1
+        uc.emu_start(pc, pc + 4)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 1)
+        self.assertEqual(machine.cputlb_flushes, 1)
+        self.assertEqual(machine.tlb_fill_misses, 0)
+
     def test_thumb_user_return_executes_original_entry_without_warmup(self):
         from unittest.mock import patch
 
@@ -775,6 +808,425 @@ class VirtualTlbTest(unittest.TestCase):
         self.assertNotIn("amba2.console=0", contract.cmdline)
         self.assertIn("amba2.console=1", contract.sony_cmdline)
         self.assertNotIn("amba2.console=0", contract.sony_cmdline)
+
+    def test_data_tlb_fill_inside_thumb_it_block_does_not_leak_itstate(self):
+        from unicorn import UcError
+        from unicorn.arm_const import (UC_ARM_REG_R1, UC_ARM_REG_R3,
+                                       UC_ARM_REG_R7, UC_ARM_REG_R9)
+
+        machine = make_machine(ram_banks=((0, 0x800000),), mmio_ranges=(),
+                               sram=(0xFE000000, 0x1000))
+        uc = machine.uc
+        machine._mmu_enabled = True
+        machine._cached_ttbr0 = 0x10000
+        uc.cpr_write(15, 0, 2, 0, 0, 0, False, 0x10000)
+        uc.mem_write(0x10010, struct.pack('<2I', 0x20001, 0x21001))
+        # Map 0x404000..0x405FFF -> PA 0x404000..0x405FFF (RX) and 0x500000..0x503FFF (RW)
+        uc.mem_write(0x20000 + 4 * 4, struct.pack('<2I', 0x40423E, 0x40523E))
+        for i in range(4):
+            uc.mem_write(0x21000 + i * 4, struct.pack('<I', (0x500000 + i * 0x1000) | 0x3F))
+
+        entry, target, stop = 0x404E3A, 0x405346, 0x40535C
+        uc.mem_write(entry, bytes.fromhex('12f0040f1fbf2368d9f80410cb18c4f8b431002800f07a82'))
+        uc.mem_write(target, bytes.fromhex('d7f840e0d9f81000def81c1088423ff67dadbef82c30d9f800e0'))
+        for address, word in ((0x500000, 0x1000), (0x501004, 0x9000),
+                              (0x502040, 0x503000), (0x50301C, 0x9000), (0x50302C, 5)):
+            uc.mem_write(address, struct.pack('<I', word))
+        machine._set_pc_and_cpsr(entry, 0x30)
+        uc.reg_write(UC_ARM_REG_R2, 5)
+        uc.reg_write(UC_ARM_REG_R4, 0x500000)
+        uc.reg_write(UC_ARM_REG_R7, 0x502000)
+        uc.reg_write(UC_ARM_REG_R9, 0x501000)
+        uc.reg_write(UC_ARM_REG_LR, 0)
+        uc.emu_start(entry | 1, stop, count=32)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_PC), stop)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_LR), 0x503000)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R3), 5)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x0600FC00, 0)
+        self.assertGreaterEqual(machine.mid_tb_itstate_clears, 1)
+
+        # Page-crossing IT block: UC_MEM_FETCH on next page must preserve active ITSTATE.
+        uc.mem_write(0x404FFA, bytes.fromhex('052a0cbf2368632300bf'))
+        uc.mem_write(0x500000, struct.pack('<I', 0x12345678))
+        machine._flush_cputlb()
+        machine._flush_tlb()
+        machine._set_pc_and_cpsr(0x404FFA, 0x30)
+        uc.reg_write(UC_ARM_REG_R2, 5)
+        uc.reg_write(UC_ARM_REG_R4, 0x500000)
+        uc.emu_start(0x404FFB, 0x405004, count=10)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R3), 0x12345678)
+
+        # Unmapped slot 2 after mapped slot 1 must still report architectural CPSR.IT on fault.
+        uc.mem_write(0x404100, bytes.fromhex('052a04bf2368d9f80010'))
+        machine._flush_cputlb()
+        machine._flush_tlb()
+        machine._set_pc_and_cpsr(0x404100, 0x30)
+        uc.reg_write(UC_ARM_REG_R2, 5)
+        uc.reg_write(UC_ARM_REG_R4, 0x500000)
+        uc.reg_write(UC_ARM_REG_R9, 0x600000)
+        with self.assertRaises(UcError):
+            uc.emu_start(0x404101, 0x404120, count=10)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_PC), 0x404106)
+        self.assertNotEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x0600FC00, 0)
+
+    def test_privileged_module_pte_permissions_and_svc_stm_abort(self):
+        from types import SimpleNamespace
+        from unicorn.arm_const import UC_ARM_REG_R3
+
+        dabt_svc = 0x6010D980
+        machine = make_machine(
+            ram_banks=((0, 0x800000), (0x02002000, 0x1000)), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            symbols={'__dabt_svc': dabt_svc}, timer_irq_model=False,
+            exclusive_fallback=False, sample_interval=5)
+        uc = machine.uc
+        machine._mmu_enabled = True
+        machine._cached_ttbr0 = 0x10000
+        uc.cpr_write(15, 0, 2, 0, 0, 0, False, 0x10000)
+
+        # Map 0x5F000000 with AP[2]=0, AP[1:0]=1, XN=0 (PAGE_KERNEL_EXEC: 0x1E)
+        l1_idx = (0x5F000000 >> 20) & 0xFFF
+        uc.mem_write(0x10000 + l1_idx * 4, struct.pack('<I', 0x20001))
+        uc.mem_write(0x20000, struct.pack('<I', 0x0050001E))
+
+        # Privileged SVC gets RWX (7); USR gets None (no access -> fault)
+        uc.reg_write(UC_ARM_REG_CPSR, 0x13)
+        entry = SimpleNamespace(paddr=0, perms=0)
+        self.assertTrue(machine._on_tlb_fill(uc, 0x5F000000, 17, entry))
+        self.assertEqual((entry.paddr, entry.perms), (0x00500000, 7))
+        uc.reg_write(UC_ARM_REG_CPSR, 0x10)
+        self.assertFalse(machine._on_tlb_fill(uc, 0x5F000000, 16, entry))
+
+        # Unmapped 0x5F001000 touched by SVC `stmge r0!, {r2, r3}` delivers __dabt_svc
+        # which installs the L2 PTE and returns via svc_exit (+0x44) to complete the store.
+        pc = 0x60259304
+        uc.mem_write(machine._kernel_phys(pc), struct.pack('<2I', 0xA8A0000C, 0xEAFFFFFE))
+        # Tiny __dabt_svc stub: install PTE at 0x20004, jump to +0x44, return to saved PC
+        stub = [
+            0xE59F6044,  # +0x00: ldr r6, [pc, #0x44] -> 0x60020004
+            0xE59F7044,  # +0x04: ldr r7, [pc, #0x44] -> 0x0050101E
+            0xE5867000,  # +0x08: str r7, [r6]
+            0xE5904004,  # +0x0C: ldr r4, [r0, #4] (saved fault PC)
+            0xE5905008,  # +0x10: ldr r5, [r0, #8] (saved CPSR)
+            0xE5900000,  # +0x14: ldr r0, [r0]    (saved R0)
+            0xEA000009,  # +0x18: b +0x44
+        ] + [0xE1A00000] * 10 + [
+            0xE16FF005,  # +0x44: msr SPSR_fsxc, r5 (triggers svc_abort_exit_flush)
+            0xE1B0F004,  # +0x48: movs pc, r4
+            0x60020004,  # +0x4C: literal L2 slot (kernel VA)
+            0x0050101E,  # +0x50: literal PAGE_KERNEL_EXEC PTE
+        ]
+        uc.mem_write(machine._kernel_phys(dabt_svc), struct.pack(f'<{len(stub)}I', *stub))
+        uc.reg_write(UC_ARM_REG_CPSR, 0x20000013)
+        uc.reg_write(UC_ARM_REG_SP, 0x60030000)
+        uc.reg_write(UC_ARM_REG_R0, 0x5F001000)
+        uc.reg_write(UC_ARM_REG_R2, 0xAABBCCDD)
+        uc.reg_write(UC_ARM_REG_R3, 0x11223344)
+        uc.reg_write(UC_ARM_REG_PC, pc)
+        report = machine.run(limit=20)
+        self.assertEqual(report['data_abort_trace'][-1]['address'], '0x5f001000')
+        self.assertTrue(report['data_abort_trace'][-1]['write'])
+        self.assertEqual(struct.unpack('<2I', uc.mem_read(0x00501000, 8)),
+                         (0xAABBCCDD, 0x11223344))
+
+    def test_kthread_return_executes_ldmdb_after_consumed_user_frame(self):
+        from unicorn.arm_const import UC_ARM_REG_R5, UC_ARM_REG_R7
+
+        machine = make_machine(
+            ram_banks=((0, 0x800000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            allow_nonsecure_af_writes=True)
+        uc = machine.uc
+        machine._mmu_enabled = True
+        # Leave a previously consumed user pt_frame_last in place.
+        machine.pt_frame_gen = 3
+        machine.pt_frame_consumed = 3
+        machine.pt_frame_last = {
+            'gen': 3, 'words': [0] * 18, 'sp': 0x5EAAF000,
+            'lr': 0x04070001, 'pc': 0x00008C10, 'cpsr': 0x60000030,
+        }
+        # Exact fast_ret_to_user (0x6010DF48..0x6010DF68) + kernel_thread_helper
+        fast_ret = [
+            0xE59D1040,  # 0x6010DF48: ldr r1, [sp, #64]
+            0xE5BDE03C,  # 0x6010DF4C: ldr lr, [sp, #60]!
+            0xE16FF001,  # 0x6010DF50: msr SPSR_fsxc, r1
+            0xF57FF01F,  # 0x6010DF54: clrex
+            0xE95D7FFF,  # 0x6010DF58: ldmdb sp, {r0-r12, sp, lr}^
+            0xE1A00000,  # 0x6010DF5C: nop
+            0xE28DD00C,  # 0x6010DF60: add sp, sp, #12
+            0xE1B0F00E,  # 0x6010DF64: movs pc, lr
+        ]
+        uc.mem_write(machine._kernel_phys(0x6010DF48), struct.pack('<8I', *fast_ret))
+        helper = [
+            0xE121F007,  # 0x6010EB84: msr CPSR_c, r7
+            0xE1A00004,  # 0x6010EB88: mov r0, r4
+            0xE1A0E006,  # 0x6010EB8C: mov lr, r6
+            0xE1A0F005,  # 0x6010EB90: mov pc, r5
+        ]
+        uc.mem_write(machine._kernel_phys(0x6010EB84), struct.pack('<4I', *helper))
+        target_fn = 0x60200000
+        uc.mem_write(machine._kernel_phys(target_fn), struct.pack('<I', 0xEAFFFFFE))
+
+        # Build kthread pt_regs at 0x6004FFB0 (top of stack 0x6004FFF8)
+        sp = 0x6004FFB0
+        pt_regs = [0] * 18
+        pt_regs[4] = 0xCAFE1234   # kthread arg -> r0
+        pt_regs[5] = target_fn    # kthread fn  -> pc
+        pt_regs[6] = 0x60138110   # do_exit     -> lr
+        pt_regs[7] = 0x00000013   # SVC, IRQ on -> cpsr
+        pt_regs[15] = 0x6010EB84  # kernel_thread_helper
+        pt_regs[16] = 0x00000093  # SPSR for fast_ret_to_user
+        uc.mem_write(machine._kernel_phys(sp), struct.pack('<18I', *pt_regs))
+
+        uc.reg_write(UC_ARM_REG_CPSR, 0x93)
+        uc.reg_write(UC_ARM_REG_SP, sp)
+        uc.reg_write(UC_ARM_REG_R4, 0)
+        uc.reg_write(UC_ARM_REG_R5, 0)
+        uc.reg_write(UC_ARM_REG_R7, 0)
+        uc.emu_start(0x6010DF48, target_fn, count=20)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_PC), target_fn)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 0xCAFE1234)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_LR), 0x60138110)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_SP), 0x6004FFF8)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0xFF, 0x13)
+
+    def test_svc_fast_syscall_clears_stale_user_fast_frame(self):
+        machine = make_machine()
+        uc = machine.uc
+        sp = 0x60003000
+        # Seed a stale user _fast_frame, then run _capture_fast_syscall_frame on an SVC frame.
+        machine._fast_frame = {
+            'words': [0] * 17, 'sp': 0x5EAACF00, 'lr': 0x04159E7B,
+            'pc': 0x04182304, 'cpsr': 0x60000010,
+        }
+        svc_pt_words = [0] * 18
+        svc_pt_words[15] = 0x5F047100  # kernel module caller PC
+        svc_pt_words[16] = 0x60000013  # SVC CPSR
+        uc.mem_write(0x3008, struct.pack('<18I', *svc_pt_words))
+        uc.reg_write(UC_ARM_REG_CPSR, 0x93)
+        uc.reg_write(UC_ARM_REG_SPSR, 0x60000013)
+        uc.reg_write(UC_ARM_REG_SP, sp)
+        uc.reg_write(UC_ARM_REG_LR, 0x5F047100)
+        machine._capture_fast_syscall_frame(uc)
+        self.assertIsNone(machine._fast_frame)
+        self.assertFalse(machine._restore_fast_syscall_user_return(uc))
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x1F, 0x13)
+
+    def test_switch_mm_flushes_virtual_tlb_immediately_mid_slice(self):
+        from unicorn.arm_const import UC_ARM_REG_R1, UC_ARM_REG_R3
+
+        switch_mm = 0x6011A36C
+        machine = make_machine(
+            ram_banks=((0, 0x800000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            symbols={'cpu_v7_switch_mm': switch_mm})
+        uc = machine.uc
+        machine._mmu_enabled = True
+        pgd_a, pgd_b = 0x10000, 0x14000
+        l2_a, l2_b = 0x20000, 0x21000
+        uc.mem_write(pgd_a, struct.pack('<I', l2_a | 1))
+        uc.mem_write(pgd_b, struct.pack('<I', l2_b | 1))
+        uc.mem_write(l2_a + 8 * 4, struct.pack('<I', 0x0040803F))
+        uc.mem_write(l2_b + 8 * 4, struct.pack('<I', 0x0050803F))
+        uc.mem_write(0x00408000, struct.pack('<I', 0x11111111))
+        uc.mem_write(0x00508000, struct.pack('<I', 0x22222222))
+
+        # Single continuous run: read [0x8000] under pgd_a into r1, call switch_mm(pgd_b),
+        # then immediately read [0x8000] into r3 without leaving emu_start.
+        uc.mem_write(machine._kernel_phys(switch_mm), struct.pack('<I', 0xE12FFF1E))  # bx lr
+        code_va = 0x60200000
+        seq = [
+            0xE3A02902,  # mov r2, #0x8000
+            0xE5921000,  # ldr r1, [r2] -> 0x11111111
+            0xE3A00905,  # mov r0, #0x14000 (pgd_b)
+            0xEBFC68DA,  # bl 0x6011A36C (switch_mm)
+            0xE3A02902,  # mov r2, #0x8000
+            0xE5923000,  # ldr r3, [r2] -> must be 0x22222222, not stale 0x11111111
+        ]
+        # Compute exact BL offset from code_va + 0x0C to switch_mm
+        rel = (switch_mm - (code_va + 0x0C + 8)) // 4
+        seq[3] = 0xEB000000 | (rel & 0x00FFFFFF)
+        uc.mem_write(machine._kernel_phys(code_va), struct.pack('<6I', *seq))
+
+        machine._cached_ttbr0 = pgd_a
+        uc.reg_write(UC_ARM_REG_CPSR, 0x13)
+        uc.emu_start(code_va, code_va + 24, count=16)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R1), 0x11111111)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R3), 0x22222222)
+
+    def test_unmapped_user_prefetch_abort_ignores_aliasing_physical_ram(self):
+        from unicorn.arm_const import UC_ARM_REG_R5
+
+        pabt_usr = 0x6010DE20
+        machine = make_machine(
+            ram_banks=((0, 0x05000000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            symbols={'__pabt_usr': pabt_usr}, timer_irq_model=False,
+            exclusive_fallback=False, sample_interval=5)
+        uc = machine.uc
+        machine._mmu_enabled = True
+        machine._cached_ttbr0 = 0x10000
+        uc.cpr_write(15, 0, 2, 0, 0, 0, False, 0x10000)
+
+        # Place `ldrb r3, [r5, #0x36]` (0x7DA9 -> r5+0x16, or 0xF8953036) at PA == user VA
+        # while leaving user VA 0x0404DD4C unmapped in TTBR0.
+        user_pc = 0x0404DD4C
+        uc.mem_write(user_pc, bytes.fromhex('95f83630'))
+        uc.mem_write(machine._kernel_phys(pabt_usr), struct.pack('<I', 0xEAFFFFFE))
+        uc.reg_write(UC_ARM_REG_CPSR, 0x13)
+        uc.reg_write(UC_ARM_REG_SP, 0x60030000)
+        machine._set_pc_and_cpsr(user_pc, 0x20000030)
+        uc.reg_write(UC_ARM_REG_R5, 0x04068554)
+        report = machine.run(limit=5)
+        self.assertEqual(report['last_ifar'], '0x0404dd4c')
+        self.assertEqual(report['prefetch_abort_trace'][-1]['address'], '0x0404dd4c')
+
+    def test_fast_work_pending_and_ret_from_fork_do_not_trigger_return_hooks(self):
+        machine = make_machine(ram_banks=((0, 0x800000),), mmio_ranges=(),
+                               sram=(0xFE000000, 0x1000))
+        uc = machine.uc
+        machine._mmu_enabled = True
+        # Put `mov r0, #7` at 0x6010DEFC (fast_work_pending) and `mov r0, #9` at 0x6010DF68 (ret_from_fork)
+        uc.mem_write(machine._kernel_phys(0x6010DEFC), struct.pack('<I', 0xE3A00007))
+        uc.mem_write(machine._kernel_phys(0x6010DF68), struct.pack('<I', 0xE3A00009))
+        machine._fast_frame = {
+            'words': [0xDEAD] * 17, 'sp': 0x5E001000, 'lr': 0x040884DB,
+            'pc': 0x04094C5C, 'cpsr': 0x60000010, 'svc_sp': 0x60030FA8,
+        }
+        machine.pt_frame_gen = 1
+        machine.pt_frame_consumed = 0
+        machine.pt_frame_last = {
+            'gen': 1, 'words': [0xBEEF] * 18, 'sp': 0x5E001000,
+            'lr': 0x040884DB, 'pc': 0x04094C5C, 'cpsr': 0x60000030,
+        }
+        uc.reg_write(UC_ARM_REG_CPSR, 0x93)
+        uc.reg_write(UC_ARM_REG_SPSR, 0x60000010)
+        uc.reg_write(UC_ARM_REG_SP, 0x60030FA8)
+        uc.emu_start(0x6010DEFC, 0x6010DF00, count=1)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 7)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x1F, 0x13)
+        uc.emu_start(0x6010DF68, 0x6010DF6C, count=1)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 9)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x1F, 0x13)
+
+    def test_no_work_pending_replaces_preempted_user_frame_from_other_task(self):
+        ret_to_user = 0x6010DF34
+        machine = make_machine(
+            ram_banks=((0, 0x800000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            symbols={'ret_to_user': ret_to_user})
+        uc = machine.uc
+        machine._mmu_enabled = True
+        # Task A entered ret_to_user (0x6010DF34) on stack 0x60030FB0, then rescheduled.
+        machine.pt_frame_gen = 5
+        machine.pt_frame_consumed = 4
+        machine.pt_frame_last = {
+            'gen': 5, 'words': [0xFFFFFFFE] + [0] * 17, 'sp': 0x5EFC23B4,
+            'lr': 0x040884DB, 'pc': 0x04094C5C, 'cpsr': 0x60000010,
+            'svc_sp': 0x60030FB0,
+        }
+        # Task B returns via ret_to_user_from_irq -> no_work_pending (0x6010DF48) on stack 0x60050FB0.
+        fast_ret = [
+            0xE59D1040,  # 0x6010DF48: ldr r1, [sp, #64]
+            0xE5BDE03C,  # 0x6010DF4C: ldr lr, [sp, #60]!
+            0xE16FF001,  # 0x6010DF50: msr SPSR_fsxc, r1
+            0xF57FF01F,  # 0x6010DF54: clrex
+            0xE95D7FFF,  # 0x6010DF58: ldmdb sp, {r0-r12, sp, lr}^
+            0xE1A00000,  # 0x6010DF5C: nop
+            0xE28DD00C,  # 0x6010DF60: add sp, sp, #12
+            0xE1B0F00E,  # 0x6010DF64: movs pc, lr
+        ]
+        uc.mem_write(machine._kernel_phys(0x6010DF48), struct.pack('<8I', *fast_ret))
+        sp_b = 0x60050FB0
+        pt_b = [0x1234] + [0] * 17
+        pt_b[13] = 0x5EE01000
+        pt_b[14] = 0x04094C61
+        pt_b[15] = 0x04094C5C
+        pt_b[16] = 0x60000030  # Thumb USR!
+        uc.mem_write(machine._kernel_phys(sp_b), struct.pack('<18I', *pt_b))
+        uc.reg_write(UC_ARM_REG_CPSR, 0x93)
+        uc.reg_write(UC_ARM_REG_SP, sp_b)
+        uc.emu_start(0x6010DF48, 0x6010DF68, count=10)
+        self.assertEqual(machine._pending_user_resume, (0x04094C5D, 0x60000030))
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 0x1234)
+
+    def test_run_consumes_pending_user_resume_without_leaking_across_slices(self):
+        ret_to_user = 0x6010DF34
+        machine = make_machine(
+            ram_banks=((0, 0x800000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            symbols={'ret_to_user': ret_to_user})
+        uc = machine.uc
+        machine.slice_size = 8
+        machine._mmu_enabled = False
+        # Kernel snippet at 0x8000 branches straight to _ret_tail_hook (0x6010DF64) in physical/mapped RAM;
+        # use identity low RAM 0x2000 for user resume target and 0x1000 for kernel start.
+        uc.mem_write(0x2000, struct.pack('<2I', 0xE2800001, 0xEAFFFFFE))  # add r0, r0, #1; b .
+        calls = 0
+        orig_emu_start = uc.emu_start
+        def fake_emu_start(begin, until, timeout=0, count=0):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                machine._pending_user_resume = (0x2000, 0x60000010)
+                machine._pending_user_frame = {
+                    'words': [41] + [0] * 17, 'sp': 0x7000, 'lr': 0x2004,
+                    'pc': 0x2000, 'cpsr': 0x60000010,
+                }
+                return
+            return orig_emu_start(begin, until, timeout=timeout, count=count)
+        uc.emu_start = fake_emu_start
+        try:
+            machine.run(limit=9)
+        finally:
+            uc.emu_start = orig_emu_start
+        self.assertIsNone(machine._pending_user_resume)
+        self.assertIsNone(machine._pending_user_frame)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_R0), 42)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_SP), 0x7000)
+
+    def test_deliver_undef_exception_passes_raw_lr_und_to_und_usr(self):
+        und_usr = 0x6010DD20
+        machine = make_machine(
+            ram_banks=((0, 0x3000000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            data_abort_delivery=True, symbols={'__und_usr': und_usr})
+        uc = machine.uc
+        machine._mmu_enabled = True
+        machine._cached_ttbr0 = 0x10000
+        # SVC stack with valid thread_info->task so _deliver_user_exception keeps live SVC SP.
+        uc.reg_write(UC_ARM_REG_CPSR, 0xD3)
+        uc.reg_write(UC_ARM_REG_SP, 0x60031FB0)
+        uc.mem_write(machine._kernel_phys(0x6003000C), struct.pack('<I', 0x60900000))
+        # Switch to Thumb USR (0x60000030) and deliver undef at 0x07DAD7A0.
+        uc.reg_write(UC_ARM_REG_CPSR, 0x60000030)
+        uc.reg_write(UC_ARM_REG_R0, 0xCAFEBABE)
+        uc.reg_write(UC_ARM_REG_SP, 0x5EBFC518)
+        uc.reg_write(UC_ARM_REG_LR, 0x07DAD643)
+        self.assertTrue(machine._deliver_undef_exception(0x07DAD7A0, 0x60000030))
+        self.assertEqual(uc.reg_read(UC_ARM_REG_PC), und_usr)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x1F, 0x13)
+        scratch = struct.unpack('<3I', uc.mem_read(machine.VECTOR_SCRATCH_PA, 12))
+        self.assertEqual(scratch, (0xCAFEBABE, 0x07DAD7A2, 0x60000030))
+        # ARM USR (0x60000010) must pass PC + 4 in scratch[1].
+        uc.reg_write(UC_ARM_REG_CPSR, 0x60000010)
+        uc.reg_write(UC_ARM_REG_R0, 0x11223344)
+        self.assertTrue(machine._deliver_undef_exception(0x04094C5C, 0x60000010))
+        scratch_arm = struct.unpack('<3I', uc.mem_read(machine.VECTOR_SCRATCH_PA, 12))
+        self.assertEqual(scratch_arm, (0x11223344, 0x04094C60, 0x60000010))
+        self.assertEqual(machine.undef_exceptions_delivered, 2)
+
+    def test_deliver_undef_exception_supports_thumb_svc_und_svc(self):
+        und_svc = 0x6010DAE0
+        machine = make_machine(
+            ram_banks=((0, 0x4000000),), mmio_ranges=(), sram=(0xFE000000, 0x1000),
+            data_abort_delivery=True, symbols={'__und_svc': und_svc})
+        uc = machine.uc
+        machine._mmu_enabled = True
+        uc.reg_write(UC_ARM_REG_CPSR, 0x60000033)  # Thumb-2 SVC (av-cam.bin)
+        uc.reg_write(UC_ARM_REG_SP, 0x60935ED0)
+        uc.reg_write(UC_ARM_REG_LR, 0x6379D543)
+        uc.reg_write(UC_ARM_REG_R0, 0x64501234)
+        self.assertTrue(machine._deliver_undef_exception(0x63CEFF54, 0x60000033))
+        self.assertEqual(uc.reg_read(UC_ARM_REG_PC), und_svc)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_CPSR) & 0x3F, 0x13)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_SP), 0x60935ED0)
+        self.assertEqual(uc.reg_read(UC_ARM_REG_LR), 0x6379D543)
+        scratch = struct.unpack('<3I', uc.mem_read(machine.VECTOR_SCRATCH_PA + 0x10, 12))
+        self.assertEqual(scratch, (0x64501234, 0x63CEFF56, 0x60000033))
 
 
 if __name__ == '__main__':

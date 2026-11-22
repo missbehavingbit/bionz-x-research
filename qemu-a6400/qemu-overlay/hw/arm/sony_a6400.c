@@ -9,6 +9,7 @@
  *   - SRAM:       0xFE000000 .. 0xFE100000 (1 MiB)
  *   - A9MPCore:   0xF8000000 (GIC CPU @ 0xF8000100, GIC Dist @ 0xF8001000)
  *   - PL011 UART0:0xF2000000 (IRQ 150 -> SPI 118)
+ *   - PL011 UART3:0xF2003000 (IRQ 120 -> SPI 88, null chardev)
  *   - CXD4115 timer: 0xF2403000, channel n -> IRQ 153 + n (E0522)
  *   - 4 x Cortex-A5 (E0522: secondaries released through SRAM mailbox
  *     0xFE005010 + 4 * (cpu - 1) by cxd900x0_smp_init)
@@ -38,6 +39,7 @@
 #include "hw/misc/cxd90014_adc.h"
 #include "hw/misc/cxd90045_cam.h"
 #include "hw/core/sysbus.h"
+#include "system/block-backend-global-state.h"
 #include "system/blockdev.h"
 #include "qemu/log.h"
 #include "qemu/timer.h"
@@ -45,6 +47,7 @@
 #include "system/address-spaces.h"
 #include "system/memory.h"
 #include "system/system.h"
+#include "exec/translation-block.h"
 #include "target/arm/cpu.h"
 #include "ui/input.h"
 
@@ -59,6 +62,8 @@
 #define CXD90045_PERIPH_BASE     0xF8000000ULL
 #define CXD90045_UART0_BASE      0xF2000000ULL
 #define CXD90045_UART0_SPI       (150 - 32)
+#define CXD90045_UART3_BASE      0xF2003000ULL
+#define CXD90045_UART3_SPI       (120 - 32)
 #define CXD90045_TIMER_BASE      0xF2403000ULL
 #define CXD90045_TIMER_IRQ0      153
 #define CXD90045_WDT_BASE        0xF2402000ULL
@@ -70,12 +75,15 @@
 #define CXD90045_ADC_IRQ0        215
 
 /*
- * GPIO input levels at reset (E0526), "port.pin" pins that read 1:
+ * GPIO input levels at reset (E0526, E0651), "port.pin" pins that read 1:
  *  - input.ko GPIO keys marked active low ("L") in the a6400 key table
  *    (/proc/udm/input): P0.3 (0x70FD), P0.4 (0x70FE), P0.7 (0x70DC),
  *    P0.10 (0x1F0 MOVIE), P0.11 (0x70C6), P1.1 (0x70EF) -> released;
- *  - P0.1, P0.13, P1.5: a5000 shutter S1/S2 lines (active low, idle high);
- *    the a6400 av-cam registers the matching pin IRQs 122/142 [inference];
+ *  - P0.2 (rear-controls only): EVF eye-contact sensor (Backup F90427/28,
+ *    polled by av-cam 0x6361ac28 -> KEY_OTHER_EYE_CONTACT 0x708B); active
+ *    low, high = no eye contact so stock FINDER/MONITOR selects the rear LCD;
+ *  - P0.1 and P1.5: body shutter S1/S2, idle high; the captured av-cam
+ *    port map gives IRQs 122 and 142. P0.13 keeps its existing idle level.
  *  - P1.4: E-mount lens detect (a6400 Backup F9050C/0D = port 1 pin 4,
  *    IRQ 141 registered); active low on the a5000, high = empty mount
  *    [inference for the polarity]. Holding it low (lens present, unanswered)
@@ -90,6 +98,8 @@
  * P7.15 (CPU output), CS F900B1/6D = P5.14.  All idle low.
  */
 #define CXD90045_GPIO_RESET_HIGH "0.1,0.3,0.4,0.7,0.10,0.11,0.13,1.1,1.4,1.5"
+#define CXD90045_SHUTTER_S1_LINE  1
+#define CXD90045_SHUTTER_S2_LINE  (32 + 5)
 #define CXD90045_SM_REQ_LINE     (2 * 32 + 5)
 #define CXD90045_SM_STROBE_LINE  (0 * 32 + 8)
 #define CXD90045_CRCDC_BASE      0xF2A31000ULL
@@ -100,6 +110,9 @@
 #define CXD90045_L2C_STUB_BASE   0xF8002000ULL
 #define CXD90045_EMMC0_BASE      0xF0304000ULL
 #define CXD90045_EMMC0_SPI       (227 - 32)
+#define CXD90045_MMC0_BASE       0xF0300000ULL
+#define CXD90045_MMC0_SPI        (218 - 32)
+#define CXD90045_SD_MODEREAD     0xF2915010ULL
 #define CXD90045_XDMAC0_BASE     0xF0000000ULL
 #define CXD90045_XDMAC0_SPI_BASE (189 - 32)
 #define CXD90045_XDMAC1_BASE     0xF0010000ULL
@@ -193,6 +206,108 @@ static CxdRwStub *cxd90045_create_rw_stub(MemoryRegion *sysmem, const char *name
     memory_region_init_io(&s->mmio, NULL, &cxd90045_rw_stub_ops, s, name, size);
     memory_region_add_subregion_overlap(sysmem, base, &s->mmio, priority);
     return s;
+}
+
+#define DFS_STATUS       0x610
+#define DFS_ENABLE       0x620
+#define DFS_START        0x700
+#define DFS_DIVIDER      0x720
+#define DFS_ENABLE_CPU   0x101
+#define DFS_COMPLETE     BIT(0)
+
+typedef struct CxdDfsControl {
+    CxdRwStub stub;
+    bool divider_staged;
+} CxdDfsControl;
+
+static bool sony_a6400_dfs_control;
+
+static uint64_t cxd90045_dfs_read(void *opaque, hwaddr offset, unsigned size)
+{
+    CxdDfsControl *s = opaque;
+
+    return cxd90045_rw_stub_read(&s->stub, offset, size);
+}
+
+static void cxd90045_dfs_write(void *opaque, hwaddr offset, uint64_t value,
+                              unsigned size)
+{
+    CxdDfsControl *s = opaque;
+    uint32_t *regs = s->stub.regs;
+
+    switch (offset) {
+    case DFS_STATUS:
+        regs[DFS_STATUS >> 2] &= ~(value & DFS_COMPLETE);
+        return;
+    case DFS_ENABLE:
+        s->divider_staged = false;
+        break;
+    case DFS_DIVIDER:
+        s->divider_staged = regs[DFS_ENABLE >> 2] == DFS_ENABLE_CPU;
+        break;
+    case DFS_START:
+        /*
+         * The stock UPM waits for (status & 0x101) == 1, then clears bit 0.
+         * Complete the switch synchronously without changing virtual clocks.
+         */
+        if (value == 1 && s->divider_staged &&
+            regs[DFS_ENABLE >> 2] == DFS_ENABLE_CPU &&
+            !(regs[DFS_STATUS >> 2] & DFS_COMPLETE)) {
+            s->divider_staged = false;
+            regs[DFS_STATUS >> 2] |= DFS_COMPLETE;
+        } else {
+            qemu_log_mask(LOG_UNIMP, "cxd90045.dfs: unsupported switch 0x%"
+                          PRIx64 "\n", value);
+        }
+        break;
+    default:
+        break;
+    }
+    cxd90045_rw_stub_write(&s->stub, offset, value, size);
+}
+
+static const MemoryRegionOps cxd90045_dfs_ops = {
+    .read = cxd90045_dfs_read,
+    .write = cxd90045_dfs_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    .impl = { .min_access_size = 4, .max_access_size = 4 },
+};
+
+static void cxd90045_dfs_reset(void *opaque)
+{
+    CxdDfsControl *s = opaque;
+
+    memset(s->stub.regs, 0, s->stub.num_regs * sizeof(*s->stub.regs));
+    s->divider_staged = false;
+}
+
+static void cxd90045_create_dfs(MemoryRegion *sysmem)
+{
+    CxdDfsControl *s = g_new0(CxdDfsControl, 1);
+    CxdRwStub *stub = &s->stub;
+
+    stub->num_regs = 0x1000 / sizeof(*stub->regs);
+    stub->regs = g_new0(uint32_t, stub->num_regs);
+    memory_region_init_io(&stub->mmio, NULL, &cxd90045_dfs_ops, s,
+                          "cxd90045.dfs_ctrl", 0x1000);
+    memory_region_add_subregion_overlap(sysmem, CXD90045_DFS_CTRL_BASE,
+                                       &stub->mmio, 0);
+    qemu_register_reset(cxd90045_dfs_reset, s);
+}
+
+static bool sony_get_dfs_control(Object *obj, Error **errp)
+{
+    return sony_a6400_dfs_control;
+}
+
+static void sony_set_dfs_control(Object *obj, bool enabled, Error **errp)
+{
+    if (phase_check(PHASE_MACHINE_INITIALIZED)) {
+        error_setg(errp, "dfs-control is a startup option");
+        return;
+    }
+    sony_a6400_dfs_control = enabled;
 }
 
 /*
@@ -729,6 +844,173 @@ static void sony_set_work_dma(Object *obj, bool enabled, Error **errp)
 }
 
 /*
+ * The direct boot hand-off starts with initialized, idle virtual DDR-B.
+ * Model only the UPM idle/active sequence; the register changes finish
+ * synchronously. RAM contents remain intact in both modes.
+ */
+#define CXD90045_DDRB_BASE      0xF0105000ULL
+#define DDRB_CLOCK_GATE        0x068
+#define DDRB_MODE              0x090
+#define DDRB_RANK0             0x0A0
+#define DDRB_RANK1             0x0A4
+#define DDRB_LIMIT0            0x118
+#define DDRB_CONTROL           0x138
+#define DDRB_STATUS            0x148
+#define DDRB_STATUS_CLEAR      0x14C
+#define DDRB_LIMIT1            0x218
+#define DDRB_IDLE_RANK0        (1u << 24)
+#define DDRB_IDLE_RANK1        1u
+#define DDRB_RANK_CONFIG_MASK  0x00030300u
+#define DDRB_ACCESS_CONTROL    0x00010000u
+#define DDRB_ENABLE_RANKS      0x00000300u
+#define DDRB_IDLE_REQUEST      0x01u
+#define DDRB_ACTIVE_REQUEST    0x26u
+#define DDRB_ACTIVE_MODE       0x24u
+#define DDRB_COMMAND_READY     (1u << 29)
+#define DDRB_RANK_DONE         (1u << 21)
+#define DDRB_MODE_DONE         (1u << 4)
+
+typedef struct CxdDdrbControl {
+    MemoryRegion mmio;
+    uint32_t rank_config;
+    uint32_t gate;
+    uint32_t control;
+    uint32_t status;
+    uint32_t mode;
+    uint32_t limit[2];
+} CxdDdrbControl;
+
+static bool sony_a6400_ddrb_control;
+
+static uint64_t cxd90045_ddrb_read(void *opaque, hwaddr offset, unsigned size)
+{
+    CxdDdrbControl *s = opaque;
+
+    switch (offset) {
+    case DDRB_RANK0:
+        return s->rank_config | DDRB_IDLE_RANK0;
+    case DDRB_RANK1:
+        return DDRB_IDLE_RANK1;
+    case DDRB_CLOCK_GATE:
+        return s->gate;
+    case DDRB_CONTROL:
+        return s->control;
+    case DDRB_STATUS:
+        return s->status;
+    case DDRB_MODE:
+        return s->mode | (s->mode << 16);
+    case DDRB_LIMIT0:
+    case DDRB_LIMIT1:
+        return s->limit[offset == DDRB_LIMIT1];
+    default:
+        qemu_log_mask(LOG_UNIMP, "cxd90045.ddrb: unsupported read at +0x%" HWADDR_PRIx "\n",
+                      offset);
+        return 0;
+    }
+}
+
+static void cxd90045_ddrb_write(void *opaque, hwaddr offset, uint64_t value,
+                               unsigned size)
+{
+    CxdDdrbControl *s = opaque;
+    const uint32_t active_control = DDRB_ACCESS_CONTROL | DDRB_ENABLE_RANKS;
+
+    switch (offset) {
+    case DDRB_RANK0:
+        s->rank_config = value & DDRB_RANK_CONFIG_MASK;
+        return;
+    case DDRB_CLOCK_GATE:
+        s->gate = value & DDRB_ACCESS_CONTROL;
+        return;
+    case DDRB_LIMIT0:
+    case DDRB_LIMIT1:
+        s->limit[offset == DDRB_LIMIT1] = value;
+        return;
+    case DDRB_CONTROL:
+        if (value == active_control) {
+            if (s->control == DDRB_ACCESS_CONTROL) {
+                s->status |= DDRB_COMMAND_READY | DDRB_RANK_DONE;
+            }
+            s->control = value;
+            return;
+        }
+        if (value == DDRB_ACCESS_CONTROL && s->control == active_control &&
+            !(s->status & DDRB_COMMAND_READY)) {
+            s->control = value;
+            return;
+        }
+        break;
+    case DDRB_MODE:
+        if (value == DDRB_ACTIVE_REQUEST && !s->gate &&
+            (s->status & DDRB_COMMAND_READY) &&
+            !(s->status & DDRB_RANK_DONE)) {
+            s->mode = DDRB_ACTIVE_MODE;
+            s->status |= DDRB_MODE_DONE;
+            return;
+        }
+        if (value == DDRB_IDLE_REQUEST && s->mode == DDRB_ACTIVE_MODE) {
+            s->mode = 0;
+            s->status = 0;
+            return;
+        }
+        break;
+    case DDRB_STATUS_CLEAR:
+        s->status &= ~(value & (DDRB_RANK_DONE | DDRB_MODE_DONE));
+        return;
+    default:
+        break;
+    }
+    qemu_log_mask(LOG_UNIMP, "cxd90045.ddrb: unsupported write +0x%" HWADDR_PRIx
+                  " = 0x%" PRIx64 "\n", offset, value);
+}
+
+static const MemoryRegionOps cxd90045_ddrb_ops = {
+    .read = cxd90045_ddrb_read,
+    .write = cxd90045_ddrb_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+    .impl = { .min_access_size = 4, .max_access_size = 4 },
+};
+
+static void cxd90045_ddrb_reset(void *opaque)
+{
+    CxdDdrbControl *s = opaque;
+
+    s->rank_config = DDRB_ENABLE_RANKS;
+    s->control = DDRB_ACCESS_CONTROL;
+    s->gate = 0;
+    s->status = 0;
+    s->mode = 0;
+    s->limit[0] = 0;
+    s->limit[1] = 0;
+}
+
+static void cxd90045_create_ddrb(MemoryRegion *sysmem)
+{
+    CxdDdrbControl *s = g_new0(CxdDdrbControl, 1);
+
+    cxd90045_ddrb_reset(s);
+    memory_region_init_io(&s->mmio, NULL, &cxd90045_ddrb_ops, s,
+                          "cxd90045.ddrb", 0x21c);
+    memory_region_add_subregion_overlap(sysmem, CXD90045_DDRB_BASE, &s->mmio, 0);
+    qemu_register_reset(cxd90045_ddrb_reset, s);
+}
+
+static bool sony_get_ddrb_control(Object *obj, Error **errp)
+{
+    return sony_a6400_ddrb_control;
+}
+
+static void sony_set_ddrb_control(Object *obj, bool enabled, Error **errp)
+{
+    if (phase_check(PHASE_MACHINE_INITIALIZED)) {
+        error_setg(errp, "ddrb-control is a startup option");
+        return;
+    }
+    sony_a6400_ddrb_control = enabled;
+}
+
+/*
  * Sony boot contract (boot/loadaddr.txt "0x00108000,0x00700000,0x00103000",
  * E0425): the raw kernel Image runs at physical 0x00108000 (TEXT_OFFSET),
  * the initrd sits at 0x00700000, and r2 points at a NUL-terminated
@@ -737,6 +1019,23 @@ static void sony_set_work_dma(Object *obj, bool enabled, Error **errp)
  * QEMU's generic arm_load_kernel() cannot express this layout, so the
  * machine loads the images itself and enters the kernel on CPU reset.
  */
+/* Adapted ZV-E10 UI kernel layout; never selected by the stock profile. */
+static bool sony_a6400_zve10_menu_boot;
+
+static bool sony_get_zve10_menu_boot(Object *obj, Error **errp)
+{
+    return sony_a6400_zve10_menu_boot;
+}
+
+static void sony_set_zve10_menu_boot(Object *obj, bool enabled, Error **errp)
+{
+    if (phase_check(PHASE_MACHINE_INITIALIZED)) {
+        error_setg(errp, "zve10-menu-boot is a startup-only policy");
+        return;
+    }
+    sony_a6400_zve10_menu_boot = enabled;
+}
+
 #define CXD90045_KERNEL_LOAD     0x00108000ULL
 #define CXD90045_INITRD_LOAD     0x00700000ULL
 #define CXD90045_INITRD_MAX      0x00800000ULL
@@ -762,8 +1061,11 @@ static void sony_set_work_dma(Object *obj, bool enabled, Error **errp)
  * Encodings assembled with arm-linux-gnueabi-as (receipt in E0522).
  */
 #define CXD90045_STUB0           0x00001000ULL
+#define CXD90045_SHUTTER_STUB    0x00001140ULL
 #define CXD90045_SMPSTUB         0x00001200ULL
 #define CXD90045_SMP_MBOX        0xFE005010ULL
+
+static bool sony_a6400_shutter_edge_irq;
 
 static const uint32_t cxd90045_stub0[20] = {
     0xe59f3030,             /* ldr r3, =0xF8001820 (ITARGETSR8)  */
@@ -786,6 +1088,23 @@ static const uint32_t cxd90045_stub0[20] = {
     0x000028a0,             /* IRQ 98, 99, 101, 102 edge (E0529) */
     CXD90045_MACHINE_ID,
     0x00103000,
+};
+
+/*
+ * Optional bootloader policy: latch the body S1/S2 edges in the GIC.
+ * The timed GPIO pulses can otherwise disappear before a CPU acknowledges
+ * them. This is not a measurement of the camera's GPIO interrupt latch.
+ */
+static const uint32_t cxd90045_shutter_stub[] = {
+    0xe59f3018,             /* ldr r3, =0xF8001C1C (ICFGR7) */
+    0xe5934000,             /* ldr r4, [r3] */
+    0xe3844602,             /* orr r4, r4, #0x00200000 (IRQ 122) */
+    0xe5834000,             /* str r4, [r3] */
+    0xe5934004,             /* ldr r4, [r3, #4] (ICFGR8) */
+    0xe3844202,             /* orr r4, r4, #0x20000000 (IRQ 142) */
+    0xe5834004,             /* str r4, [r3, #4] */
+    0xeaffffa7,             /* b 0x1000 (ordinary CPU0 boot stub) */
+    0xf8001c1c,
 };
 
 static const uint32_t cxd90045_smpstub[11] = {
@@ -836,12 +1155,29 @@ static void sony_a6400_write_stubs(unsigned ncpu)
     uint32_t blob0[20 + 56];
     uint32_t smp[11];
 
+    QEMU_BUILD_BUG_ON(CXD90045_STUB0 + sizeof(blob0) > CXD90045_SHUTTER_STUB);
+    QEMU_BUILD_BUG_ON(CXD90045_SHUTTER_STUB + sizeof(cxd90045_shutter_stub) >
+                      CXD90045_SMPSTUB);
     for (int i = 0; i < 20; i++) {
         blob0[i] = cpu_to_le32(cxd90045_stub0[i]);
+    }
+    if (sony_a6400_zve10_menu_boot) {
+        /* ARM immediate encoding: mov pc, #0x138000. */
+        blob0[13] = cpu_to_le32(0xe3a0f94e);
+        blob0[19] = cpu_to_le32(0x100); /* adapted kernel uses Linux ATAGS */
     }
     cxd90045_spi_targets(&blob0[20], ncpu);
     rom_add_blob_fixed("sony_a6400.stub0", blob0, sizeof(blob0),
                        CXD90045_STUB0);
+    if (sony_a6400_shutter_edge_irq) {
+        uint32_t shutter[ARRAY_SIZE(cxd90045_shutter_stub)];
+
+        for (size_t i = 0; i < ARRAY_SIZE(shutter); i++) {
+            shutter[i] = cpu_to_le32(cxd90045_shutter_stub[i]);
+        }
+        rom_add_blob_fixed("sony_a6400.shutter_stub", shutter, sizeof(shutter),
+                           CXD90045_SHUTTER_STUB);
+    }
     for (int i = 0; i < 11; i++) {
         smp[i] = cpu_to_le32(cxd90045_smpstub[i]);
     }
@@ -864,10 +1200,41 @@ static void sony_a6400_cpu_reset(void *opaque)
         uint32_t mbox[3] = { 0 };
         address_space_write(&address_space_memory, CXD90045_SMP_MBOX,
                             MEMTXATTRS_UNSPECIFIED, mbox, sizeof(mbox));
-        cpu_set_pc(cs, CXD90045_STUB0);
+        cpu_set_pc(cs, sony_a6400_shutter_edge_irq ?
+                   CXD90045_SHUTTER_STUB : CXD90045_STUB0);
     } else {
         cpu_set_pc(cs, CXD90045_SMPSTUB);
     }
+}
+
+/* Standard Linux ATAGS for the rebuilt UI kernel, not the stock Sony ABI. */
+static void sony_a6400_menu_atags(MachineState *machine, uint32_t initrd_size)
+{
+    const char *cmdline = machine->kernel_cmdline ? machine->kernel_cmdline : "";
+    size_t cmd_words = (strlen(cmdline) + 1 + 3) / 4;
+    size_t count = 5 + 4 + 4 + 2 + cmd_words + 2;
+    if (count * 4 > CXD90045_STUB0 - 0x100) {
+        error_report("sony-a6400: adapted menu ATAGS exceed reserved space");
+        exit(1);
+    }
+    g_autofree uint32_t *tags = g_new0(uint32_t, count);
+    uint32_t *p = tags;
+
+    *p++ = cpu_to_le32(5);
+    *p++ = cpu_to_le32(0x54410001); /* ATAG_CORE */
+    p += 3;
+    *p++ = cpu_to_le32(4);
+    *p++ = cpu_to_le32(0x54410002); /* ATAG_MEM */
+    *p++ = cpu_to_le32(0x40000000);
+    *p++ = 0;
+    *p++ = cpu_to_le32(4);
+    *p++ = cpu_to_le32(0x54420005); /* ATAG_INITRD2 */
+    *p++ = cpu_to_le32(0x10000000);
+    *p++ = cpu_to_le32(initrd_size);
+    *p++ = cpu_to_le32(2 + cmd_words);
+    *p++ = cpu_to_le32(0x54410009); /* ATAG_CMDLINE */
+    memcpy(p, cmdline, strlen(cmdline) + 1);
+    rom_add_blob_fixed("sony_a6400.menu_atags", tags, count * 4, 0x100);
 }
 
 static void sony_a6400_load_boot_contract(MachineState *machine,
@@ -876,7 +1243,17 @@ static void sony_a6400_load_boot_contract(MachineState *machine,
     const char *append = machine->kernel_cmdline ? machine->kernel_cmdline : "";
     g_autofree char *params = NULL;
     ssize_t size;
+    hwaddr kernel_load = sony_a6400_zve10_menu_boot ?
+                          0x00138000 : CXD90045_KERNEL_LOAD;
+    hwaddr initrd_load = sony_a6400_zve10_menu_boot ?
+                          0x10000000 : CXD90045_INITRD_LOAD;
+    uint64_t initrd_max = sony_a6400_zve10_menu_boot ?
+                          0x10000000 : CXD90045_INITRD_MAX;
 
+    if (sony_a6400_zve10_menu_boot && ncpu != 1) {
+        error_report("sony-a6400: adapted ZV-E10 menu requires -smp 1");
+        exit(1);
+    }
     for (unsigned i = 0; i < ncpu; i++) {
         qemu_register_reset(sony_a6400_cpu_reset, cpus[i]);
     }
@@ -885,8 +1262,8 @@ static void sony_a6400_load_boot_contract(MachineState *machine,
         return;
     }
 
-    size = load_image_targphys(machine->kernel_filename, CXD90045_KERNEL_LOAD,
-                               CXD90045_INITRD_LOAD - CXD90045_KERNEL_LOAD,
+    size = load_image_targphys(machine->kernel_filename, kernel_load,
+                               initrd_load - kernel_load,
                                &error_fatal);
     if (size <= 0) {
         error_report("sony-a6400: could not load kernel '%s'",
@@ -896,13 +1273,17 @@ static void sony_a6400_load_boot_contract(MachineState *machine,
 
     if (machine->initrd_filename) {
         size = load_image_targphys(machine->initrd_filename,
-                                   CXD90045_INITRD_LOAD, CXD90045_INITRD_MAX,
+                                   initrd_load, initrd_max,
                                    &error_fatal);
         if (size <= 0) {
             error_report("sony-a6400: could not load initrd '%s'",
                          machine->initrd_filename);
             exit(1);
         }
+    }
+
+    if (sony_a6400_zve10_menu_boot) {
+        sony_a6400_menu_atags(machine, machine->initrd_filename ? size : 0);
     }
 
     params = g_str_has_prefix(append, "kemco") ? g_strdup(append)
@@ -988,19 +1369,48 @@ static void sony_a6400_sio_log(void *opaque, int ch, uint32_t mode,
  * all CRC-16/CCITT-FALSE valid.  The CPU's TX buffer holds 0x21 / 0x61 /
  * 0x31 in the same order.  Like the a5000 board (a5k_submicro_xfer), each
  * CPU frame is answered by its pair: 0x31 -> slot B, 0x61 -> slot C, any
- * other 128-byte frame -> slot A; a 256-byte exchange gets slot A + B.  Contents are
- * replayed as captured, never synthesised (the slot-A clock bytes stay at
- * the capture time [limitation]).
+ * other 128-byte frame -> slot A; a 256-byte exchange gets slot A + B.
+ * The board updates only its modeled slot-A inputs and the CRC. Clock
+ * bytes and other device state remain at their capture values.
  */
 static char *sony_a6400_sm_file;
 static uint8_t sony_a6400_sm_frames[384];
 static bool sony_a6400_sm_loaded;
+static bool sony_a6400_sm_lens_power;
+static SDBus *sony_a6400_sd_bus;
 static bool sony_a6400_rear_controls;
 static DeviceState *sony_a6400_rear_adc;
 static QKeyCode sony_a6400_adc_owner[2];
 static uint16_t sony_a6400_front_pressed;
+static bool sony_a6400_power_off;
 static bool sony_a6400_af_lever_low;
+static bool sony_a6400_eye_sensor_low;
+static bool sony_a6400_shutter_half;
+static bool sony_a6400_shutter_full;
 static uint16_t sony_a6400_wheel_count;
+
+static uint64_t sony_a6400_sd_mode_read(void *opaque, hwaddr offset,
+                                       unsigned size)
+{
+    SDBus *bus = opaque;
+    /* No Memory Stick is attached to the shared slot (bit 16 is active low). */
+    return BIT(16) |
+           (sdbus_get_inserted(bus) ? 0 : BIT(24)) |
+           (sdbus_get_readonly(bus) ? BIT(25) : 0);
+}
+
+static void sony_a6400_sd_mode_write(void *opaque, hwaddr offset,
+                                    uint64_t value, unsigned size)
+{
+    qemu_log_mask(LOG_UNIMP, "sony-a6400: write to SD MODEREAD ignored\n");
+}
+
+static const MemoryRegionOps sony_a6400_sd_mode_ops = {
+    .read = sony_a6400_sd_mode_read,
+    .write = sony_a6400_sd_mode_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+};
 
 static uint64_t sony_a6400_wheel_read(void *opaque, hwaddr offset, unsigned size)
 {
@@ -1025,8 +1435,32 @@ static void sony_a6400_rear_reset(void *opaque)
 {
     memset(sony_a6400_adc_owner, 0, sizeof(sony_a6400_adc_owner));
     sony_a6400_front_pressed = 0;
+    sony_a6400_power_off = false;
     sony_a6400_af_lever_low = false;
+    sony_a6400_eye_sensor_low = false;
+    sony_a6400_shutter_half = false;
+    sony_a6400_shutter_full = false;
     sony_a6400_wheel_count = 0;
+}
+
+static void sony_a6400_shutter_key(QKeyCode key, bool down)
+{
+    qemu_irq s1 = qdev_get_gpio_in(sony_a6400_gpio, CXD90045_SHUTTER_S1_LINE);
+    qemu_irq s2 = qdev_get_gpio_in(sony_a6400_gpio, CXD90045_SHUTTER_S2_LINE);
+
+    if (key == Q_KEY_CODE_SPC) {
+        sony_a6400_shutter_full = down;
+        if (!down) {
+            qemu_set_irq(s2, 1);
+        }
+    } else {
+        sony_a6400_shutter_half = down;
+    }
+    /* Full travel closes both contacts; S2 releases before S1. */
+    qemu_set_irq(s1, !(sony_a6400_shutter_half || sony_a6400_shutter_full));
+    if (key == Q_KEY_CODE_SPC && down) {
+        qemu_set_irq(s2, 0);
+    }
 }
 
 static void sony_a6400_rear_key(DeviceState *dev, QemuConsole *src,
@@ -1050,10 +1484,20 @@ static void sony_a6400_rear_key(DeviceState *dev, QemuConsole *src,
     uint16_t front = 0;
 
     switch (code) {
+    case Q_KEY_CODE_POWER:
+        if (key->down) {
+            sony_a6400_power_off = !sony_a6400_power_off;
+        }
+        return;
+    case Q_KEY_CODE_S:
+    case Q_KEY_CODE_SPC:
+        sony_a6400_shutter_key(code, key->down);
+        return;
     case Q_KEY_CODE_BRACKET_LEFT:
     case Q_KEY_CODE_BRACKET_RIGHT:
         if (key->down) {
-            sony_a6400_wheel_count += code == Q_KEY_CODE_BRACKET_RIGHT ? 1 : -1;
+            /* The captured JogTpu path divides the phase count by four. */
+            sony_a6400_wheel_count += code == Q_KEY_CODE_BRACKET_RIGHT ? 4 : -4;
         }
         return;
     case Q_KEY_CODE_A:
@@ -1064,6 +1508,13 @@ static void sony_a6400_rear_key(DeviceState *dev, QemuConsole *src,
             sony_a6400_af_lever_low = !sony_a6400_af_lever_low;
             qemu_set_irq(qdev_get_gpio_in(sony_a6400_gpio, 11),
                          !sony_a6400_af_lever_low);
+        }
+        return;
+    case Q_KEY_CODE_E:
+        if (key->down) {
+            sony_a6400_eye_sensor_low = !sony_a6400_eye_sensor_low;
+            qemu_set_irq(qdev_get_gpio_in(sony_a6400_gpio, 2),
+                         !sony_a6400_eye_sensor_low);
         }
         return;
     case Q_KEY_CODE_M:
@@ -1121,6 +1572,21 @@ static void sony_a6400_set_rear_controls(Object *obj, bool value, Error **errp)
 {
     sony_a6400_rear_controls = value;
 }
+
+static bool sony_get_shutter_edge_irq(Object *obj, Error **errp)
+{
+    return sony_a6400_shutter_edge_irq;
+}
+
+static void sony_set_shutter_edge_irq(Object *obj, bool enabled, Error **errp)
+{
+    if (phase_check(PHASE_MACHINE_INITIALIZED)) {
+        error_setg(errp, "shutter-edge-irq is a startup option");
+        return;
+    }
+    sony_a6400_shutter_edge_irq = enabled;
+}
+
 static bool sony_a6400_campig_enable_readback;
 static bool sony_a6400_sgc1_event_a;
 
@@ -1340,6 +1806,66 @@ static void sony_a6400_set_gate_force_probe(Object *obj, bool value,
                                             Error **errp)
 {
     sony_a6400_gate_force_probe = value;
+}
+
+/*
+ * Declared stimulus (cond. PROBE entry-force), opt-in and off by default. This
+ * is NOT a model or a fix: while the camera-control state S (VA 0x6431B594)
+ * is 240, it patches the av-cam entry dispatch at VA 0x6386CDC0 from
+ * "add.w r3, r0, #-1" to "movs r0, #1; movs r3, #0". The tbh at 0x6386CDD8
+ * then selects index 0, so the first entry takes the r0 = 1 path exactly as
+ * F-0060's debugger write did (r0 = 1, r10 = 1). Only the exact av-cam bytes
+ * 00 f1 ff 33 are patched. The original bytes are restored and the translation
+ * blocks invalidated as soon as S leaves 240, so later entries behave
+ * naturally. The timer polls every 100 us of virtual time: the S = 240
+ * window at the first entry is only tens of ms long (L0068 DBG2).
+ */
+#define ENTRY_FORCE_PA 0x0386CDC0ULL
+#define ENTRY_FORCE_S_PA 0x0431B594ULL
+#define ENTRY_FORCE_PERIOD_NS (100 * 1000LL)
+#define ENTRY_FORCE_S_READY 0xf0
+
+static bool sony_a6400_entry_force_probe;
+static QEMUTimer *sony_a6400_entry_force_timer;
+
+static void sony_a6400_entry_force_tick(void *opaque)
+{
+    static const uint8_t orig[4] = { 0x00, 0xf1, 0xff, 0x33 };
+    static const uint8_t forced[4] = { 0x01, 0x20, 0x00, 0x23 };
+    uint8_t bytes[4];
+    uint8_t s;
+
+    address_space_read(&address_space_memory, ENTRY_FORCE_S_PA,
+                       MEMTXATTRS_UNSPECIFIED, &s, sizeof(s));
+    address_space_read(&address_space_memory, ENTRY_FORCE_PA,
+                       MEMTXATTRS_UNSPECIFIED, bytes, sizeof(bytes));
+    if (s == ENTRY_FORCE_S_READY && memcmp(bytes, orig, sizeof(orig)) == 0) {
+        address_space_write(&address_space_memory, ENTRY_FORCE_PA,
+                            MEMTXATTRS_UNSPECIFIED, forced, sizeof(forced));
+        tb_invalidate_phys_range(NULL, ENTRY_FORCE_PA,
+                                 ENTRY_FORCE_PA + sizeof(forced) - 1);
+        fprintf(stderr, "a6400: entry-force-probe applied "
+                "0x6386cdc0=0x2001,0x2300 (dispatch add.w r3,r0,#-1)\n");
+    } else if (s != ENTRY_FORCE_S_READY &&
+               memcmp(bytes, forced, sizeof(forced)) == 0) {
+        address_space_write(&address_space_memory, ENTRY_FORCE_PA,
+                            MEMTXATTRS_UNSPECIFIED, orig, sizeof(orig));
+        tb_invalidate_phys_range(NULL, ENTRY_FORCE_PA,
+                                 ENTRY_FORCE_PA + sizeof(orig) - 1);
+    }
+    timer_mod(sony_a6400_entry_force_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ENTRY_FORCE_PERIOD_NS);
+}
+
+static bool sony_a6400_get_entry_force_probe(Object *obj, Error **errp)
+{
+    return sony_a6400_entry_force_probe;
+}
+
+static void sony_a6400_set_entry_force_probe(Object *obj, bool value,
+                                             Error **errp)
+{
+    sony_a6400_entry_force_probe = value;
 }
 
 static bool sony_a6400_get_campig_enable_readback(Object *obj, Error **errp)
@@ -1683,8 +2209,61 @@ static void sony_a6400_create_liveview_pipeline(MachineState *machine,
     }
 }
 
+static void sony_a6400_submicro_crc(uint8_t frame[128])
+{
+    uint16_t crc = 0xffff;
+
+    for (unsigned i = 0; i < 126; i++) {
+        crc ^= frame[i] << 8;
+        for (unsigned bit = 0; bit < 8; bit++) {
+            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+        }
+    }
+    frame[126] = crc;
+    frame[127] = crc >> 8;
+}
+
+static const uint8_t *sony_a6400_submicro_tlv(const uint8_t frame[128],
+                                             uint8_t id, unsigned min_len)
+{
+    unsigned end = 4 + frame[2] + ((unsigned)frame[3] << 8);
+
+    if (end > 126) {
+        return NULL;
+    }
+    for (unsigned pos = 4; pos + 4 <= end;) {
+        unsigned size = frame[pos + 1];
+        if (size > end - pos - 4) {
+            return NULL;
+        }
+        if (frame[pos] == id) {
+            return size >= min_len ? frame + pos + 4 : NULL;
+        }
+        pos += 4 + size;
+    }
+    return NULL;
+}
+
+static void sony_a6400_submicro_lens_reply(const uint8_t tx[128],
+                                           uint8_t reply[128])
+{
+    const uint8_t *request = sony_a6400_submicro_tlv(tx, 0x0a, 2);
+    const uint8_t *status = sony_a6400_submicro_tlv(reply, 0x03, 4);
+    unsigned pos;
+
+    if (!request || !status) {
+        qemu_log_mask(LOG_UNIMP, "sony-a6400: missing lens power TLV\n");
+        return;
+    }
+    /* av-cam 0x6386ACDA requests the rail; 0x6386AC28 reads its status.
+     * The virtual supply settles at the SPI exchange. No lens is simulated. */
+    pos = (status - reply) + 3;
+    reply[pos] = (reply[pos] & ~BIT(0)) | (request[1] & BIT(0));
+    sony_a6400_submicro_crc(reply);
+}
+
 static void sony_a6400_submicro_xfer(void *opaque, int ch, uint32_t mode,
-                                     uint8_t *buf, int len)
+                                    uint8_t *buf, int len)
 {
     uint8_t out[256];
 
@@ -1694,21 +2273,35 @@ static void sony_a6400_submicro_xfer(void *opaque, int ch, uint32_t mode,
     }
     memcpy(out, sony_a6400_sm_frames +
            (buf[0] == 0x31 ? 256 : buf[0] == 0x61 ? 128 : 0), 128);
-    if (sony_a6400_rear_controls && out[0] == 0x20 && sony_a6400_front_pressed) {
-        uint16_t crc = 0xffff;
-        out[28] |= sony_a6400_front_pressed & (BIT(1) | BIT(2));
-        out[29] &= ~(sony_a6400_front_pressed >> 8);
-        for (unsigned i = 0; i < 126; i++) {
-            crc ^= out[i] << 8;
-            for (unsigned bit = 0; bit < 8; bit++) {
-                crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+    if (out[0] == 0x20 &&
+        (sony_a6400_sd_bus || (sony_a6400_rear_controls &&
+         (sony_a6400_front_pressed || sony_a6400_power_off)))) {
+        /* Captured ORIL 0x63A755C6 decodes slot A byte 2 bit 4 as
+         * SD0 presence in the seven-byte front media report. */
+        if (sony_a6400_sd_bus) {
+            out[2] &= ~BIT(4);
+            if (sdbus_get_inserted(sony_a6400_sd_bus)) {
+                out[2] |= BIT(4);
             }
         }
-        out[126] = crc;
-        out[127] = crc >> 8;
+        /* E0526: the OFF position clears CAkey1 bit 0. */
+        if (sony_a6400_rear_controls) {
+            if (sony_a6400_power_off) {
+                out[28] &= ~BIT(0);
+            }
+            out[28] |= sony_a6400_front_pressed & (BIT(1) | BIT(2));
+            out[29] &= ~(sony_a6400_front_pressed >> 8);
+        }
+        sony_a6400_submicro_crc(out);
+    } else if (sony_a6400_sm_lens_power && buf[0] == 0x31 && out[0] == 0x30) {
+        sony_a6400_submicro_lens_reply(buf, out);
     }
     if (len >= 256) {
         memcpy(out + 128, sony_a6400_sm_frames + 256, 128);
+        if (sony_a6400_sm_lens_power && buf[128] == 0x31 &&
+            out[128] == 0x30) {
+            sony_a6400_submicro_lens_reply(buf + 128, out + 128);
+        }
     }
     memcpy(buf, out, len >= 256 ? 256 : 128);
 }
@@ -1716,6 +2309,16 @@ static void sony_a6400_submicro_xfer(void *opaque, int ch, uint32_t mode,
 static char *sony_a6400_get_sm_file(Object *obj, Error **errp)
 {
     return g_strdup(sony_a6400_sm_file);
+}
+
+static bool sony_a6400_get_sm_lens_power(Object *obj, Error **errp)
+{
+    return sony_a6400_sm_lens_power;
+}
+
+static void sony_a6400_set_sm_lens_power(Object *obj, bool enabled, Error **errp)
+{
+    sony_a6400_sm_lens_power = enabled;
 }
 
 /*
@@ -1762,6 +2365,7 @@ static void sony_a6400_init(MachineState *machine)
     unsigned ncpu = machine->smp.cpus;
     ARMCPU *cpus[CXD90045_MAX_CPUS];
     DeviceState *timer;
+    BlockBackend *sd_blk;
     int i;
 
     for (unsigned c = 0; c < ncpu; c++) {
@@ -1806,6 +2410,15 @@ static void sony_a6400_init(MachineState *machine)
     }
 
     pl011_create(CXD90045_UART0_BASE, pic[CXD90045_UART0_SPI], serial_hd(0));
+    /*
+     * UART3 is a second, independent PL011.  The kernel's udif table names it
+     * "uart3" at 0xF2003000 (size 0x1000, IRQ 120) and AMBA-probes it as
+     * uart_devs[3]; without the device the PrimeCell ID reads return 0 and
+     * registration fails.  The stock pl011 already exposes PID 0x00141011 /
+     * CID 0xB105F00D, matching the kernel's expected AMBA IDs.  No second
+     * -serial is passed, so the chardev is NULL and UART0/console is untouched.
+     */
+    pl011_create(CXD90045_UART3_BASE, pic[CXD90045_UART3_SPI], serial_hd(1));
 
     timer = qdev_new("cxd4115-timer");
     sysbus_realize_and_unref(SYS_BUS_DEVICE(timer), &error_fatal);
@@ -1832,16 +2445,24 @@ static void sony_a6400_init(MachineState *machine)
     if (sony_a6400_work_dma) {
         cxd90045_create_work_dma(get_system_memory());
     }
+    if (sony_a6400_ddrb_control) {
+        cxd90045_create_ddrb(sysmem);
+    }
     if (sony_a6400_lowmem_abort) {
         sony_a6400_create_lowmem_abort(sysmem, cpus, ncpu);
     }
     if (sony_a6400_hostwin && *sony_a6400_hostwin) {
+#ifdef _WIN32
+        error_report("sony-a6400: hostwin requires a POSIX host");
+        exit(1);
+#else
         MemoryRegion *win = g_new0(MemoryRegion, 1);
         if (!memory_region_init_ram_from_file(win, NULL, "a6400.hostwin", CXD90045_HOSTWIN_SIZE,
                                               0, RAM_SHARED, sony_a6400_hostwin, 0, &error_fatal)) {
             exit(1);
         }
         memory_region_add_subregion_overlap(sysmem, CXD90045_HOSTWIN_PA, win, 10);
+#endif
     }
 
     /*
@@ -1865,6 +2486,13 @@ static void sony_a6400_init(MachineState *machine)
             timer_new_ns(QEMU_CLOCK_VIRTUAL, sony_a6400_gate_force_tick, NULL);
         timer_mod(sony_a6400_gate_force_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + GATE_FORCE_PERIOD_NS);
+    }
+    if (sony_a6400_entry_force_probe) {
+        sony_a6400_entry_force_timer =
+            timer_new_ns(QEMU_CLOCK_VIRTUAL, sony_a6400_entry_force_tick, NULL);
+        timer_mod(sony_a6400_entry_force_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  ENTRY_FORCE_PERIOD_NS);
     }
     if (sony_a6400_usb_vbus_test) {
         sony_usb_vbus_create(machine, pic[230 - 32]);
@@ -2048,6 +2676,51 @@ static void sony_a6400_init(MachineState *machine)
         qdev_prop_set_uint64(cc, "base", 0xF3120000ULL);
         sysbus_realize_and_unref(SYS_BUS_DEVICE(cc), &error_fatal);
         sysbus_mmio_map_overlap(SYS_BUS_DEVICE(cc), 0, 0xF3120000ULL, -600);
+    }
+
+    /*
+     * L0031: uncovered sub-windows of two more register blocks, modelled by
+     * the same generic cxd90045-camcore rule file (base selects the block
+     * table, window says where this sub-window starts).  Each window is
+     * mapped at -600: above the cxd90045.unmodelled catch-all (-1000) and
+     * below every existing device model, which therefore keep winning:
+     *   (0xF2400000 is left unmodelled: guest-written status words, see
+     *   cxd90045_camcore.c.)
+     *   - 0xF3C00000: 0xF3C04000..0xF3C08FFF; the P2S page
+     *     0xF3C00000..0xF3C00FFF and the evsel block 0xF3C30000 are not
+     *     covered.
+     *   - 0xF2910000: 0xF2912000/0x4000/0x5000; the 18-port GPIO model covers
+     *     only 0x100*18 = 0x1200 bytes (0xF2910000..0xF29111FF), so these
+     *     three pages are outside it, and DFS 0xF2916000 is not covered.
+     *   - 0xF3020000: 0xF3020800..0xF3020BFF (L0090); the AIF model at
+     *     0xF3020000 covers only its first 0x800 bytes.
+     */
+    {
+        static const struct {
+            hwaddr base;
+            hwaddr window;
+            uint64_t size;
+            const char *name;
+        } cc_windows[] = {
+            { 0xF3C00000ULL, 0xF3C04000ULL, 0x5000, "cxd90045.camcore-f3c0-4000" },
+            { 0xF2910000ULL, 0xF2912000ULL, 0x1000, "cxd90045.camcore-f291-2000" },
+            { 0xF2910000ULL, 0xF2914000ULL, 0x1000, "cxd90045.camcore-f291-4000" },
+            { 0xF2910000ULL, 0xF2915000ULL, 0x1000, "cxd90045.camcore-f291-5000" },
+            { 0xF3020000ULL, 0xF3020800ULL, 0x400,  "cxd90045.camcore-f302-0800" },
+        };
+        size_t k;
+
+        for (k = 0; k < ARRAY_SIZE(cc_windows); k++) {
+            DeviceState *cc = qdev_new("cxd90045-camcore");
+
+            qdev_prop_set_string(cc, "name", cc_windows[k].name);
+            qdev_prop_set_uint64(cc, "size", cc_windows[k].size);
+            qdev_prop_set_uint64(cc, "base", cc_windows[k].base);
+            qdev_prop_set_uint64(cc, "window", cc_windows[k].window);
+            sysbus_realize_and_unref(SYS_BUS_DEVICE(cc), &error_fatal);
+            sysbus_mmio_map_overlap(SYS_BUS_DEVICE(cc), 0,
+                                    cc_windows[k].window, -600);
+        }
     }
 
     /*
@@ -2249,8 +2922,12 @@ static void sony_a6400_init(MachineState *machine)
     /* sugilite_clock_up_internal expects 0x15 at 0xF3400080 */
     sugi_clk->regs[0x80 >> 2] = 0x15;
 
-    cxd90045_create_rw_stub(sysmem, "cxd90045.dfs_ctrl",
-                            CXD90045_DFS_CTRL_BASE, 0x1000, 0);
+    if (sony_a6400_dfs_control) {
+        cxd90045_create_dfs(sysmem);
+    } else {
+        cxd90045_create_rw_stub(sysmem, "cxd90045.dfs_ctrl",
+                                CXD90045_DFS_CTRL_BASE, 0x1000, 0);
+    }
 
     cxd90045_create_xdmac(sysmem, CXD90045_XDMAC0_BASE,
                           &pic[CXD90045_XDMAC0_SPI_BASE]);
@@ -2294,6 +2971,35 @@ static void sony_a6400_init(MachineState *machine)
         }
     }
 
+    /*
+     * The captured UDIF mmc0 resource is the removable slot; mmc1 is SDIO
+     * and emmc0 above is internal storage. An explicitly named backend
+     * enables this experimental slot even when it contains no medium.
+     */
+    sd_blk = blk_by_name("a6400-sd");
+    if (sd_blk) {
+        DeviceState *sdhci = qdev_new(TYPE_SYSBUS_SDHCI);
+        DeviceState *card = qdev_new(TYPE_SD_CARD);
+        SDBus *bus = &SYSBUS_SDHCI(sdhci)->sdbus;
+        MemoryRegion *mode_read = g_new(MemoryRegion, 1);
+
+        qdev_prop_set_uint8(sdhci, "sd-spec-version", 3);
+        qdev_prop_set_uint64(sdhci, "capareg", 0x016830b0);
+        sbd = SYS_BUS_DEVICE(sdhci);
+        sysbus_realize_and_unref(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, CXD90045_MMC0_BASE);
+        sysbus_connect_irq(sbd, 0, pic[CXD90045_MMC0_SPI]);
+        qdev_prop_set_drive_err(card, "drive", sd_blk, &error_fatal);
+        qdev_realize_and_unref(card, BUS(bus), &error_fatal);
+        sony_a6400_sd_bus = bus;
+
+        /* mcmn_drv polls active-low card detect in MISCREG, not SDHCI. */
+        memory_region_init_io(mode_read, OBJECT(machine),
+                              &sony_a6400_sd_mode_ops, bus,
+                              "cxd90045.sd-moderead", 4);
+        memory_region_add_subregion(sysmem, CXD90045_SD_MODEREAD, mode_read);
+    }
+
     sony_a6400_load_boot_contract(machine, cpus, ncpu);
 }
 
@@ -2311,6 +3017,11 @@ static void sony_a6400_machine_init(MachineClass *mc)
                                   sony_a6400_set_sm_file);
     object_class_property_set_description(OBJECT_CLASS(mc), "submicro-frames",
         "384-byte file: captured sub-micro RX slots A, C, B (E0527)");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "submicro-lens-power",
+                                   sony_a6400_get_sm_lens_power,
+                                   sony_a6400_set_sm_lens_power);
+    object_class_property_set_description(OBJECT_CLASS(mc), "submicro-lens-power",
+        "Model the sub-micro lens power rail status (no lens protocol)");
     object_class_property_add_str(OBJECT_CLASS(mc), "hostwin",
                                   sony_a6400_get_hostwin, sony_a6400_set_hostwin);
     object_class_property_set_description(OBJECT_CLASS(mc), "hostwin",
@@ -2332,11 +3043,23 @@ static void sony_a6400_machine_init(MachineClass *mc)
     object_class_property_set_description(OBJECT_CLASS(mc),
         "gate-force-probe", "Declared stimulus (cond. PROBE gate-force): patch "
         "the av-cam step-26 producer cbz to a NOP once; not a fix");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "entry-force-probe",
+                                   sony_a6400_get_entry_force_probe,
+                                   sony_a6400_set_entry_force_probe);
+    object_class_property_set_description(OBJECT_CLASS(mc),
+        "entry-force-probe", "Declared stimulus (cond. PROBE entry-force): "
+        "while S is 240, make the first av-cam entry take the r0 = 1 path; "
+        "not a fix");
     object_class_property_add_bool(OBJECT_CLASS(mc), "rear-controls",
                                    sony_a6400_get_rear_controls,
                                    sony_a6400_set_rear_controls);
     object_class_property_set_description(OBJECT_CLASS(mc), "rear-controls",
         "Connect host keys to a6400 ADC, GPIO and sub-micro inputs");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "shutter-edge-irq",
+                                   sony_get_shutter_edge_irq,
+                                   sony_set_shutter_edge_irq);
+    object_class_property_set_description(OBJECT_CLASS(mc), "shutter-edge-irq",
+        "Latch body shutter IRQs 122 and 142 as edge-triggered at boot");
     object_class_property_add_str(OBJECT_CLASS(mc), "liveview-source",
                                   sony_a6400_get_liveview_source,
                                   sony_a6400_set_liveview_source);
@@ -2373,6 +3096,20 @@ static void sony_a6400_machine_init(MachineClass *mc)
     object_class_property_set_description(OBJECT_CLASS(mc), "work-dma",
         "Model the work DMA copy channel at 0xF0102000 (+0x1C0, mode "
         "0x1C491000 only; E0641)");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "zve10-menu-boot",
+                                   sony_get_zve10_menu_boot,
+                                   sony_set_zve10_menu_boot);
+    object_class_property_set_description(OBJECT_CLASS(mc), "zve10-menu-boot",
+        "Opt in to the adapted ZV-E10 UI kernel layout (single CPU, "
+        "kernel 0x138000, initrd 0x10000000, maximum 256 MiB)");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "ddrb-control",
+                                   sony_get_ddrb_control, sony_set_ddrb_control);
+    object_class_property_set_description(OBJECT_CLASS(mc), "ddrb-control",
+        "Model the DDR-B controller's initialized idle/active-mode sequence");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "dfs-control",
+                                   sony_get_dfs_control, sony_set_dfs_control);
+    object_class_property_set_description(OBJECT_CLASS(mc), "dfs-control",
+        "Complete the observed DFS clock switch register sequence");
     object_class_property_add_bool(OBJECT_CLASS(mc), "lowmem-abort",
                                    sony_get_lowmem_abort, sony_set_lowmem_abort);
     object_class_property_set_description(OBJECT_CLASS(mc), "lowmem-abort",

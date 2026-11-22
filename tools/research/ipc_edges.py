@@ -35,45 +35,87 @@ def _capstone():
                        capstone.CS_MODE_THUMB | capstone.CS_MODE_LITTLE_ENDIAN)
 
 
+def _decode_to(md, data: bytes, base: int, start: int, site: int):
+    """Instructions from ``start`` that end exactly at ``site``, or ``None`` if the stream
+    decoded from ``start`` does not land on ``site`` (it began inside another instruction)."""
+    out = []
+    for ins in md.disasm(data[start - base:site - base], start):
+        out.append(ins)
+    if not out or out[-1].address + out[-1].size != site:
+        return None
+    return out
+
+
 def constant_arguments(data: bytes, base: int, site: int, register: int,
                        window: int = 0x40) -> int | None:
-    """The immediate last written to ``register`` before ``site``, or ``None``.
+    """The constant held by ``register`` at ``site``, or ``None`` when it is not knowable.
 
-    Returns ``None`` when the register is copied from another register or loaded from memory:
-    the value is not statically knowable and reporting a number would be an invention.
+    The value is tracked forward through a straight-line window that ends exactly at the call:
+
+    * ``mov``/``movs``/``movw`` with an immediate sets it; a following ``movt`` sets the top half,
+      so ``movw r0,#0x8192; movt r0,#0xca`` is ``0xca8192`` (the earlier version kept ``0xca``).
+    * Any other instruction that writes the register makes it unknown, as does a call
+      (``bl``/``blx`` clobber r0-r3) or an instruction inside an IT block.
+    * The window must decode onto the call site from some start; if no start does, the bytes
+      before it are not one instruction stream and nothing is reported.
+
+    Straight-line only: a branch into the window from elsewhere is not seen, which is why a
+    reported constant is a lead to confirm by disassembly, not a verified runtime value.
     """
-    start = max(base, site - window)
+    import capstone
+    from capstone import arm_const
+
     md = _capstone()
-    region = data[start - base:site - base]
-    if not region:
+    md.detail = True
+    instructions = None
+    for start in range(max(base, site - window), site, 2):
+        instructions = _decode_to(md, data, base, start, site)
+        if instructions is not None:
+            break
+    if not instructions:
         return None
-    seen: int | None = None
-    for ins in md.disasm(region, start):
-        op = ins.op_str
-        if ins.mnemonic.startswith("mov"):
-            # movs r0,#0x2a / mov.w r0,#0x2a / movw r0,#0xe002
-            head, _, tail = op.partition(",")
-            if head.strip() != f"r{register}":
-                continue
-            tail = tail.strip()
-            if tail.startswith("#"):
-                try:
-                    seen = int(tail[1:], 0)
-                except ValueError:
-                    seen = None
-            else:
-                seen = None          # copied from a register or memory: unknown
+    target_reg = getattr(arm_const, f"ARM_REG_R{register}")
+    value: int | None = None
+    it_remaining = 0
+    for ins in instructions:
+        if ins.mnemonic.startswith("it"):
+            it_remaining = len(ins.mnemonic) - 1     # it, itt, ite, ittt, ...
             continue
-        if ins.mnemonic in ("add", "adds", "addw") and "pc" in op:
-            head, _, tail = op.partition(",")
-            if head.strip() == f"r{register}":
-                seen = None          # a PC-relative address, not a queue id
+        conditional = it_remaining > 0
+        if it_remaining:
+            it_remaining -= 1
+        if ins.mnemonic in ("bl", "blx") or (ins.mnemonic in ("blx", "bx") and ins.op_count(capstone.CS_OP_REG)):
+            if register <= 3:
+                value = None
             continue
-        if ins.mnemonic.startswith("ldr"):
-            head, _, _ = op.partition(",")
-            if head.strip() == f"r{register}":
-                seen = None          # loaded from memory: unknown
-    return seen
+        try:
+            _, written = ins.regs_access()
+        except capstone.CsError:
+            written = []
+        if target_reg not in written:
+            continue
+        operands = ins.operands
+        immediate = (len(operands) == 2 and operands[1].type == arm_const.ARM_OP_IMM)
+        if conditional:
+            value = None
+        elif ins.mnemonic in ("mov", "movs", "mov.w", "movs.w", "movw") and immediate:
+            value = operands[1].imm & 0xFFFFFFFF
+        elif ins.mnemonic == "movt" and immediate and value is not None:
+            value = (value & 0xFFFF) | ((operands[1].imm & 0xFFFF) << 16)
+        elif (ins.mnemonic in ("ldr", "ldr.w") and len(operands) == 2
+              and operands[1].type == arm_const.ARM_OP_MEM
+              and operands[1].mem.base == arm_const.ARM_REG_PC
+              and operands[1].mem.index == 0):
+            # A literal-pool load: the word at Align(PC, 4) + disp, where PC is this
+            # instruction's address + 4. A later `add rX, pc` (an address, not a value) or any
+            # other write still resets it to unknown.
+            literal = ((ins.address + 4) & ~3) + operands[1].mem.disp
+            offset = literal - base
+            value = (int.from_bytes(data[offset:offset + 4], "little")
+                     if 0 <= offset <= len(data) - 4 else None)
+        else:
+            value = None
+    return value
 
 
 def _literal_loads(data: bytes, base: int) -> dict[int, tuple[int, int]]:
@@ -101,60 +143,28 @@ def _literal_loads(data: bytes, base: int) -> dict[int, tuple[int, int]]:
 def ipc_edges(path: Path) -> list[dict[str, Any]]:
     """One entry per IPC call site found in ``path``.
 
-    Each entry: ``{"caller", "callee", "site", "queue_or_cmd"}``. ``caller`` is the enclosing
-    function's name when the symbol table answers, else ``sub_XXXXXXXX``.
+    Each entry: ``{"caller", "callee", "site", "queue_or_cmd"}``. ``caller`` is the function whose
+    declared extent contains the site when the symbol table answers, else ``sub_XXXXXXXX``.
     """
-    from callgraph import _plt_symbol_names, build_callgraph, direct_calls
+    from callgraph import (_plt_symbol_names, direct_calls, executable_ranges,
+                           largest_code_section, make_enclosing)
+    from elf_symbols import functions, read_symbols
 
-    graph = build_callgraph(Path(path))
-    names_by_address = graph["nodes"]
-    plt_names = _plt_symbol_names(Path(path))
-
-    data = Path(path).read_bytes()
-    try:
-        import io
-
-        from elftools.elf.elffile import ELFFile
-
-        with open(path, "rb") as handle:
-            elf = ELFFile(handle)
-            section = None
-            for candidate in elf.iter_sections():
-                if candidate["sh_type"] != "SHT_PROGBITS":
-                    continue
-                if not candidate["sh_flags"] & 0x4:
-                    continue
-                if section is None or candidate["sh_size"] > section["sh_size"]:
-                    section = candidate
-            code = section.data()
-            code_base = section["sh_addr"]
-    except Exception as exc:
-        raise ValueError(f"{path}: cannot read executable sections ({exc})") from exc
-
-    # Map an instruction address to the symbol that contains it, so a call site names its
-    # enclosing function rather than a bare address.
-    spans = sorted((addr, name) for addr, name in names_by_address.items())
-
-    def enclosing(address: int) -> str:
-        found = f"sub_{address:08X}"
-        for start, name in spans:
-            if start > address:
-                break
-            found = name
-        return found
+    path = Path(path)
+    funcs = functions(read_symbols(path))
+    names_by_address = {s.address: s.name for s in funcs if s.address}
+    plt_names = _plt_symbol_names(path)
+    code_base, code = largest_code_section(path)
+    enclosing = make_enclosing(funcs)
 
     edges: list[dict[str, Any]] = []
-    for caller, callee in direct_calls(code, code_base):
+    for caller, callee in direct_calls(code, code_base, executable_ranges(path)):
         resolved = plt_names.get(callee) or names_by_address.get(callee) or ""
         if resolved not in _IPC_CALLEES:
             continue
-        # The first argument of an OSAL send is the queue id in r0; for ioctl the command sits
+        # The first argument of an OSAL call is the queue id in r0; for ioctl the command sits
         # in r1 after the file descriptor.
         register = 1 if resolved == "ioctl" else 0
-        # Only an immediate counts. The earlier literal-pool fallback read the *instruction*
-        # bytes instead of the pool and so invented numbers (0x4604490f for a value actually
-        # loaded from memory). A value that is not an immediate stays None, which the TSV shows
-        # as an empty field.
         value = constant_arguments(code, code_base, caller, register)
         edges.append({
             "caller": enclosing(caller),

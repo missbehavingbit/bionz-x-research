@@ -7,6 +7,15 @@
 #ifndef MLV2_VIEW_BASE
 #define MLV2_VIEW_BASE 0x155e6000
 #endif
+#ifdef MLV2_TARGET_A6100
+#define HOOK_SET_ROOT_OFF  0x5acc0c
+#define HOOK_REFRESH_OFF   0x5ad038
+#define HOOK_OPEN_ITEM_OFF 0x5ad5fc
+#else
+#define HOOK_SET_ROOT_OFF  0x5ab654
+#define HOOK_REFRESH_OFF   0x5aba80
+#define HOOK_OPEN_ITEM_OFF 0x5ac044
+#endif
 
 .global ml_hook_set_root
 .global ml_hook_refresh
@@ -47,8 +56,8 @@ ml_hook_set_root:
     ldr r2, 3f
     bx r2
 .align 2
-1:  .word MLV2_VIEW_BASE + 0x5ab665
-3:  .word MLV2_VIEW_BASE + 0x5ab671
+1:  .word MLV2_VIEW_BASE + HOOK_SET_ROOT_OFF + 0x11
+3:  .word MLV2_VIEW_BASE + HOOK_SET_ROOT_OFF + 0x1d
 
 .thumb_func
 ml_orig_refresh:
@@ -67,7 +76,7 @@ ml_orig_refresh:
     ldr r2, 2f
     bx r2
 .align 2
-2:  .word MLV2_VIEW_BASE + 0x5aba8f
+2:  .word MLV2_VIEW_BASE + HOOK_REFRESH_OFF + 0x0f
 
 .thumb_func
 ml_hook_refresh:
@@ -100,4 +109,4 @@ ml_hook_open_item:
     ldr.w ip, 4f
     bx ip
 .align 2
-4:  .word MLV2_VIEW_BASE + 0x5ac04d
+4:  .word MLV2_VIEW_BASE + HOOK_OPEN_ITEM_OFF + 0x09

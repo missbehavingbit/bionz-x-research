@@ -357,7 +357,12 @@ class DataAbortDeliveryTests(unittest.TestCase):
         machine = self.make_machine()
         self.assertTrue(machine._deliver_data_abort(0x60100000, 0x13, 0, True))
         self.assertEqual(machine.data_abort_trace[0]['fsr'], '0x00000805')
-        # A repeatedly faulting PC is bounded instead of looping forever.
+        # A repeatedly faulting (PC, page) is bounded instead of looping forever,
+        # while sequential demand-paged 4 KiB pages at the same copy_from_user PC advance.
+        for page in range(16):
+            self.assertTrue(
+                machine._deliver_data_abort(0x60256DF0, 0x13, 0x040AA000 + page * 0x1000, False)
+            )
         for _ in range(12):
             machine._deliver_data_abort(0x60100000, 0x13, 0, True)
         self.assertFalse(machine._deliver_data_abort(0x60100000, 0x13, 0, True))
@@ -407,13 +412,26 @@ class ExceptionTableFixupTests(unittest.TestCase):
         self.assertEqual(machine.ex_table_fixups, 1)
         self.assertIsNone(machine._try_ex_table_fixup(0x60100000))
 
+    def test_fixup_rejects_a_stub_that_points_at_itself(self):
+        machine = UnicornMachine(tiny_kernel(), b'\x00' * 64,
+                                 build_atags('console=ttyAM0', [(0, 0x40000000)]),
+                                 machine_id=0x0DA9, instruction_limit=100,
+                                 exclusive_patch=False, data_abort_delivery=False)
+        machine.PAGE_OFFSET = 0
+        machine.ex_table = {0x6010D930: 0x6010D930}
+        machine.uc.reg_write(UC_ARM_REG_PC, 0x6010D930)
+        self.assertIsNone(machine._try_ex_table_fixup(0x6010D930))
+        self.assertEqual(machine.uc.reg_read(UC_ARM_REG_PC), 0x6010D930)
+        self.assertEqual(machine.ex_table_fixups, 0)
+
     @unittest.skipUnless(KERNEL.is_file(), 'E0416 decompressed updater kernel not present')
     def test_real_kernel_ex_table_contains_futex_ldrex(self):
         machine = UnicornMachine(KERNEL.read_bytes(), b'\x00' * 64,
                                  build_atags('console=ttyAM0', [(0, 0x40000000)]),
                                  machine_id=0x0DA9, instruction_limit=1,
                                  exclusive_patch=False, data_abort_delivery=False)
-        self.assertGreater(machine.ex_table_entries, 1000)
+        self.assertGreater(machine.ex_table_entries, 400)
+        self.assertLess(machine.ex_table_entries, 800)
         self.assertEqual(machine.ex_table.get(0x6015BDCC), 0x60364BD4)
 
 

@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from project_paths import PROJECT_ROOT
 from tools.research.mcp_workspace import (
-    analysis_environment, reverify_request, validate_reverify_call, wait_for_backend,
+    analysis_environment, main, reverify_request, validate_reverify_call, wait_for_backend,
 )
 
 
@@ -74,6 +74,27 @@ class WorkspaceMcpTests(unittest.TestCase):
         self.assertEqual(env['GHIDRA_DEBUGGER_TOOLS'], '0')
         self.assertEqual(env['HF_HUB_OFFLINE'], '1')
         self.assertEqual(env['REVERIFY_LEDGER_DIR'], str(self.root / 'workspace' / 'reverify-ledger'))
+
+    def test_reexec_preserves_configured_ghidra_root_after_home_is_isolated(self):
+        installation = (self.root / 'local tools').resolve()
+        python = installation / 'envs' / 'ghidra' / 'bin' / 'python'
+        python.parent.mkdir(parents=True)
+        python.touch()
+        profile = {'java': '/private/jdk', 'ghidra': '/private/ghidra'}
+        config = {'workspace_mcp': {'root': 'unused', 'ghidra_install_root': '~/local tools'}}
+        with patch.dict(os.environ, HOME=str(self.root), USERPROFILE=str(self.root)), \
+                patch.object(sys, 'platform', 'linux'), patch('os.umask'), \
+                patch('tools.research.mcp_workspace.toolchain_config', return_value=config), \
+                patch('tools.research.mcp_workspace.rea_profile', return_value=profile) as resolve, \
+                patch('os.execve', side_effect=RuntimeError('intercepted exec')) as launch:
+            with self.assertRaisesRegex(RuntimeError, 'intercepted exec'):
+                main(['ghidra'])
+        resolve.assert_called_once_with('current', tools_root=installation)
+        executable, command, env = launch.call_args.args
+        self.assertEqual(executable, python)
+        self.assertEqual(command[-2:], ['--install-root', str(installation)])
+        self.assertEqual(env['HOME'], str(installation / 'home'))
+        self.assertEqual(env['GHIDRA_INSTALL_DIR'], profile['ghidra'])
 
     def test_protocol_distinguishes_null_error_from_actual_failure(self):
         request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',

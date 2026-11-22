@@ -45,12 +45,14 @@ filled to look better.
 `60ffd2b0f31f4bc139a7c13a4f62c25cdeb6a531ad5ef35df48471e6e36e88b1` (E0483), defining 1,853
 code symbols at 1,851 distinct addresses; the other 1,444 of its 3,297 FUNC entries are imports.
 
-- **29 direct IPC call sites** across `osal_snd_msg`, `osal_rcv_msg_tmo`, `osal_snd_sync_msg` and
-  `ioctl`. 17 pass a constant argument, matched to the `mov`/`movw` immediate that loads it; 12
-  take theirs from a register or memory and are recorded empty (E0483). Table
-  `docs/evidence/cross_model/ipc-edges-a6400.tsv`, bound to the image above by SHA-256
-  `60ffd2b0…e88b1`.
-- **6,713 named-to-named call edges** once a call is resolved to the symbol containing it (E0484).
+- **763 direct IPC call sites** across `osal_snd_msg` (187), `osal_snd_sync_msg` (406),
+  `osal_rcv_msg_tmo` (114) and `ioctl` (56); 544 pass a constant argument (E0663, which
+  supersedes E0483's 29 sites: those were calls to other imports, mislabelled by a fixed-stride
+  PLT map). Table `docs/evidence/cross_model/ipc-edges-a6400-e0663.tsv`, bound to the image above
+  by SHA-256 `60ffd2b0…e88b1`. Six of the queue ids match ids observed at runtime in the
+  emulator (E0307, E0308, E0309, E0612).
+- **538,081 direct calls, 2,785 named at both ends** once a call is attributed to the function
+  whose declared extent contains it (E0663, superseding E0484's figures).
 - **The display entry points are indirect.** `ObjDisplay_Create`, `ObjDisplay_Destroy`,
   `ObjDisplay_RegisterCommand` and `ObjDisplay_UnregisterCommand` exist on every body examined; `ObjDisplay_Start` does not exist at all,
   despite appearing in an earlier string scan. The four have **zero direct callers** and their

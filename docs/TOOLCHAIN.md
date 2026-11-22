@@ -99,12 +99,19 @@ client prompts. The skill commands are `/pyghidra-analysis`,
 `/ghidra-dataflow` and `/reverify-claims`. Command/protocol checks below do not
 claim that an already-running editor session has reloaded its customizations.
 
-The current host configuration launches `wsl.exe` in `Ubuntu-26.04` from the
-repository root. Other hosts must provision their own matching installation
-and adjust the workspace commands; no tools are downloaded at server startup.
+The `ghidra` and `pyghidra` entries launch `wsl.exe` in `REA-Ubuntu-24.04` from
+the repository root. `workspace_mcp.ghidra_install_root` selects
+`~/a6400-mcp-tools/20261121` for their private Ghidra 12.2, Temurin JDK 27,
+Python 3.12 virtual environments and workspace data. This installation is
+independent of the working REA/Ghidra backend. On another host, provision a
+matching installation and adjust the distro and install root; the launcher
+also accepts an explicit `--install-root` override. Provision the model in
+advance; it is not installed by the launcher.
 
-All three environments use distro Python 3.14.4 under
+The original 2026-11-17 qualification ran in `Ubuntu-26.04`. All three
+environments in that run used distro Python 3.14.4 under
 `/home/administrator/a6400-mcp-tools/20261117/envs/{pyghidra,ghidra,reverify}/`.
+The Reverify entry still expects that separate installation.
 Pinned source archives, sources, build output, package inventories and receipts
 live in that same private installation root. Existing Windows and WSL research
 environments remain unchanged. The installation used the already-qualified uv
@@ -125,9 +132,11 @@ The installation's `workspace/` directory holds staged inputs, projects and
 the Reverify ledger. PyGhidra's persistent project is
 `workspace/pyghidra/sony-research.gpr`; use returned, hash-suffixed program
 identifiers and confirm metadata hashes. Ghidra MCP projects must also stay
-under `workspace/`; open the actual `.gpr` file rather than the extensionless
-path returned by project creation. Do not share a live project between providers
-or delete its locks to work around concurrent ownership.
+under `workspace/`; pass that directory as `searchDir` to `list_projects`
+instead of searching the server's private home. Open the actual `.gpr` file
+rather than the extensionless path returned by project creation. Do not share
+a live project between providers or delete its locks to work around concurrent
+ownership.
 
 ### Isolation and retained limits
 
@@ -283,7 +292,7 @@ The remaining 48 individual tests need:
 | 15 | E0154/E0322 descriptor and overlay manifests |
 | 5 | Built touch/mod-loader payloads and native guard |
 | 3 | Audited carrier/helper/tree module outputs |
-| 2 | E0511 bridge and original kernel fixture |
+| 2 | E0667 bridge and original kernel fixture |
 | 2 | ILCE-7C 2.00 reference pulls |
 | 1 | Captured `libUsbControl` live-library evidence |
 | 1 | Pinned prebuilt USB debugger binaries |

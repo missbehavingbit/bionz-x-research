@@ -84,7 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--image", type=Path, help="ELF to build the graph from")
     parser.add_argument("--start", default="snd_InfraInputEvent_to_InputServant")
-    parser.add_argument("--end", default="ObjDisplay_Start")
+    # ObjDisplay_Start does not exist in any body examined (E0484); Create is the real entry.
+    parser.add_argument("--end", default="ObjDisplay_Create")
     parser.add_argument("--max-depth", type=int, default=6)
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"),
                         help="verdict for two kernel symbol dumps (JSON produced by "
@@ -93,12 +94,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.compare:
         import json
-
-        def counts(path: Path) -> tuple[int, int, int, int]:
-            data = json.loads(Path(path).read_text())
-            table = data["symbols"]
-            names = {(s["name"], s["address"], s.get("type", "?")) for s in table}
-            return len(names), 0, 0, 0
 
         left = json.loads(args.compare[0].read_text())["symbols"]
         right = json.loads(args.compare[1].read_text())["symbols"]

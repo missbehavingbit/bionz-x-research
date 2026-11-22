@@ -1,0 +1,764 @@
+caller	callee	site	queue_or_cmd
+sub_00104B6C	osal_snd_msg	0x104b6c	0x8f013a
+sub_00104BA4	osal_snd_sync_msg	0x104ba4	0x8f0313
+sub_00107918	osal_snd_sync_msg	0x107918	0x924220
+sub_0011E4BE	osal_snd_msg	0x11e4be	0x8f013a
+sub_0011E4F6	osal_snd_sync_msg	0x11e4f6	0x8f0313
+sub_0011F72C	osal_snd_sync_msg	0x11f72c	0x924127
+sub_0015067E	ioctl	0x15067e	0x14
+sub_0015087C	ioctl	0x15087c	0x0
+sub_001508CE	ioctl	0x1508ce	0x800a
+sub_00154D4C	ioctl	0x154d4c	0x13
+sub_001585F2	ioctl	0x1585f2	0xc0047635
+sub_001586F0	osal_snd_msg	0x1586f0	0xd802d4
+sub_00158708	osal_rcv_msg_tmo	0x158708	
+sub_001587EA	osal_snd_msg	0x1587ea	0xd802d4
+sub_00158802	osal_rcv_msg_tmo	0x158802	
+sub_001588A0	osal_snd_msg	0x1588a0	0xd802d4
+sub_001588B8	osal_rcv_msg_tmo	0x1588b8	
+sub_00158958	osal_snd_msg	0x158958	0xd802d4
+sub_00158970	osal_rcv_msg_tmo	0x158970	
+sub_00158A42	osal_snd_msg	0x158a42	0xd802d4
+sub_00158A5A	osal_rcv_msg_tmo	0x158a5a	
+sub_00159362	ioctl	0x159362	0x4c00
+sub_0015938E	ioctl	0x15938e	0x4c02
+sub_0015939E	ioctl	0x15939e	0x4c01
+sub_001593D2	ioctl	0x1593d2	0x4c01
+sub_0015947C	ioctl	0x15947c	0x4c01
+sub_0015A48A	osal_snd_msg	0x15a48a	0xd9016e
+sub_0015A4A6	osal_rcv_msg_tmo	0x15a4a6	
+sub_0015A792	osal_snd_sync_msg	0x15a792	
+sub_0015A822	osal_snd_sync_msg	0x15a822	
+sub_001828D0	osal_snd_sync_msg	0x1828d0	0x8f013a
+sub_00189A42	osal_snd_sync_msg	0x189a42	0x8f013a
+sub_00189D8A	osal_snd_msg	0x189d8a	
+sub_00189DD2	osal_rcv_msg_tmo	0x189dd2	
+sub_0018A0B4	osal_snd_msg	0x18a0b4	
+sub_0018A0FC	osal_rcv_msg_tmo	0x18a0fc	
+sub_0018A474	osal_snd_msg	0x18a474	
+sub_0018A4BE	osal_rcv_msg_tmo	0x18a4be	
+sub_0019B780	osal_snd_msg	0x19b780	0x8f013a
+sub_0019B7BA	osal_snd_sync_msg	0x19b7ba	0x8f0313
+sub_0019B80E	osal_snd_msg	0x19b80e	0x94016a
+sub_0019B9C4	osal_snd_msg	0x19b9c4	
+sub_0019BA42	osal_snd_msg	0x19ba42	0x102021f
+sub_0019BBEC	osal_snd_sync_msg	0x19bbec	0x924127
+sub_0019BCAE	osal_snd_msg	0x19bcae	0x30001
+sub_0019BD2E	osal_snd_msg	0x19bd2e	0x30001
+sub_0019BD6C	osal_rcv_msg_tmo	0x19bd6c	
+sub_0019C4AE	osal_rcv_msg_tmo	0x19c4ae	0x102021f
+sub_0019F3EC	osal_snd_sync_msg	0x19f3ec	0x8f013a
+sub_001A18E4	osal_snd_sync_msg	0x1a18e4	0x8f013a
+sub_001A1A98	osal_snd_sync_msg	0x1a1a98	0x8f013a
+sub_001A2DB6	osal_snd_sync_msg	0x1a2db6	0x8f013a
+sub_001E1A22	osal_snd_sync_msg	0x1e1a22	0x8f013a
+sub_001EF400	osal_rcv_msg_tmo	0x1ef400	0x12c032f
+sub_001EF450	osal_snd_msg	0x1ef450	
+sub_001F0716	osal_snd_sync_msg	0x1f0716	0x8f013a
+sub_0022BF90	osal_snd_sync_msg	0x22bf90	0x924220
+sub_0022D134	osal_snd_sync_msg	0x22d134	0x924220
+sub_00232130	osal_snd_sync_msg	0x232130	
+sub_0023BD4C	osal_snd_sync_msg	0x23bd4c	0x8f013a
+sub_0023DB50	osal_snd_sync_msg	0x23db50	0x8f013a
+sub_0023F330	osal_snd_sync_msg	0x23f330	0x8f013a
+sub_002405B8	osal_snd_sync_msg	0x2405b8	0x8f013a
+sub_00244DBC	osal_snd_sync_msg	0x244dbc	0x8f013a
+sub_0024F242	osal_snd_sync_msg	0x24f242	0x8f013a
+sub_0027B480	osal_snd_sync_msg	0x27b480	0x8f013a
+sub_00280D4C	osal_snd_sync_msg	0x280d4c	0x8f013a
+sub_002855C0	osal_snd_sync_msg	0x2855c0	0x8f013a
+sub_0028D0A8	osal_snd_sync_msg	0x28d0a8	0x8f013a
+sub_0028F6DC	osal_snd_sync_msg	0x28f6dc	0x8f013a
+sub_0028FDFC	osal_snd_sync_msg	0x28fdfc	0x8f013a
+sub_00290298	osal_snd_sync_msg	0x290298	0x8f013a
+sub_00292454	osal_snd_sync_msg	0x292454	0x8f013a
+sub_002960AC	osal_snd_sync_msg	0x2960ac	0x8f013a
+sub_0029CA06	osal_snd_sync_msg	0x29ca06	0x8f013a
+sub_0029DAD4	osal_snd_sync_msg	0x29dad4	0x8f013a
+sub_0029F80C	osal_snd_sync_msg	0x29f80c	0x8f013a
+sub_002ABF4A	osal_rcv_msg_tmo	0x2abf4a	
+sub_002AC118	osal_snd_sync_msg	0x2ac118	0x61003c
+sub_002AC232	osal_snd_sync_msg	0x2ac232	0x61003c
+sub_002AC3CE	osal_snd_sync_msg	0x2ac3ce	0x61003c
+sub_002AC552	osal_snd_sync_msg	0x2ac552	0x61003c
+sub_002AC69E	osal_snd_sync_msg	0x2ac69e	0x61003c
+sub_002AD90E	osal_snd_msg	0x2ad90e	0x13803dc
+sub_002AE0DE	osal_rcv_msg_tmo	0x2ae0de	0x13803dc
+sub_002AE734	osal_snd_msg	0x2ae734	0x8f013a
+sub_002AE76E	osal_snd_sync_msg	0x2ae76e	0x8f0313
+sub_002B04F4	osal_snd_msg	0x2b04f4	
+sub_002B19F8	ioctl	0x2b19f8	0xc0047805
+sub_002B1BCE	osal_snd_msg	0x2b1bce	0x8f013a
+sub_002B1C02	osal_snd_sync_msg	0x2b1c02	0x8f0313
+sub_002B443A	osal_snd_sync_msg	0x2b443a	
+sub_002B83A4	osal_snd_sync_msg	0x2b83a4	0x14183ef
+sub_002B8C62	osal_snd_sync_msg	0x2b8c62	0x13e8401
+sub_002B909E	osal_snd_sync_msg	0x2b909e	0x13e8402
+sub_002B943A	osal_snd_msg	0x2b943a	0x61003c
+sub_002B9448	osal_rcv_msg_tmo	0x2b9448	
+sub_002C3AF6	osal_snd_msg	0x2c3af6	0x8f013a
+sub_002C3B2A	osal_snd_sync_msg	0x2c3b2a	0x8f0313
+sub_002C3C64	osal_snd_sync_msg	0x2c3c64	0x924220
+sub_002C4622	osal_snd_sync_msg	0x2c4622	0x94016a
+sub_002C5262	osal_snd_sync_msg	0x2c5262	0x94016a
+sub_002C6D80	osal_snd_msg	0x2c6d80	0x61003c
+sub_002C6D8C	osal_rcv_msg_tmo	0x2c6d8c	
+sub_002C6E24	osal_snd_msg	0x2c6e24	0x61003c
+sub_002C6E32	osal_rcv_msg_tmo	0x2c6e32	
+sub_002C6F00	ioctl	0x2c6f00	0xc0047805
+sub_002CCF3A	osal_snd_sync_msg	0x2ccf3a	0x94016a
+sub_002D9DB0	osal_snd_sync_msg	0x2d9db0	0x94016a
+sub_002D9ECE	osal_snd_sync_msg	0x2d9ece	0xe18246
+sub_002D9F9A	osal_snd_sync_msg	0x2d9f9a	0xe18246
+sub_002DA070	osal_snd_sync_msg	0x2da070	0xe18246
+sub_002DA136	osal_snd_sync_msg	0x2da136	0xe18246
+sub_002DA21C	osal_snd_sync_msg	0x2da21c	0xe38273
+sub_002DA33A	osal_snd_msg	0x2da33a	0x8f013a
+sub_002DA36E	osal_snd_sync_msg	0x2da36e	0x8f0313
+sub_002DA740	osal_snd_sync_msg	0x2da740	0x147840c
+sub_002DAFD2	osal_snd_sync_msg	0x2dafd2	
+sub_002DC792	osal_snd_sync_msg	0x2dc792	0xe0841f
+sub_002DCD20	osal_snd_sync_msg	0x2dcd20	0x13e8402
+sub_002DCDE4	osal_snd_sync_msg	0x2dcde4	0x13e8401
+sub_002DD68C	osal_snd_sync_msg	0x2dd68c	0x14183ef
+sub_002DD810	osal_snd_sync_msg	0x2dd810	0x15f8447
+sub_002DE79E	osal_snd_sync_msg	0x2de79e	0xe4827d
+sub_002DE83A	osal_snd_sync_msg	0x2de83a	0x146840a
+sub_002DFA20	osal_snd_sync_msg	0x2dfa20	0x924220
+sub_002DFC92	osal_snd_msg	0x2dfc92	0x8f013a
+sub_002DFCC6	osal_snd_sync_msg	0x2dfcc6	0x8f0313
+sub_002E0CB6	osal_snd_sync_msg	0x2e0cb6	0x94016a
+sub_002E735A	osal_snd_sync_msg	0x2e735a	0x13e8401
+sub_002E73F4	osal_snd_sync_msg	0x2e73f4	0x13e8402
+sub_002E7598	osal_snd_sync_msg	0x2e7598	0x94016a
+sub_002E7696	osal_snd_sync_msg	0x2e7696	0x1af852f
+sub_002E7728	osal_snd_sync_msg	0x2e7728	0x1af852f
+sub_002E77CE	osal_snd_sync_msg	0x2e77ce	0x1b08536
+sub_002E786C	osal_snd_sync_msg	0x2e786c	0x1b0853a
+sub_002E9358	osal_snd_sync_msg	0x2e9358	
+sub_002E9396	osal_snd_sync_msg	0x2e9396	
+sub_002E9596	osal_snd_sync_msg	0x2e9596	
+sub_002E95D4	osal_snd_sync_msg	0x2e95d4	
+sub_002E9936	osal_snd_sync_msg	0x2e9936	
+sub_002EA4FA	osal_snd_sync_msg	0x2ea4fa	0x94016a
+sub_002F3854	osal_snd_sync_msg	0x2f3854	0x924220
+sub_002F480A	osal_snd_msg	0x2f480a	0x8f013a
+sub_002F483E	osal_snd_sync_msg	0x2f483e	0x8f0313
+sub_002F48FC	osal_snd_msg	0x2f48fc	0x11006e9
+sub_002F4B3C	osal_snd_msg	0x2f4b3c	0x8f013a
+sub_002F4B72	osal_snd_sync_msg	0x2f4b72	0x8f0313
+sub_002F6424	osal_snd_sync_msg	0x2f6424	0x924220
+sub_002F64B2	osal_snd_msg	0x2f64b2	0x8f013a
+sub_002F64E8	osal_snd_sync_msg	0x2f64e8	0x8f0313
+sub_002F9784	osal_snd_msg	0x2f9784	0x8f013a
+sub_002F97B8	osal_snd_sync_msg	0x2f97b8	0x8f0313
+sub_002FCE38	osal_snd_msg	0x2fce38	0x8f013a
+sub_002FCE6C	osal_snd_sync_msg	0x2fce6c	0x8f0313
+sub_002FD66A	osal_snd_sync_msg	0x2fd66a	
+sub_002FD73E	osal_snd_msg	0x2fd73e	0x8f013a
+sub_002FD778	osal_snd_sync_msg	0x2fd778	0x8f0313
+sub_002FD8F8	osal_snd_sync_msg	0x2fd8f8	
+sub_002FE566	osal_snd_sync_msg	0x2fe566	
+sub_002FE9BC	osal_snd_msg	0x2fe9bc	0x8f013a
+sub_002FE9F0	osal_snd_sync_msg	0x2fe9f0	0x8f0313
+sub_003007BE	osal_snd_sync_msg	0x3007be	0x920572
+sub_00300A5C	osal_snd_sync_msg	0x300a5c	0x920572
+sub_00301E02	osal_snd_sync_msg	0x301e02	0x16a8471
+sub_00301E76	osal_snd_sync_msg	0x301e76	0x16a8471
+sub_00301F1C	osal_snd_sync_msg	0x301f1c	0x16a8471
+sub_00301FA4	osal_snd_sync_msg	0x301fa4	0x16a8471
+sub_00302038	osal_snd_sync_msg	0x302038	0x16a8471
+sub_003020D0	osal_snd_sync_msg	0x3020d0	0x16a8471
+sub_003021C0	osal_snd_sync_msg	0x3021c0	0x16a8471
+sub_003044A8	osal_snd_msg	0x3044a8	0x8f013a
+sub_003044E4	osal_snd_sync_msg	0x3044e4	0x8f0313
+sub_00304900	osal_snd_sync_msg	0x304900	
+sub_00304D1A	osal_snd_sync_msg	0x304d1a	0x18104bb
+sub_00305CFE	osal_snd_sync_msg	0x305cfe	0x8f0139
+sub_0030A146	osal_snd_msg	0x30a146	
+sub_0030A168	osal_rcv_msg_tmo	0x30a168	
+sub_0030B7A0	osal_snd_sync_msg	0x30b7a0	0x924220
+sub_0030B7FC	osal_snd_sync_msg	0x30b7fc	0x924126
+sub_0030B99E	osal_snd_sync_msg	0x30b99e	0x9241c2
+sub_0030BB4E	osal_snd_sync_msg	0x30bb4e	0x9241c2
+sub_0030BBEE	osal_snd_sync_msg	0x30bbee	0x924223
+sub_0030D188	osal_snd_msg	0x30d188	
+sub_0030D1B6	osal_rcv_msg_tmo	0x30d1b6	
+sub_0030D266	osal_snd_msg	0x30d266	
+sub_0030D360	osal_snd_sync_msg	0x30d360	
+sub_0030D804	osal_rcv_msg_tmo	0x30d804	
+sub_003101C0	osal_snd_sync_msg	0x3101c0	0x8f013a
+sub_00313CBE	osal_snd_sync_msg	0x313cbe	0x94016a
+sub_00316938	osal_snd_sync_msg	0x316938	
+sub_00316B2A	osal_snd_sync_msg	0x316b2a	
+sub_00316C86	osal_snd_sync_msg	0x316c86	
+sub_00316E0E	osal_snd_sync_msg	0x316e0e	
+sub_00316FF2	osal_snd_sync_msg	0x316ff2	
+sub_003171EE	osal_snd_sync_msg	0x3171ee	
+sub_003179BA	osal_snd_sync_msg	0x3179ba	0x94016a
+sub_003193A6	osal_snd_msg	0x3193a6	0x8f013a
+sub_003193DA	osal_snd_sync_msg	0x3193da	0x8f0313
+sub_003234D8	osal_snd_msg	0x3234d8	0x5c011d
+sub_00323546	osal_snd_msg	0x323546	0x5c011d
+sub_0032BDA0	osal_snd_sync_msg	0x32bda0	0x8f013a
+sub_0032E7C0	osal_snd_sync_msg	0x32e7c0	0x8f013a
+sub_003369C8	osal_snd_sync_msg	0x3369c8	0x8f013a
+sub_0034F634	osal_snd_sync_msg	0x34f634	
+sub_0035CA42	osal_snd_msg	0x35ca42	
+sub_0035CB3E	osal_snd_sync_msg	0x35cb3e	
+sub_0035CC48	osal_snd_msg	0x35cc48	
+sub_0035CD42	osal_snd_sync_msg	0x35cd42	
+sub_0035CE68	osal_snd_msg	0x35ce68	
+sub_0035D868	osal_snd_sync_msg	0x35d868	0x924126
+sub_0035D8BA	osal_snd_sync_msg	0x35d8ba	0x9243d8
+sub_0035D8FE	osal_snd_sync_msg	0x35d8fe	0x924223
+sub_0035D932	osal_snd_sync_msg	0x35d932	0x9245dc
+sub_0035D9E0	osal_snd_sync_msg	0x35d9e0	0x9241c2
+sub_0035DA88	osal_snd_sync_msg	0x35da88	0x9241c2
+sub_0035DB0A	osal_snd_sync_msg	0x35db0a	0x924126
+sub_0035DD6C	osal_snd_sync_msg	0x35dd6c	0x37807c
+sub_0035E5B0	osal_snd_sync_msg	0x35e5b0	0x37807c
+sub_0036D77C	osal_snd_sync_msg	0x36d77c	
+sub_0036D8FA	osal_snd_sync_msg	0x36d8fa	
+sub_0036E198	osal_snd_sync_msg	0x36e198	
+sub_003731EA	osal_snd_sync_msg	0x3731ea	
+sub_0037355A	osal_snd_sync_msg	0x37355a	
+sub_00373622	osal_snd_sync_msg	0x373622	
+sub_00373978	osal_snd_sync_msg	0x373978	
+sub_0037805E	osal_snd_sync_msg	0x37805e	0x8f013a
+sub_003783BC	osal_snd_sync_msg	0x3783bc	0x94016a
+_ZN14UpdaterWrapper16enableUpdateModeEv	osal_snd_sync_msg	0x378584	0x4b0233
+_ZN14UpdaterWrapper10getVersionEv	osal_snd_sync_msg	0x37864e	0x4b024e
+_ZN14UpdaterWrapper14getLensVersionEv	osal_snd_sync_msg	0x37875a	0x4b024e
+sub_0037C36E	osal_snd_msg	0x37c36e	0x11006e9
+sub_00387308	osal_snd_sync_msg	0x387308	
+sub_00388A76	osal_snd_msg	0x388a76	0x920021
+sub_00388ACC	osal_snd_sync_msg	0x388acc	
+sub_00388F74	osal_snd_sync_msg	0x388f74	0x924127
+sub_0038946C	osal_snd_sync_msg	0x38946c	0x920572
+sub_003894FE	osal_snd_sync_msg	0x3894fe	0x920572
+sub_00389596	osal_snd_sync_msg	0x389596	0x920572
+sub_003896FA	osal_snd_sync_msg	0x3896fa	
+sub_0038981A	osal_snd_sync_msg	0x38981a	
+sub_00389932	osal_snd_sync_msg	0x389932	
+sub_00389B18	osal_snd_sync_msg	0x389b18	
+sub_00392AD0	osal_snd_msg	0x392ad0	
+sub_0039A10E	osal_snd_sync_msg	0x39a10e	
+sub_0039A79E	osal_snd_sync_msg	0x39a79e	
+sub_0039A826	osal_snd_sync_msg	0x39a826	
+sub_003AEB86	osal_snd_sync_msg	0x3aeb86	0x14d8417
+sub_003AEC8A	osal_snd_sync_msg	0x3aec8a	0x14d8417
+sub_003AED9A	osal_snd_sync_msg	0x3aed9a	0x14d8417
+sub_003B36C0	osal_snd_sync_msg	0x3b36c0	0x924220
+sub_003C6F8E	osal_rcv_msg_tmo	0x3c6f8e	0x83014b
+sub_003C86CC	osal_snd_sync_msg	0x3c86cc	
+sub_003CEB50	osal_snd_sync_msg	0x3ceb50	
+sub_003CEECA	osal_snd_sync_msg	0x3ceeca	0x8f013a
+_ZN12InputService26startOrientationRollNotifyEv	osal_snd_msg	0x3cf39c	0x1170319
+_ZN12InputService30startOrientationRollNotify_newEv	osal_snd_msg	0x3cf3fa	0x1170319
+_ZN12InputService25stopOrientationRollNotifyEv	osal_snd_msg	0x3cf43a	0x117031a
+_ZN12InputService29stopOrientationRollNotify_newEv	osal_snd_msg	0x3cf47a	0x117031a
+_ZN12InputService23startDigitalLevelNotifyEv	osal_snd_sync_msg	0x3cf4c0	0x12f0335
+_ZN12InputService22stopDigitalLevelNotifyEv	osal_snd_sync_msg	0x3cf510	0x12f0335
+snd_InfraInputEvent_to_InputServant	osal_snd_sync_msg	0x3cf712	0x14a0429
+_ZN12InputService16stopTimer_MSS_UIEv	osal_snd_sync_msg	0x3cfd78	0x920572
+_ZN12InputService17startTimer_MSS_UIEv	osal_snd_sync_msg	0x3cff0e	0x920572
+_ZN12InputService18reloadTimer_MSS_UIEv	osal_snd_sync_msg	0x3d001a	0x920572
+sub_003DFCE8	osal_snd_sync_msg	0x3dfce8	0x8f013a
+sub_003E1614	osal_snd_msg	0x3e1614	0x830450
+sub_003E5E1E	osal_snd_sync_msg	0x3e5e1e	0x8f013a
+sub_003FB784	osal_snd_sync_msg	0x3fb784	
+sub_003FDC46	osal_snd_sync_msg	0x3fdc46	0x8f013a
+sub_0041BA54	osal_snd_msg	0x41ba54	0x83014b
+sub_0041C0BE	osal_snd_msg	0x41c0be	0x83014b
+sub_0050CA80	osal_snd_sync_msg	0x50ca80	0x8f013a
+sub_0050CC0C	osal_snd_sync_msg	0x50cc0c	0x8f013a
+sub_0051075A	osal_snd_sync_msg	0x51075a	0x8f013a
+sub_00511D72	osal_snd_sync_msg	0x511d72	0x8f013a
+sub_00515352	osal_snd_sync_msg	0x515352	0x8f013a
+sub_0051580A	osal_snd_sync_msg	0x51580a	0x8f013a
+sub_005173F8	osal_snd_sync_msg	0x5173f8	0x8f013a
+sub_0054CB80	osal_snd_msg	0x54cb80	0x8f0139
+sub_0054D05C	osal_snd_msg	0x54d05c	0x8f0139
+sub_0054DB10	osal_snd_msg	0x54db10	0x8f0139
+sub_0054DDD4	osal_snd_msg	0x54ddd4	0x8f0139
+sub_0054E00C	osal_snd_msg	0x54e00c	0x8f0139
+sub_0054E724	osal_snd_msg	0x54e724	0x8f0139
+sub_0063F442	ioctl	0x63f442	0x1
+sub_00643AEE	osal_snd_msg	0x643aee	0x8f013a
+sub_00643B24	osal_snd_sync_msg	0x643b24	0x8f0313
+sub_0065136E	osal_snd_sync_msg	0x65136e	0x147840c
+sub_006575A0	osal_snd_msg	0x6575a0	0x8f0139
+sub_0065B822	osal_snd_sync_msg	0x65b822	0x8f013a
+sub_0065C03A	osal_snd_sync_msg	0x65c03a	0x8f013a
+sub_0065E9C4	osal_snd_msg	0x65e9c4	0x8f013a
+sub_0065E9FA	osal_snd_sync_msg	0x65e9fa	0x8f0313
+sub_00662128	osal_snd_sync_msg	0x662128	0x1050244
+sub_0066215C	osal_snd_sync_msg	0x66215c	0x1050244
+sub_00662192	osal_snd_sync_msg	0x662192	0x1050244
+sub_006621C2	osal_snd_sync_msg	0x6621c2	0x1050244
+sub_00662F5E	osal_snd_sync_msg	0x662f5e	0x8f013a
+sub_0066356A	osal_snd_msg	0x66356a	0x7d0035
+sub_00667D7C	osal_snd_msg	0x667d7c	0x920021
+sub_00667E52	osal_snd_sync_msg	0x667e52	0x920196
+sub_0066C526	osal_snd_sync_msg	0x66c526	0x8f013a
+sub_0069626E	osal_snd_msg	0x69626e	0x8f0139
+sub_006BDB6A	osal_snd_sync_msg	0x6bdb6a	0x8f013a
+sub_006C669A	osal_snd_sync_msg	0x6c669a	0x8f013a
+sub_006C740C	osal_snd_msg	0x6c740c	0x7d0035
+sub_0070FC02	osal_snd_msg	0x70fc02	0x8f013a
+sub_0070FC38	osal_snd_sync_msg	0x70fc38	0x8f0313
+sub_00710148	osal_snd_sync_msg	0x710148	0x8f013a
+sub_00711A96	osal_rcv_msg_tmo	0x711a96	
+sub_00711C2C	osal_rcv_msg_tmo	0x711c2c	
+sub_0071230E	osal_snd_sync_msg	0x71230e	0x8f013a
+sub_00714376	osal_snd_msg	0x714376	
+sub_00720772	osal_snd_msg	0x720772	0x8f013a
+sub_007207A6	osal_snd_sync_msg	0x7207a6	0x8f0313
+sub_00723F1E	osal_snd_sync_msg	0x723f1e	0x147840c
+sub_0072AD30	ioctl	0x72ad30	0xc004820f
+rm_reg_init	ioctl	0x72aeae	0x80048206
+rm_reg_init	ioctl	0x72aecc	0xc0048202
+rm_reg_init	ioctl	0x72afe2	0x80048263
+sub_0072B136	ioctl	0x72b136	0xc0048208
+sub_0072B196	ioctl	0x72b196	0xc0048209
+sub_0072B1F6	ioctl	0x72b1f6	0x8004820a
+sub_0072B6B8	ioctl	0x72b6b8	0xc0048203
+sub_0072BB14	ioctl	0x72bb14	0xc004820d
+sub_0072BB70	ioctl	0x72bb70	0xc004820e
+sub_0072BBCE	ioctl	0x72bbce	0xc0048211
+sub_0072BC40	ioctl	0x72bc40	0xc0048212
+sub_00787F86	osal_snd_msg	0x787f86	0x8f013a
+sub_00787FBE	osal_snd_sync_msg	0x787fbe	0x8f0313
+sub_00787FEC	osal_rcv_msg_tmo	0x787fec	0x5c011d
+sub_007880AC	osal_snd_msg	0x7880ac	0x5c011d
+sub_00788CB8	osal_snd_msg	0x788cb8	
+sub_007B8756	osal_snd_sync_msg	0x7b8756	
+sub_007B939E	osal_rcv_msg_tmo	0x7b939e	
+sub_007B94A6	osal_rcv_msg_tmo	0x7b94a6	
+sub_007B9864	osal_rcv_msg_tmo	0x7b9864	0xa20357
+sub_007B987E	osal_rcv_msg_tmo	0x7b987e	0xa20357
+sub_007B9ADC	osal_snd_msg	0x7b9adc	0xa1825d
+sub_007B9AF0	osal_rcv_msg_tmo	0x7b9af0	0xa1825e
+sub_007BA698	osal_snd_msg	0x7ba698	
+sub_007BA90E	osal_snd_sync_msg	0x7ba90e	
+sub_007BAA66	osal_snd_sync_msg	0x7baa66	
+sub_007BAAC2	osal_rcv_msg_tmo	0x7baac2	0x1080323
+sub_007BAB6E	osal_rcv_msg_tmo	0x7bab6e	0xa2024a
+sub_007BAC3E	osal_snd_sync_msg	0x7bac3e	
+sub_007BAF62	osal_snd_sync_msg	0x7baf62	
+sub_007BB392	osal_snd_sync_msg	0x7bb392	
+sub_007BC05A	osal_snd_msg	0x7bc05a	0xa1825e
+sub_007BC338	osal_rcv_msg_tmo	0x7bc338	0xa1825d
+sub_007BC34C	osal_rcv_msg_tmo	0x7bc34c	0xa1825d
+sub_007BC45E	osal_snd_msg	0x7bc45e	0xa1825d
+sub_007BCDB2	osal_snd_sync_msg	0x7bcdb2	
+sub_007BDE5C	osal_snd_sync_msg	0x7bde5c	0xa40285
+sub_007BEE72	osal_snd_sync_msg	0x7bee72	0xa40285
+sub_0080DC18	osal_snd_msg	0x80dc18	
+sub_0080DCAC	osal_rcv_msg_tmo	0x80dcac	
+sub_0080DCC8	osal_rcv_msg_tmo	0x80dcc8	
+sub_0081B196	osal_snd_msg	0x81b196	0x8f013a
+sub_0081B1CE	osal_snd_sync_msg	0x81b1ce	0x8f0313
+sub_0081D806	osal_snd_msg	0x81d806	0x11006e9
+sub_0081DC60	osal_snd_sync_msg	0x81dc60	0x1088262
+sub_0081DF66	osal_rcv_msg_tmo	0x81df66	
+sub_0081E32C	osal_snd_msg	0x81e32c	
+sub_0081FC42	osal_snd_sync_msg	0x81fc42	
+sub_0081FCD8	osal_snd_sync_msg	0x81fcd8	0x9241c2
+sub_008205DE	osal_snd_sync_msg	0x8205de	0x924220
+sub_00821C06	osal_snd_msg	0x821c06	
+sub_0082372A	osal_rcv_msg_tmo	0x82372a	
+sub_0082374E	osal_rcv_msg_tmo	0x82374e	
+sub_00824E0E	osal_snd_sync_msg	0x824e0e	
+sub_00826104	osal_snd_msg	0x826104	0x61003c
+sub_00826138	osal_rcv_msg_tmo	0x826138	
+sub_00826252	ioctl	0x826252	0xc0104702
+sub_0082633A	osal_snd_sync_msg	0x82633a	0x1088262
+sub_00826600	osal_snd_msg	0x826600	
+sub_00826BD6	osal_rcv_msg_tmo	0x826bd6	
+sub_00827346	osal_rcv_msg_tmo	0x827346	
+sub_00827B98	osal_snd_msg	0x827b98	0x61003c
+sub_00827BD0	osal_rcv_msg_tmo	0x827bd0	
+sub_0082850C	osal_snd_msg	0x82850c	
+sub_0082886E	osal_rcv_msg_tmo	0x82886e	
+sub_00828A34	osal_snd_msg	0x828a34	
+sub_00828C46	osal_rcv_msg_tmo	0x828c46	
+sub_00829852	osal_snd_sync_msg	0x829852	
+sub_00829AFA	osal_snd_sync_msg	0x829afa	
+sub_0082A0FE	osal_snd_sync_msg	0x82a0fe	
+sub_0082AB5C	osal_snd_sync_msg	0x82ab5c	0xa00420
+sub_0082B9E2	osal_snd_sync_msg	0x82b9e2	0xa00210
+sub_0082BA2C	osal_snd_sync_msg	0x82ba2c	0xa00210
+sub_0082BA74	osal_snd_sync_msg	0x82ba74	0xa00210
+sub_0082BB52	osal_snd_sync_msg	0x82bb52	
+sub_0082BC12	osal_snd_sync_msg	0x82bc12	
+sub_0082BCEE	osal_snd_sync_msg	0x82bcee	
+sub_0082BDAE	osal_snd_sync_msg	0x82bdae	
+sub_0082BE6E	osal_snd_sync_msg	0x82be6e	
+sub_0082BF2A	osal_snd_sync_msg	0x82bf2a	
+sub_0082C51C	osal_snd_msg	0x82c51c	
+sub_0082C9C8	osal_snd_sync_msg	0x82c9c8	0xa00211
+sub_0082CA10	osal_snd_sync_msg	0x82ca10	0xa00211
+sub_0082CA4E	osal_snd_sync_msg	0x82ca4e	0xa00211
+sub_0082D25C	osal_snd_msg	0x82d25c	
+sub_0082D404	osal_snd_sync_msg	0x82d404	
+sub_0082D498	osal_snd_sync_msg	0x82d498	
+sub_0082E334	osal_rcv_msg_tmo	0x82e334	
+sub_0082E99A	osal_snd_sync_msg	0x82e99a	
+sub_0082EDDE	osal_snd_msg	0x82edde	0x8f013a
+sub_0082EE16	osal_snd_sync_msg	0x82ee16	0x8f0313
+sub_0082F1D0	osal_snd_msg	0x82f1d0	0x8f013a
+sub_0082F20A	osal_snd_sync_msg	0x82f20a	0x8f0313
+sub_0082F46A	osal_snd_sync_msg	0x82f46a	0x924126
+sub_0082F4DC	osal_snd_sync_msg	0x82f4dc	0x924220
+sub_0082F548	osal_snd_msg	0x82f548	0xb0
+sub_0082FBA2	osal_snd_sync_msg	0x82fba2	
+sub_0082FC84	osal_snd_sync_msg	0x82fc84	0x9241c2
+sub_0082FD46	osal_snd_sync_msg	0x82fd46	0x9241c2
+sub_00830310	osal_rcv_msg_tmo	0x830310	
+sub_00831F90	osal_snd_msg	0x831f90	0x8f013a
+sub_00831FCA	osal_snd_sync_msg	0x831fca	0x8f0313
+sub_00832C38	osal_snd_msg	0x832c38	
+sub_00835F9E	ioctl	0x835f9e	
+sub_00836468	osal_snd_msg	0x836468	0x9c015b
+sub_0083648E	osal_rcv_msg_tmo	0x83648e	
+sub_0083667C	osal_snd_msg	0x83667c	0x9c015b
+sub_008366A2	osal_rcv_msg_tmo	0x8366a2	
+sub_00838084	osal_rcv_msg_tmo	0x838084	0x9c015b
+sub_008392C8	osal_snd_sync_msg	0x8392c8	0x12282f6
+sub_008395D2	osal_snd_sync_msg	0x8395d2	
+sub_00839AAE	osal_snd_sync_msg	0x839aae	
+sub_0083AD8E	osal_snd_sync_msg	0x83ad8e	0x924126
+sub_0083AE98	osal_snd_sync_msg	0x83ae98	
+sub_0083B194	osal_snd_sync_msg	0x83b194	0x94016a
+sub_0083BBD2	osal_snd_msg	0x83bbd2	0x8f013a
+sub_0083BC0A	osal_snd_sync_msg	0x83bc0a	0x8f0313
+sub_0083BCF2	osal_snd_sync_msg	0x83bcf2	0x924127
+sub_0083BF1C	osal_snd_sync_msg	0x83bf1c	0x3d032e
+sub_0083CC0E	osal_snd_msg	0x83cc0e	0x8f013a
+sub_0083CC46	osal_snd_sync_msg	0x83cc46	0x8f0313
+sub_0083D3D8	ioctl	0x83d3d8	
+sub_0083D400	ioctl	0x83d400	
+sub_0083E644	osal_snd_msg	0x83e644	
+sub_0083ECEE	ioctl	0x83ecee	0x6e0b
+sub_0083ED30	ioctl	0x83ed30	0x6e02
+sub_0083EDB4	ioctl	0x83edb4	0x6e09
+sub_0083EE0E	ioctl	0x83ee0e	0x6e05
+sub_0083F1B4	ioctl	0x83f1b4	0x6e05
+sub_0083F23E	ioctl	0x83f23e	0x6e0b
+sub_0083F292	ioctl	0x83f292	0x6e02
+sub_0083F3D4	ioctl	0x83f3d4	0x6e04
+sub_0083F416	ioctl	0x83f416	0x6e09
+sub_0083F516	osal_snd_msg	0x83f516	0x61003c
+sub_0083F52C	osal_rcv_msg_tmo	0x83f52c	0x4b0233
+sub_0083F5D0	osal_snd_msg	0x83f5d0	0x61003c
+sub_0083F5E6	osal_rcv_msg_tmo	0x83f5e6	0x4b0233
+sub_0083F68A	ioctl	0x83f68a	0x6e09
+sub_0083F7E4	ioctl	0x83f7e4	0x6e06
+sub_00840644	osal_snd_sync_msg	0x840644	0x8f013a
+sub_00843172	osal_snd_sync_msg	0x843172	0x8f013a
+sub_008437BC	osal_snd_sync_msg	0x8437bc	0x8f013a
+sub_008438DE	osal_snd_sync_msg	0x8438de	0x8f013a
+sub_0084452A	osal_snd_sync_msg	0x84452a	0x8f013a
+sub_00847306	osal_snd_sync_msg	0x847306	0x8f013a
+sub_00847C4E	osal_snd_msg	0x847c4e	0x8f0139
+sub_00847C8C	osal_snd_sync_msg	0x847c8c	0x8f0139
+testmode_debugProfile	osal_snd_sync_msg	0x847e3a	0x8f013a
+setBlogData	osal_snd_msg	0x847ed0	0x8f013a
+setBlogData	osal_snd_sync_msg	0x847f06	0x8f0313
+sub_0084AFC4	osal_snd_sync_msg	0x84afc4	0x9241c2
+sub_0084B904	osal_rcv_msg_tmo	0x84b904	0x7c0038
+sub_0084CDAE	osal_rcv_msg_tmo	0x84cdae	0x7c8075
+sub_0084D93C	osal_snd_sync_msg	0x84d93c	0x924127
+sub_00854A54	osal_rcv_msg_tmo	0x854a54	0x45014a
+sub_00856D4A	ioctl	0x856d4a	
+sub_00856DCE	ioctl	0x856dce	
+sub_0085758A	osal_rcv_msg_tmo	0x85758a	0x7b002b
+sub_008586CC	osal_rcv_msg_tmo	0x8586cc	0x7b0026
+sub_0085918A	osal_snd_msg	0x85918a	
+sub_0085946C	osal_rcv_msg_tmo	0x85946c	
+sub_0085A958	osal_snd_msg	0x85a958	0x7e002f
+sub_0085B8E0	osal_rcv_msg_tmo	0x85b8e0	0x7e002f
+sub_0085BAC2	osal_snd_msg	0x85bac2	0x7e0030
+sub_0085BEC8	osal_snd_sync_msg	0x85bec8	
+sub_0085EF2C	osal_snd_sync_msg	0x85ef2c	
+sub_0085EF36	osal_snd_msg	0x85ef36	
+sub_0085F852	osal_snd_sync_msg	0x85f852	0x924127
+_ZN10InfraInput10RmCallbackEi	osal_snd_msg	0x85f9ec	
+sub_008605C0	osal_rcv_msg_tmo	0x8605c0	
+sub_00861F74	osal_rcv_msg_tmo	0x861f74	0x7a804c
+sub_008625C2	osal_snd_sync_msg	0x8625c2	0x8f013a
+sub_008628A4	osal_rcv_msg_tmo	0x8628a4	0x7a0020
+sub_00863522	osal_snd_msg	0x863522	0x920021
+sub_008637EC	osal_snd_sync_msg	0x8637ec	0x8f013a
+sub_00865C6C	osal_snd_msg	0x865c6c	0x630130
+sub_008672BC	osal_rcv_msg_tmo	0x8672bc	
+sub_008673CE	osal_snd_msg	0x8673ce	
+sub_00867460	osal_snd_msg	0x867460	0x630130
+sub_0086888C	osal_snd_msg	0x86888c	0x11982d2
+sub_00868942	osal_snd_msg	0x868942	
+sub_00868A10	osal_snd_msg	0x868a10	0x11982d2
+sub_00868D30	osal_snd_msg	0x868d30	0x11982d2
+sub_0086922E	osal_rcv_msg_tmo	0x86922e	0x11982d2
+sub_0086955E	osal_snd_msg	0x86955e	
+sub_0086987A	osal_snd_msg	0x86987a	0x11982d2
+sub_0086A578	osal_snd_sync_msg	0x86a578	0x2802e1
+sub_0086A634	osal_snd_msg	0x86a634	0x5d0046
+sub_0086A9CC	osal_snd_sync_msg	0x86a9cc	0x2802e1
+sub_0086C4A6	osal_snd_msg	0x86c4a6	0x8f013a
+sub_0086C4E0	osal_snd_sync_msg	0x86c4e0	0x8f0313
+sub_0086C586	osal_snd_msg	0x86c586	0x8f0139
+sub_00874DF2	osal_snd_sync_msg	0x874df2	0x8f013a
+sub_008860FC	osal_snd_msg	0x8860fc	0x8f013a
+sub_00886132	osal_snd_sync_msg	0x886132	0x8f0313
+sub_0088ED02	osal_snd_msg	0x88ed02	0x4015e
+sub_0088ED26	osal_rcv_msg_tmo	0x88ed26	
+sub_00892CF2	osal_snd_sync_msg	0x892cf2	0x8f013a
+sub_0089E320	osal_snd_msg	0x89e320	0x4015e
+sub_0089E344	osal_rcv_msg_tmo	0x89e344	
+sub_0089E6F8	osal_snd_msg	0x89e6f8	0xb201aa
+sub_0089E712	osal_rcv_msg_tmo	0x89e712	
+sub_008AF6FC	osal_snd_sync_msg	0x8af6fc	0x8f013a
+sub_008B88B4	osal_snd_msg	0x8b88b4	0x4015e
+sub_008B88E0	osal_rcv_msg_tmo	0x8b88e0	
+sub_008C8F74	osal_snd_msg	0x8c8f74	
+sub_008C8F9C	osal_rcv_msg_tmo	0x8c8f9c	
+sub_008C94F6	osal_snd_msg	0x8c94f6	
+sub_008C951C	osal_rcv_msg_tmo	0x8c951c	
+sub_008C9A20	osal_snd_msg	0x8c9a20	
+sub_008C9A48	osal_rcv_msg_tmo	0x8c9a48	
+sub_008D507A	osal_snd_msg	0x8d507a	0x94016a
+sub_008D58EA	osal_snd_msg	0x8d58ea	
+sub_008D5960	osal_rcv_msg_tmo	0x8d5960	
+sub_008D5DA0	osal_snd_msg	0x8d5da0	0x920021
+sub_008D5F5E	osal_snd_sync_msg	0x8d5f5e	0x920196
+sub_008E2AD4	osal_snd_msg	0x8e2ad4	0xb201aa
+sub_008E2AF0	osal_rcv_msg_tmo	0x8e2af0	
+sub_008F4BD6	osal_snd_msg	0x8f4bd6	0x550122
+sub_008F4BF2	osal_rcv_msg_tmo	0x8f4bf2	
+sub_008F50A2	osal_snd_msg	0x8f50a2	0x550122
+sub_008F50BE	osal_rcv_msg_tmo	0x8f50be	
+sub_008F55A2	osal_snd_msg	0x8f55a2	0x550122
+sub_008F55BE	osal_rcv_msg_tmo	0x8f55be	
+sub_00913E96	osal_snd_msg	0x913e96	0x11006e9
+sub_0091437A	osal_snd_sync_msg	0x91437a	0x94016a
+sub_00919998	osal_snd_msg	0x919998	0x19c0506
+sub_009199BC	osal_rcv_msg_tmo	0x9199bc	
+sub_00919ACA	osal_snd_msg	0x919aca	0x19c0506
+sub_00919AEE	osal_rcv_msg_tmo	0x919aee	
+sub_00919E18	osal_snd_msg	0x919e18	0xb201aa
+sub_00919E34	osal_rcv_msg_tmo	0x919e34	
+sub_00919FD2	osal_snd_sync_msg	0x919fd2	0x94016a
+sub_0094436C	osal_snd_msg	0x94436c	0x550120
+sub_00944398	osal_rcv_msg_tmo	0x944398	
+sub_0094490E	osal_snd_msg	0x94490e	0x550120
+sub_00944934	osal_rcv_msg_tmo	0x944934	
+sub_00944E34	osal_snd_msg	0x944e34	0x550120
+sub_00944E60	osal_rcv_msg_tmo	0x944e60	
+sub_009623EA	osal_snd_sync_msg	0x9623ea	0x388160
+sub_00962706	osal_snd_sync_msg	0x962706	0x388160
+sub_00962A94	osal_snd_sync_msg	0x962a94	0x388160
+sub_00962D40	osal_snd_sync_msg	0x962d40	0x388160
+sub_00962F48	osal_snd_sync_msg	0x962f48	0x388160
+sub_00963104	osal_snd_sync_msg	0x963104	0x388160
+sub_009633BC	osal_snd_sync_msg	0x9633bc	0x388160
+sub_00963646	osal_snd_sync_msg	0x963646	0x388160
+sub_009637B8	osal_snd_sync_msg	0x9637b8	0x388160
+sub_009641D2	osal_snd_msg	0x9641d2	0x61003c
+sub_009641F8	osal_rcv_msg_tmo	0x9641f8	
+sub_00964628	osal_snd_msg	0x964628	0x61003c
+sub_0096464E	osal_rcv_msg_tmo	0x96464e	
+sub_00964900	osal_snd_msg	0x964900	0x61003c
+sub_00964926	osal_rcv_msg_tmo	0x964926	
+sub_00964B58	osal_snd_msg	0x964b58	0x61003c
+sub_00964B80	osal_rcv_msg_tmo	0x964b80	
+sub_00964DE2	osal_snd_msg	0x964de2	0x61003c
+sub_00964E0A	osal_rcv_msg_tmo	0x964e0a	
+sub_009776CA	osal_snd_sync_msg	0x9776ca	0x94016a
+sub_0099A8B8	ioctl	0x99a8b8	0xc0047805
+sub_009A364A	ioctl	0x9a364a	0xc0047805
+sub_009BA24E	ioctl	0x9ba24e	0xc0047805
+sub_009C2BD6	osal_snd_sync_msg	0x9c2bd6	0x104823f
+sub_009C2C98	osal_snd_sync_msg	0x9c2c98	0x104823f
+sub_009C2D4A	osal_snd_sync_msg	0x9c2d4a	0x104823f
+sub_009C31F8	osal_snd_sync_msg	0x9c31f8	0x924127
+sub_009C9EEA	osal_snd_sync_msg	0x9c9eea	0x8f013a
+sub_009CB614	osal_snd_sync_msg	0x9cb614	0x924126
+sub_009CC468	osal_snd_sync_msg	0x9cc468	0x104823f
+sub_009CC530	osal_snd_sync_msg	0x9cc530	0x104823f
+sub_009CC60E	osal_snd_sync_msg	0x9cc60e	0xa0827e
+sub_009CC660	osal_rcv_msg_tmo	0x9cc660	
+sub_009CCD98	osal_snd_msg	0x9ccd98	0x11006e9
+sub_009CECF6	osal_snd_sync_msg	0x9cecf6	0x924220
+sub_00A0207C	osal_rcv_msg_tmo	0xa0207c	
+sub_00A021D0	osal_rcv_msg_tmo	0xa021d0	
+sub_00A02324	osal_rcv_msg_tmo	0xa02324	
+sub_00A02478	osal_rcv_msg_tmo	0xa02478	
+sub_00A216BC	osal_snd_sync_msg	0xa216bc	0x8f013a
+sub_00A3260E	osal_snd_sync_msg	0xa3260e	0x920572
+sub_00A3267E	osal_snd_sync_msg	0xa3267e	0x920572
+sub_00A338F0	osal_rcv_msg_tmo	0xa338f0	
+sub_00A42ADA	osal_rcv_msg_tmo	0xa42ada	0x20002
+sub_00A4651E	osal_rcv_msg_tmo	0xa4651e	
+sub_00A47640	osal_snd_sync_msg	0xa47640	0x8f013a
+sub_00A5229A	osal_snd_sync_msg	0xa5229a	0x8f013a
+sub_00A622A0	osal_snd_msg	0xa622a0	0x8f013a
+sub_00A622D8	osal_snd_sync_msg	0xa622d8	0x8f0313
+sub_00A6AE5A	osal_rcv_msg_tmo	0xa6ae5a	
+sub_00A6AEF2	osal_rcv_msg_tmo	0xa6aef2	
+sub_00A6AF8A	osal_rcv_msg_tmo	0xa6af8a	
+sub_00A6B016	osal_rcv_msg_tmo	0xa6b016	
+sub_00A6B0A2	osal_rcv_msg_tmo	0xa6b0a2	
+sub_00A6B176	osal_rcv_msg_tmo	0xa6b176	
+sub_00A6B27C	osal_rcv_msg_tmo	0xa6b27c	
+sub_00A6CCA4	osal_rcv_msg_tmo	0xa6cca4	
+sub_00A6D072	osal_snd_sync_msg	0xa6d072	0x8f013a
+sub_00A6D58A	osal_rcv_msg_tmo	0xa6d58a	
+sub_00A6D630	osal_rcv_msg_tmo	0xa6d630	
+sub_00A71E36	osal_rcv_msg_tmo	0xa71e36	
+sub_00A74F64	osal_snd_sync_msg	0xa74f64	0x924126
+sub_00A74F92	osal_snd_sync_msg	0xa74f92	0x920572
+sub_00A7708C	osal_snd_sync_msg	0xa7708c	0x8f013a
+sub_00AA6070	osal_snd_sync_msg	0xaa6070	0x61003c
+sub_00AC9590	osal_snd_sync_msg	0xac9590	0x8f013a
+sub_00AD3DCE	osal_snd_sync_msg	0xad3dce	0x8f013a
+sub_00AD48DE	osal_snd_sync_msg	0xad48de	0x924220
+sub_00AD7EB6	osal_snd_sync_msg	0xad7eb6	0x9241c2
+sub_00ADC346	osal_snd_sync_msg	0xadc346	0x924127
+sub_00ADE07A	osal_snd_sync_msg	0xade07a	0x924127
+sub_00AE09E0	osal_snd_msg	0xae09e0	
+sub_00AE224E	osal_snd_sync_msg	0xae224e	0x920572
+sub_00D5DBA2	osal_snd_sync_msg	0xd5dba2	0x920572
+sub_00D5DC06	osal_snd_sync_msg	0xd5dc06	0x920572
+sub_00D5ECC6	osal_snd_sync_msg	0xd5ecc6	0x8f013a
+sub_00D60CF8	osal_snd_sync_msg	0xd60cf8	0x8f013a
+sub_00D66272	osal_snd_msg	0xd66272	0x4015e
+sub_00D66286	osal_rcv_msg_tmo	0xd66286	
+sub_00D66890	osal_snd_sync_msg	0xd66890	
+sub_00D668F8	osal_snd_sync_msg	0xd668f8	0x9241c2
+sub_00D66E66	osal_snd_sync_msg	0xd66e66	0x9245dc
+sub_00D66EFC	osal_snd_sync_msg	0xd66efc	0x924223
+sub_00D670CA	osal_snd_sync_msg	0xd670ca	0x9241c2
+sub_00D67304	osal_rcv_msg_tmo	0xd67304	
+_ZN10UpmWrapper21GetAcBatteryCheckInfoEPNS_9PowerTypeEPjPNS_16BatteryCheckInfoENS_14ThresholdValueE	osal_snd_sync_msg	0xd67460	0x924126
+_ZN10UpmWrapper21GetAcBatteryCheckInfoEPNS_9PowerTypeEPjPNS_16BatteryCheckInfoENS_14ThresholdValueE	osal_snd_sync_msg	0xd674f4	0x9241c2
+sub_00D6791A	osal_snd_sync_msg	0xd6791a	0x920572
+sub_00D67972	osal_snd_sync_msg	0xd67972	0x920572
+sub_00D69B3C	osal_snd_msg	0xd69b3c	0x8f013a
+sub_00D69B70	osal_snd_sync_msg	0xd69b70	0x8f0313
+sub_00D6A1CA	osal_snd_sync_msg	0xd6a1ca	0x924220
+sub_00D6A982	osal_snd_sync_msg	0xd6a982	0x920572
+sub_00D6A9DA	osal_snd_sync_msg	0xd6a9da	0x920572
+sub_00D6E4C4	osal_snd_msg	0xd6e4c4	0x8f013a
+sub_00D6E4FA	osal_snd_sync_msg	0xd6e4fa	0x8f0313
+sub_00D6EE96	osal_snd_msg	0xd6ee96	0x8f013a
+sub_00D6EECE	osal_snd_sync_msg	0xd6eece	0x8f0313
+sub_00D6F888	osal_snd_msg	0xd6f888	0x8f013a
+sub_00D6F8BC	osal_snd_sync_msg	0xd6f8bc	0x8f0313
+sub_00D70208	osal_rcv_msg_tmo	0xd70208	0x260186
+sub_00D707AA	osal_snd_msg	0xd707aa	0x60197
+sub_00D70854	osal_snd_msg	0xd70854	0x60197
+sub_00D70906	osal_snd_msg	0xd70906	0x60197
+sub_00D709B4	osal_snd_msg	0xd709b4	0x60197
+sub_00D753FA	osal_snd_msg	0xd753fa	
+sub_00D754D4	osal_snd_msg	0xd754d4	
+sub_00D755A2	osal_snd_msg	0xd755a2	
+sub_00D75676	osal_snd_msg	0xd75676	
+sub_00D7574A	osal_snd_msg	0xd7574a	
+sub_00D7581E	osal_snd_msg	0xd7581e	
+sub_00D758F2	osal_snd_msg	0xd758f2	
+sub_00D759CA	osal_snd_msg	0xd759ca	
+sub_00D75A9A	osal_snd_msg	0xd75a9a	
+sub_00D75B6A	osal_snd_msg	0xd75b6a	
+sub_00D75C3E	osal_snd_msg	0xd75c3e	
+sub_00D75D12	osal_snd_msg	0xd75d12	
+sub_00D75DE4	osal_snd_sync_msg	0xd75de4	
+sub_00D76034	osal_snd_msg	0xd76034	0x8f013a
+sub_00D7606A	osal_snd_sync_msg	0xd7606a	0x8f0313
+sub_00D786CC	osal_snd_msg	0xd786cc	0x8f013a
+sub_00D78702	osal_snd_sync_msg	0xd78702	0x8f0313
+sub_00D79B1A	osal_rcv_msg_tmo	0xd79b1a	0x260185
+sub_00D7AA98	osal_snd_msg	0xd7aa98	0x8f013a
+sub_00D7AACE	osal_snd_sync_msg	0xd7aace	0x8f0313
+sub_00D7B832	osal_snd_msg	0xd7b832	0x2601ac
+sub_00D7BAB4	osal_rcv_msg_tmo	0xd7bab4	0x2601ac
+sub_00D7D930	osal_snd_msg	0xd7d930	0x8f013a
+sub_00D7D964	osal_snd_sync_msg	0xd7d964	0x8f0313
+sub_00D7DD0C	osal_snd_msg	0xd7dd0c	0x8f013a
+sub_00D7DD42	osal_snd_sync_msg	0xd7dd42	0x8f0313
+sub_00D7EBBC	osal_snd_sync_msg	0xd7ebbc	0x9241c2
+sub_00D7EC5A	osal_snd_sync_msg	0xd7ec5a	
+sub_00D7EDD8	osal_snd_sync_msg	0xd7edd8	0xcf016d
+sub_00D802A2	osal_snd_sync_msg	0xd802a2	
+sub_00D80A7A	osal_snd_sync_msg	0xd80a7a	0x94016a
+sub_00D8237A	osal_snd_msg	0xd8237a	0x8f013a
+sub_00D823B2	osal_snd_sync_msg	0xd823b2	0x8f0313
+sub_00D8264C	osal_snd_sync_msg	0xd8264c	0x94016a
+sub_00D82740	osal_snd_sync_msg	0xd82740	0xe18246
+sub_00D827CC	osal_snd_sync_msg	0xd827cc	0xe18246
+sub_00D82878	osal_snd_sync_msg	0xd82878	0xe18246
+sub_00D828EA	osal_snd_sync_msg	0xd828ea	0xe18246
+sub_00D82976	osal_snd_sync_msg	0xd82976	
+sub_00D829DC	osal_snd_sync_msg	0xd829dc	0x8f0139
+sub_00D82B24	osal_snd_sync_msg	0xd82b24	0x924220
+sub_00D83A7E	osal_snd_msg	0xd83a7e	
+sub_00D83AC2	osal_snd_sync_msg	0xd83ac2	
+sub_00D83CE0	osal_snd_sync_msg	0xd83ce0	0x8f0139
+sub_00D85A16	osal_snd_sync_msg	0xd85a16	0xe4827d
+sub_00D862A6	osal_snd_sync_msg	0xd862a6	0x146840a
+sub_00D86392	osal_rcv_msg_tmo	0xd86392	
+sub_00D87856	osal_snd_sync_msg	0xd87856	
+sub_00D9014A	osal_snd_sync_msg	0xd9014a	0x9241c2
+sub_00DA3F5A	osal_snd_sync_msg	0xda3f5a	0x8f013a
+sub_00DAA418	osal_snd_msg	0xdaa418	0x11006e9
+sub_00DAE4D2	osal_snd_msg	0xdae4d2	0x11006e9
+sub_00DB75DA	osal_snd_sync_msg	0xdb75da	0x924222
+sub_00DBAA4C	osal_snd_sync_msg	0xdbaa4c	0x924220
+sub_00DBBB14	osal_snd_sync_msg	0xdbbb14	0x924126
+sub_00DC2600	osal_snd_sync_msg	0xdc2600	0x9241c2
+sub_00DC6C70	osal_snd_sync_msg	0xdc6c70	0x920572
+sub_00DC6CC8	osal_snd_sync_msg	0xdc6cc8	0x920572
+sub_00DC7F7A	osal_snd_sync_msg	0xdc7f7a	0x8f013a
+sub_00DD8C68	osal_snd_sync_msg	0xdd8c68	0x9241c2
+sub_00DE5BC0	ioctl	0xde5bc0	0xc0047805
+sub_00DE5FF2	ioctl	0xde5ff2	0xc0047805
+sub_00DE62D8	ioctl	0xde62d8	0xc0047805
+sub_00DE6E96	ioctl	0xde6e96	0xc0047805
+sub_00DE7244	ioctl	0xde7244	0xc0047805
+sub_00DE75A6	ioctl	0xde75a6	0xc0047805
+sub_00DE8052	ioctl	0xde8052	0xc0047805
+sub_00DE8CCA	ioctl	0xde8cca	0xc0047805
+sub_00DE99D6	ioctl	0xde99d6	0xc0047805
+sub_00DEDCBE	ioctl	0xdedcbe	0xc0047805
+sub_00DEDE42	osal_snd_sync_msg	0xdede42	0x8f013a
+sub_00DEDF22	ioctl	0xdedf22	0xc0047805
+sub_00DF7770	osal_snd_sync_msg	0xdf7770	0x9241c2
+sub_00DF8CCC	osal_snd_sync_msg	0xdf8ccc	0x920572
+sub_00E13E54	osal_snd_sync_msg	0xe13e54	0x9241c2
+sub_00E1453A	osal_snd_sync_msg	0xe1453a	0x9241c2
+sub_00E14890	osal_snd_sync_msg	0xe14890	0x9241c2
+sub_00E14B48	osal_snd_sync_msg	0xe14b48	
+sub_00E14E78	osal_snd_sync_msg	0xe14e78	
+sub_00E15FEC	osal_snd_sync_msg	0xe15fec	0x12282f6
+sub_00E1654E	osal_snd_sync_msg	0xe1654e	0x12282f6
+sub_00E16BDA	osal_snd_sync_msg	0xe16bda	0x12282f6
+sub_00E16F70	osal_snd_sync_msg	0xe16f70	0x1428403
+sub_00E1718E	osal_snd_sync_msg	0xe1718e	0x1428403
+sub_00E175B2	osal_snd_sync_msg	0xe175b2	0x1428403
+sub_00E19AFC	osal_snd_sync_msg	0xe19afc	0x924223
+sub_00E1A10C	osal_snd_sync_msg	0xe1a10c	0x9241c2
+sub_00E1AD4A	osal_snd_sync_msg	0xe1ad4a	0x924126
+sub_00E1B99A	osal_snd_sync_msg	0xe1b99a	0x924222
+sub_00E1EA72	osal_snd_msg	0xe1ea72	0x11006e9
+sub_00E22910	osal_snd_sync_msg	0xe22910	0x8f013a
+sub_00E24EA0	osal_snd_sync_msg	0xe24ea0	0x8f013a
+sub_00E25AA8	osal_snd_sync_msg	0xe25aa8	0x8f013a
+sub_00E26A30	osal_snd_sync_msg	0xe26a30	0x8f013a
+sub_00E27CC4	osal_snd_sync_msg	0xe27cc4	0x8f013a
+sub_00E2B8C0	osal_snd_sync_msg	0xe2b8c0	0x8f013a
+sub_00E37D16	osal_snd_msg	0xe37d16	
+sub_00E37DEC	osal_rcv_msg_tmo	0xe37dec	
+sub_00E386EC	osal_snd_msg	0xe386ec	0x9082e9
+sub_00E38820	osal_rcv_msg_tmo	0xe38820	0x9082e9
+sub_00E38854	osal_rcv_msg_tmo	0xe38854	0x9082e9

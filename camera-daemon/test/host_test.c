@@ -9,6 +9,7 @@
  * Build/run through test/run_host_tests.py (which selects a host compiler and
  * passes a writable working directory for the ack-file test).
  */
+#define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,13 @@
 #include "a6400_internal.h"
 #include "a6400_recovery.h"
 #include "a6400_sdlog.h"
+#include "a6400_wifi.h"
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
 
 /* ---- clock stubs (control.c asks the daemon core for monotonic time) ------ */
 
@@ -1573,6 +1581,147 @@ static void test_recovery_policy(void)
     CHECK_EQ(A6400_REC_STEP_COUNT, 8);
 }
 
+static int connect_loopback(uint16_t port)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr;
+    if (fd < 0)
+        return -1;
+    memset(&addr, 0, sizeof addr);
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static void wifi_test_get_stats(void *ctx, struct a6400_daemon_stats *out)
+{
+    const struct a6400_daemon_stats *src = (const struct a6400_daemon_stats *)ctx;
+    *out = *src;
+}
+
+static void wifi_test_get_caps(void *ctx, struct a6400_ctl_caps_reply *out)
+{
+    (void)ctx;
+    memset(out, 0, sizeof *out);
+}
+
+static int wifi_test_session_active(void *ctx)
+{
+    (void)ctx;
+    return 1;
+}
+
+static void test_wifi_stream(void)
+{
+    struct a6400_wifi_server srv;
+    struct a6400_daemon_stats stats;
+    struct a6400_control_config ccfg;
+    struct a6400_control_host chost;
+    struct a6400_control_ctx *ctrl;
+    struct a6400_ctl_action act;
+    int sfd, hfd, cfd;
+    static const uint8_t fake_jpeg[8] = { 0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02, 0xff, 0xd9 };
+
+    memset(&stats, 0, sizeof stats);
+    memset(&ccfg, 0, sizeof ccfg);
+    memset(&chost, 0, sizeof chost);
+    stats.frames_captured = 12;
+    stats.frames_submitted = 12;
+    chost.ctx = &stats;
+    chost.get_stats = wifi_test_get_stats;
+    chost.get_caps = wifi_test_get_caps;
+    chost.session_active = wifi_test_session_active;
+    ctrl = a6400_control_create(&ccfg, &chost);
+    CHECK(ctrl != NULL);
+
+    CHECK_EQ(a6400_wifi_server_open_ex(&srv, 7u, 0, 0, 0), 0);
+    CHECK(srv.bound_stream_port > 0);
+    CHECK(srv.bound_http_port > 0);
+    CHECK(srv.bound_ctrl_port > 0);
+
+    sfd = connect_loopback(srv.bound_stream_port);
+    hfd = connect_loopback(srv.bound_http_port);
+    cfd = connect_loopback(srv.bound_ctrl_port);
+    CHECK(sfd >= 0);
+    CHECK(hfd >= 0);
+    CHECK(cfd >= 0);
+
+    /* Send HTTP GET to trigger multipart header */
+    {
+        static const char get_req[] = "GET /liveview.mjpg HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        CHECK_EQ(send(hfd, get_req, sizeof get_req - 1, 0), (ssize_t)(sizeof get_req - 1));
+    }
+    {
+        struct timespec ts = { 0, 5000000L };
+        nanosleep(&ts, NULL);
+    }
+    CHECK_EQ(a6400_wifi_server_poll(&srv, ctrl, &act), 0);
+    CHECK_EQ(srv.http_headers_sent, 1);
+
+    /* Send one frame to both binary stream and HTTP MJPEG clients */
+    CHECK_EQ(a6400_wifi_server_send_frame(&srv, 42u, 123456789LL,
+                                          fake_jpeg, sizeof fake_jpeg, 1u), 0);
+    CHECK_EQ(srv.stream_sent, 1);
+    CHECK_EQ(srv.http_sent, 1);
+
+    {
+        uint8_t sbuf[64];
+        struct a6400_wifi_frame_hdr fhdr;
+        ssize_t n = recv(sfd, sbuf, sizeof sbuf, 0);
+        CHECK_EQ(n, (ssize_t)(sizeof fhdr + sizeof fake_jpeg));
+        memcpy(&fhdr, sbuf, sizeof fhdr);
+        CHECK_EQ(fhdr.magic, A6400_WIFI_FRAME_MAGIC);
+        CHECK_EQ(fhdr.frame_seq, 42u);
+        CHECK_EQ(fhdr.jpeg_bytes, sizeof fake_jpeg);
+        CHECK_EQ(fhdr.capture_ns, 123456789ULL);
+        CHECK_EQ(memcmp(sbuf + sizeof fhdr, fake_jpeg, sizeof fake_jpeg), 0);
+    }
+
+    {
+        char hbuf[512];
+        ssize_t n = recv(hfd, hbuf, sizeof hbuf - 1, 0);
+        CHECK(n > 0);
+        hbuf[n] = '\0';
+        CHECK(strstr(hbuf, "multipart/x-mixed-replace; boundary=a640frame") != NULL);
+        CHECK(strstr(hbuf, "Content-Length: 8\r\n\r\n") != NULL);
+    }
+
+    /* Send PING over TCP control bridge */
+    {
+        uint8_t req_buf[A6400_CTL_HEADER_SIZE];
+        uint32_t req_len;
+        struct a6400_ctl_ack ack;
+        uint8_t ack_rx[64];
+        ssize_t n;
+        req_len = a6400_ctl_build_request(req_buf, sizeof req_buf,
+                                          A6400_CTL_PING, 77, NULL, 0);
+        CHECK_EQ(req_len, A6400_CTL_HEADER_SIZE);
+        CHECK_EQ(send(cfd, req_buf, req_len, 0), (ssize_t)req_len);
+        {
+            struct timespec ts = { 0, 5000000L };
+            nanosleep(&ts, NULL);
+        }
+        CHECK_EQ(a6400_wifi_server_poll(&srv, ctrl, &act), 0);
+        CHECK_EQ(srv.ctrl_requests, 1);
+        n = recv(cfd, ack_rx, sizeof ack_rx, 0);
+        CHECK(n >= (ssize_t)sizeof ack);
+        memcpy(&ack, ack_rx, sizeof ack);
+        CHECK_EQ(ack.seq, 77);
+        CHECK_EQ(ack.status, A6400_CTL_STATUS_OK);
+    }
+
+    close(sfd);
+    close(hfd);
+    close(cfd);
+    a6400_wifi_server_close(&srv);
+    a6400_control_destroy(ctrl);
+}
+
 /* ---- main ---------------------------------------------------------------- */
 
 int main(int argc, char **argv)
@@ -1595,6 +1744,7 @@ int main(int argc, char **argv)
     test_handle_frame(ack_path);
     test_sd_policy();
     test_recovery_policy();
+    test_wifi_stream();
 
     printf("checks: %d\n", g_checks);
     printf("failures: %d\n", g_failures);

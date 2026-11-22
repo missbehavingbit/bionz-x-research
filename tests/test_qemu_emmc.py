@@ -3,11 +3,15 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from project_paths import PROJECT_ROOT
 from tools.research.qemu_boot_probe import Qmp
@@ -18,6 +22,32 @@ QEMU = Path(os.environ.get(
     'A6400_QEMU_DIR', str(Path.home() / f'sony-a6400-qemu-{VERSION}'))) / 'build/qemu-system-arm'
 SDHCI = 0xF0304000
 NATIVE_AVAILABLE = os.name == 'posix' and QEMU.is_file()
+
+
+@unittest.skipUnless(os.name == 'posix' and shutil.which('bash'), 'Requires WSL/Linux bash')
+class QemuSubmicroPreflightTests(unittest.TestCase):
+    def test_bad_fixture_is_rejected_before_staging_a_run(self):
+        run = PROJECT_ROOT / 'qemu-a6400/run.sh'
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / 'not-staged'
+            missing = root / 'missing.bin'
+            wrong = root / 'wrong frames.bin'
+            wrong.write_bytes(bytes(384))
+            for page, frames, reason in (
+                (str(missing), '', b'fixture is missing or unreadable'),
+                ('', str(wrong), b'SHA-256 mismatch'),
+                (str(missing), str(wrong), b'not both'),
+            ):
+                with self.subTest(page=page, frames=frames):
+                    result = subprocess.run(
+                        ['bash', str(run)],
+                        env=dict(os.environ, RUN_DIR=str(run_dir), A6400_QEMU_DATA_DIR='',
+                                 SUBMICRO_PAGE=page, SUBMICRO_FRAMES=frames),
+                        capture_output=True, timeout=5)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(reason, result.stderr)
+                    self.assertFalse(run_dir.exists())
 
 
 @unittest.skipUnless(NATIVE_AVAILABLE, 'Optional WSL/Linux sony-a6400 QEMU build absent')
@@ -160,6 +190,9 @@ class QemuCapacityGuardTests(unittest.TestCase):
 @unittest.skipUnless(NATIVE_AVAILABLE, 'Optional WSL/Linux sony-a6400 QEMU build absent')
 class QemuBoardIoTests(unittest.TestCase):
     def test_rear_keys_and_both_display_callbacks_use_native_interfaces(self):
+        with patch.object(sys, 'path', [str(PROJECT_ROOT / 'qemu-a6400/tools'), *sys.path]):
+            from rear_panel import press_control
+
         directory = PROJECT_ROOT / 'artifacts/tests'
         directory.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=directory) as temporary, \
@@ -199,12 +232,51 @@ class QemuBoardIoTests(unittest.TestCase):
                     self.assertEqual(word(0xF2407020), 45)
                     key('ret', False)
                     self.assertEqual(word(0xF2407020), 1023)
-                    key('bracket_right', True)
-                    key('bracket_right', False)
-                    self.assertEqual(word(0xF2404014, 'h'), 1)
-                    key('bracket_left', True)
-                    key('bracket_left', False)
+                    panel = SimpleNamespace(command=lambda name, **args: qmp.request(name, args))
+                    press_control(panel, 'exposure')
+                    self.assertEqual(word(0xF2407020), 520)
+                    # The virtual clock has not advanced; a second timed key
+                    # would sit behind the pending release of this down press.
+                    press_control(panel, 'wheel-right')
+                    self.assertEqual(word(0xF2404014, 'h'), 4)
+                    press_control(panel, 'wheel-left')
                     self.assertEqual(word(0xF2404014, 'h'), 0)
+                    press_control(panel, 'wheel-left')
+                    self.assertEqual(word(0xF2404014, 'h'), 0xFFFC)
+                    press_control(panel, 'wheel-right')
+                    self.assertEqual(word(0xF2404014, 'h'), 0)
+                    self.assertNotEqual(word(0xF2910010) & (1 << 11), 0)
+                    press_control(panel, 'af-lever')
+                    self.assertEqual(word(0xF2910010) & (1 << 11), 0)
+                    press_control(panel, 'af-lever')
+                    self.assertNotEqual(word(0xF2910010) & (1 << 11), 0)
+                    self.assertNotEqual(word(0xF2910010) & (1 << 2), 0)
+                    press_control(panel, 'eye-sensor')
+                    self.assertEqual(word(0xF2910010) & (1 << 2), 0)
+                    press_control(panel, 'eye-sensor')
+                    self.assertNotEqual(word(0xF2910010) & (1 << 2), 0)
+                    s1, s2 = 1 << 1, 1 << 5
+                    p0, p1 = 0xF2910010, 0xF2910110
+                    self.assertTrue(word(p0) & s1)
+                    self.assertTrue(word(p1) & s2)
+                    key('s', True)
+                    self.assertFalse(word(p0) & s1)
+                    self.assertTrue(word(p1) & s2)
+                    key('spc', True)
+                    self.assertFalse(word(p0) & s1)
+                    self.assertFalse(word(p1) & s2)
+                    key('spc', False)
+                    self.assertFalse(word(p0) & s1)
+                    self.assertTrue(word(p1) & s2)
+                    key('s', False)
+                    self.assertTrue(word(p0) & s1)
+                    key('spc', True)
+                    self.assertFalse(word(p0) & s1)
+                    self.assertFalse(word(p1) & s2)
+                    key('spc', False)
+                    self.assertTrue(word(p0) & s1)
+                    self.assertTrue(word(p1) & s2)
+                    self.assertEqual(word(0xF2407020), 520)
                     qmp.request('stop')
                     for head in (0, 1):
                         image = root / f'head-{head}.ppm'

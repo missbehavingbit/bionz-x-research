@@ -58,7 +58,12 @@ GRM_UNIT_GL_COMMON = 0x0280
 
 POOL_POLICY_GL_COMMON_ONLY = 'gl-common-only'
 POOL_POLICY_CAPTURED_E0044 = 'captured-e0044'
-POOL_POLICIES = (POOL_POLICY_GL_COMMON_ONLY, POOL_POLICY_CAPTURED_E0044)
+POOL_POLICY_CAPTURED_WBI_DMM = 'captured-wbi-dmm'
+POOL_POLICIES = (
+    POOL_POLICY_GL_COMMON_ONLY,
+    POOL_POLICY_CAPTURED_E0044,
+    POOL_POLICY_CAPTURED_WBI_DMM,
+)
 
 TELEMETRY_OFF = 'off'
 TELEMETRY_E0302 = 'e0302-grm'
@@ -100,6 +105,38 @@ CAPTURED_E0044_POOLS = (
     CapturedPool('mpMemoryHeap', 0x00B7F2E0, 0x222E0000, 0x400000),
     CapturedPool('empty', 0x00B7F360, 0x23A80000, 0x96000),
     CapturedPool('gl_common', 0x08A96220, 0x202E0000, 0x02000000),
+)
+
+
+# Verified in packaged WBI nflasha5 (SHA-256 19a702b0...) + dmm.ko unit table
+# VA 0x5f1709e0 (rows 23, 28..32) + grm_ma.ko allocator objects (E0044/E0047):
+#   idx 23: handle 0x0417, unit 0x00280 -> gl_common     (0x202E0000, 0x2000000, mspace=1)
+#   idx 28: handle 0x041C, unit 0x4092E -> empty (OSD A) (0x23A80000, 0x0096000, mspace=0)
+#   idx 29: handle 0x041D, unit 0x40803 -> mpMemoryHeap  (0x222E0000, 0x0400000, mspace=1)
+#   idx 30: handle 0x041E, unit 0x4087B -> mpTextHeap    (0x22880000, 0x0200000, mspace=1)
+#   idx 31: handle 0x041F, unit 0x00256 -> mpMemoryHeap2 (0x226E0000, 0x01A0000, mspace=1)
+#   idx 32: handle 0x0420, unit 0x4092E -> empty (OSD B) (0x23B16000, 0x0096000, mspace=0)
+class CapturedWbiDmmPool(NamedTuple):
+    name: str
+    object_physical: int
+    phys_base: int
+    pool_size: int
+    dmm_unit: int
+    dmm_handle: int
+    has_mspace: bool
+
+    @property
+    def kernel_handle(self) -> int:
+        return (self.object_physical + CAPTURED_E0044_CACHED_OFFSET) & 0xFFFFFFFF
+
+
+CAPTURED_WBI_DMM_POOLS = (
+    CapturedWbiDmmPool('gl_common', 0x08A96220, 0x202E0000, 0x02000000, 0x00280, 0x0417, True),
+    CapturedWbiDmmPool('empty', 0x00B7F360, 0x23A80000, 0x00096000, 0x4092E, 0x041C, False),
+    CapturedWbiDmmPool('mpMemoryHeap', 0x00B7F2E0, 0x222E0000, 0x00400000, 0x40803, 0x041D, True),
+    CapturedWbiDmmPool('mpTextHeap', 0x08ABD5A0, 0x22880000, 0x00200000, 0x4087B, 0x041E, True),
+    CapturedWbiDmmPool('mpMemoryHeap2', 0x08ABD560, 0x226E0000, 0x001A0000, 0x00256, 0x041F, True),
+    CapturedWbiDmmPool('empty', 0x00B7F2A0, 0x23B16000, 0x00096000, 0x4092E, 0x0420, False),
 )
 
 
@@ -167,11 +204,11 @@ class GrmMaService:
             raise ValueError('Unknown GRM pool policy')
         if telemetry_policy not in TELEMETRY_POLICIES:
             raise ValueError('Unknown GRM telemetry policy')
-        if pool_policy == POOL_POLICY_CAPTURED_E0044 and (
+        if pool_policy in (POOL_POLICY_CAPTURED_E0044, POOL_POLICY_CAPTURED_WBI_DMM) and (
                 phys_base, pool_size, kernel_handle) != (
                     GRM_POOL_PHYS_BASE, GRM_POOL_SIZE, GRM_KERNEL_HANDLE):
             raise ValueError(
-                'captured-e0044 policy uses the captured pool table; '
+                f'{pool_policy} policy uses the captured pool table; '
                 'custom gl_common parameters are not supported')
         self.phys_base = phys_base
         self.pool_size = pool_size
@@ -181,6 +218,12 @@ class GrmMaService:
         self.next_alloc_offset = 0
         # Captured-e0044 allocation offsets, keyed by captured object physical.
         self.pool_alloc_offsets: Dict[int, int] = {}
+        # Captured-wbi-dmm state: open DMM units, whole-unit claims, mspace free blocks, dynamic msps.
+        self.open_wbi_objects: set = set()
+        self.claimed_whole_units: set = set()
+        self.mspace_allocations: Dict[Tuple[int, int], int] = {}
+        self.mspace_free_blocks: Dict[int, List[Tuple[int, int]]] = {}
+        self.dynamic_wbi_pools: List[CapturedWbiDmmPool] = []
         # Opt-in e0302-grm request observer; empty unless telemetry is enabled.
         self.telemetry: List[Dict[str, Any]] = []
         self.events: List[Dict[str, Any]] = []
@@ -193,6 +236,64 @@ class GrmMaService:
             self.telemetry_policy = TELEMETRY_OFF
         if 'telemetry' not in self.__dict__:
             self.telemetry = []
+        if 'open_wbi_objects' not in self.__dict__:
+            self.open_wbi_objects = set()
+        if 'claimed_whole_units' not in self.__dict__:
+            self.claimed_whole_units = set()
+        if 'mspace_allocations' not in self.__dict__:
+            self.mspace_allocations = {}
+        if 'mspace_free_blocks' not in self.__dict__:
+            self.mspace_free_blocks = {}
+        if 'dynamic_wbi_pools' not in self.__dict__:
+            self.dynamic_wbi_pools = []
+
+    def upgrade_to_wbi_dmm(self) -> None:
+        """Promote a pre-OSD captured-e0044 instance on checkpoint resume."""
+        if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+            return
+        if any(ev.get('status', 0) != 0 for ev in self.events):
+            raise ValueError('Cannot upgrade GRM policy after an error reply was already delivered')
+        self.pool_policy = POOL_POLICY_CAPTURED_WBI_DMM
+
+    def _wbi_pools(self) -> Tuple[CapturedWbiDmmPool, ...]:
+        return tuple(self.dynamic_wbi_pools) + CAPTURED_WBI_DMM_POOLS
+
+    def _wbi_pool_by_handle(self, handle: int) -> Optional[CapturedWbiDmmPool]:
+        for pool in self._wbi_pools():
+            if pool.kernel_handle == handle:
+                return pool
+        return None
+
+    def _wbi_pool_by_name(self, name: str) -> Optional[CapturedWbiDmmPool]:
+        # Follow E0044 reciprocal-list traversal order for static pools after dynamic head entries.
+        for pool in self.dynamic_wbi_pools:
+            if pool.name == name:
+                return pool
+        for e0044 in CAPTURED_E0044_POOLS:
+            if e0044.name == name:
+                for pool in CAPTURED_WBI_DMM_POOLS:
+                    if pool.object_physical == e0044.object_physical:
+                        return pool
+        return None
+
+    def _wbi_pool_by_phys(self, phys_base: int) -> Optional[CapturedWbiDmmPool]:
+        for pool in self._wbi_pools():
+            if pool.phys_base == phys_base:
+                return pool
+        return None
+
+    def _wbi_open_unit(self, unit: int) -> Optional[CapturedWbiDmmPool]:
+        matches = [p for p in CAPTURED_WBI_DMM_POOLS if p.dmm_unit == unit]
+        if not matches:
+            return None
+        for pool in matches:
+            if pool.object_physical not in self.open_wbi_objects:
+                self.open_wbi_objects.add(pool.object_physical)
+                return pool
+        # Single-instance mspace units (e.g. 0x0280 gl_common) can be retained repeatedly.
+        if len(matches) == 1 and matches[0].has_mspace:
+            return matches[0]
+        return None
 
     def handle_uipc_sync_message(self, memory_reader, memory_writer, msg_ptr: int, alloc_size: int = 64) -> int:
         """Dispatches an incoming synchronous UIPC message to GRM-MA."""
@@ -220,7 +321,37 @@ class GrmMaService:
                 raw_name = raw_msg[8:24].split(b'\x00')[0] if len(raw_msg) >= 24 else b''
             name_str = raw_name.decode('latin1', errors='ignore')
 
-            if self.pool_policy == POOL_POLICY_CAPTURED_E0044:
+            if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+                wbi_pool = self._wbi_open_unit(unit)
+                if wbi_pool is None:
+                    if memory_writer:
+                        memory_writer(msg_ptr + 28,
+                                      struct.pack('<iIII', MA_ERR_NOT_FOUND, 0, 0, 0))
+                    event.update({
+                        'action': 'ma_dmm_open_impl_unsupported_unit',
+                        'unit': f'0x{unit:04x}',
+                        'name': name_str,
+                        'status': MA_ERR_NOT_FOUND,
+                        'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                    })
+                else:
+                    reply = struct.pack('<IIII', MA_ERR_NONE, wbi_pool.phys_base,
+                                        wbi_pool.pool_size, wbi_pool.kernel_handle)
+                    if memory_writer:
+                        memory_writer(msg_ptr + 28, reply)
+                    event.update({
+                        'action': 'ma_dmm_open_impl',
+                        'unit': f'0x{unit:04x}',
+                        'name': name_str or wbi_pool.name,
+                        'status': MA_ERR_NONE,
+                        'phys_base': f'0x{wbi_pool.phys_base:08x}',
+                        'pool_size': wbi_pool.pool_size,
+                        'handle': f'0x{wbi_pool.kernel_handle:08x}',
+                        'dmm_handle': f'0x{wbi_pool.dmm_handle:04x}',
+                        'pool_name': wbi_pool.name,
+                        'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                    })
+            elif self.pool_policy == POOL_POLICY_CAPTURED_E0044:
                 # E0046: the original open contains no name lookup; only unit
                 # 0x280 has executed evidence. Do not fall back to gl_common
                 # for any other unit.
@@ -279,7 +410,34 @@ class GrmMaService:
             raw_name = raw_msg[4:20].split(b'\x00')[0] if len(raw_msg) >= 20 else b''
             name_str = raw_name.decode('latin1', errors='ignore')
 
-            if self.pool_policy == POOL_POLICY_CAPTURED_E0044:
+            if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+                wbi_pool = self._wbi_pool_by_name(name_str)
+                if wbi_pool is None:
+                    if memory_writer:
+                        memory_writer(msg_ptr + 20,
+                                      struct.pack('<iIII', MA_ERR_NOT_FOUND, 0, 0, 0))
+                    event.update({
+                        'action': 'ma_findbyname_impl_unknown_name',
+                        'name': name_str,
+                        'status': MA_ERR_NOT_FOUND,
+                        'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                    })
+                else:
+                    reply = struct.pack('<IIII', MA_ERR_NONE, wbi_pool.phys_base,
+                                        wbi_pool.pool_size, wbi_pool.kernel_handle)
+                    if memory_writer:
+                        memory_writer(msg_ptr + 20, reply)
+                    event.update({
+                        'action': 'ma_findbyname_impl',
+                        'name': name_str,
+                        'status': MA_ERR_NONE,
+                        'phys_base': f'0x{wbi_pool.phys_base:08x}',
+                        'pool_size': wbi_pool.pool_size,
+                        'handle': f'0x{wbi_pool.kernel_handle:08x}',
+                        'pool_name': wbi_pool.name,
+                        'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                    })
+            elif self.pool_policy == POOL_POLICY_CAPTURED_E0044:
                 pool = _captured_pool_by_name(name_str)
                 if pool is None:
                     # E0045 negative control: absent name -> status -9, empty
@@ -333,7 +491,100 @@ class GrmMaService:
             handle = struct.unpack_from('<I', raw_msg, 4)[0] if len(raw_msg) >= 8 else 0
             size = struct.unpack_from('<I', raw_msg, 8)[0] if len(raw_msg) >= 12 else 0
 
-            if self.pool_policy == POOL_POLICY_CAPTURED_E0044:
+            if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+                req_align = struct.unpack_from('<I', raw_msg, 12)[0] if len(raw_msg) >= 16 else 0
+                wbi_pool = self._wbi_pool_by_handle(handle)
+                if wbi_pool is None:
+                    if memory_writer:
+                        memory_writer(msg_ptr + 16,
+                                      struct.pack('<iI', MA_ERR_NOT_FOUND, 0))
+                    event.update({
+                        'action': 'ma_malloc_impl_unknown_handle',
+                        'handle': f'0x{handle:08x}',
+                        'req_size': size,
+                        'status': MA_ERR_NOT_FOUND,
+                        'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                    })
+                elif not wbi_pool.has_mspace:
+                    # grm_ma.ko + 0x834..0x874: flag44 == 0 claims the whole DMM unit once.
+                    if (wbi_pool.object_physical in self.claimed_whole_units
+                            or size > wbi_pool.pool_size):
+                        if memory_writer:
+                            memory_writer(msg_ptr + 16, struct.pack('<iI', -1, 0))
+                        event.update({
+                            'action': 'ma_malloc_impl_whole_unit_busy_or_oversize',
+                            'handle': f'0x{handle:08x}',
+                            'req_size': size,
+                            'status': -1,
+                            'pool_name': wbi_pool.name,
+                            'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                        })
+                    else:
+                        self.claimed_whole_units.add(wbi_pool.object_physical)
+                        alloc_addr = wbi_pool.phys_base
+                        if memory_writer:
+                            memory_writer(msg_ptr + 16, struct.pack('<II', MA_ERR_NONE, alloc_addr))
+                        event.update({
+                            'action': 'ma_malloc_impl',
+                            'handle': f'0x{handle:08x}',
+                            'req_size': size,
+                            'alloc_addr': f'0x{alloc_addr:08x}',
+                            'status': MA_ERR_NONE,
+                            'pool_name': wbi_pool.name,
+                            'pool_offset': 0,
+                            'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                        })
+                else:
+                    align = 512
+                    if req_align > align and (req_align & (req_align - 1)) == 0:
+                        align = req_align
+                    aligned_size = max(align, (size + align - 1) & ~(align - 1))
+                    free_list = self.mspace_free_blocks.setdefault(wbi_pool.object_physical, [])
+                    reused_idx = next(
+                        (idx for idx, (f_off, f_sz) in enumerate(free_list)
+                         if f_sz >= aligned_size and ((wbi_pool.phys_base + f_off) & (align - 1)) == 0),
+                        None,
+                    )
+                    if reused_idx is not None:
+                        f_off, f_sz = free_list.pop(reused_idx)
+                        offset = f_off
+                        if f_sz > aligned_size:
+                            free_list.append((f_off + aligned_size, f_sz - aligned_size))
+                    else:
+                        raw_off = self.pool_alloc_offsets.get(wbi_pool.object_physical, 0)
+                        aligned_phys = (wbi_pool.phys_base + raw_off + align - 1) & ~(align - 1)
+                        offset = aligned_phys - wbi_pool.phys_base
+                        if offset + aligned_size > wbi_pool.pool_size:
+                            if memory_writer:
+                                memory_writer(msg_ptr + 16, struct.pack('<iI', -1, 0))
+                            event.update({
+                                'action': 'ma_malloc_impl_out_of_memory',
+                                'handle': f'0x{handle:08x}',
+                                'req_size': size,
+                                'status': -1,
+                                'pool_name': wbi_pool.name,
+                                'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                            })
+                            if self.telemetry_policy != TELEMETRY_OFF:
+                                event['telemetry'] = self._record_sync_telemetry(opcode, raw_msg, event)
+                            self.events.append(event)
+                            return 0
+                        self.pool_alloc_offsets[wbi_pool.object_physical] = offset + aligned_size
+                    alloc_addr = wbi_pool.phys_base + offset
+                    self.mspace_allocations[(wbi_pool.object_physical, alloc_addr)] = aligned_size
+                    if memory_writer:
+                        memory_writer(msg_ptr + 16, struct.pack('<II', MA_ERR_NONE, alloc_addr))
+                    event.update({
+                        'action': 'ma_malloc_impl',
+                        'handle': f'0x{handle:08x}',
+                        'req_size': size,
+                        'alloc_addr': f'0x{alloc_addr:08x}',
+                        'status': MA_ERR_NONE,
+                        'pool_name': wbi_pool.name,
+                        'pool_offset': offset,
+                        'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                    })
+            elif self.pool_policy == POOL_POLICY_CAPTURED_E0044:
                 pool = _captured_pool_by_handle(handle)
                 if pool is None:
                     if memory_writer:
@@ -392,6 +643,12 @@ class GrmMaService:
             # Opcode 2: ma_dmm_close_impl(param_1 + 2, param_1 + 4)
             # Reply written to param_1 + 4 (byte 8):
             #   offset +8: status (0 = MA_ErrNone)
+            handle = struct.unpack_from('<I', raw_msg, 4)[0] if len(raw_msg) >= 8 else 0
+            if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM and handle:
+                wbi_pool = self._wbi_pool_by_handle(handle)
+                if wbi_pool is not None:
+                    self.open_wbi_objects.discard(wbi_pool.object_physical)
+                    self.claimed_whole_units.discard(wbi_pool.object_physical)
             if memory_writer:
                 memory_writer(msg_ptr + 8, struct.pack('<I', MA_ERR_NONE))
 
@@ -399,6 +656,104 @@ class GrmMaService:
                 'action': 'ma_dmm_close_impl',
                 'status': MA_ERR_NONE
             })
+
+        elif opcode == 3 and self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+            # Opcode 3: ma_create_msp_impl(msg + 4, msg + 32)
+            pbase, psize = struct.unpack_from('<II', raw_msg, 4) if len(raw_msg) >= 12 else (0, 0)
+            has_msp = bool(raw_msg[12]) if len(raw_msg) > 12 else True
+            raw_name = raw_msg[13:29].split(b'\x00')[0] if len(raw_msg) >= 14 else b''
+            name_str = raw_name.decode('latin1', errors='ignore')
+            existing = self._wbi_pool_by_phys(pbase)
+            if existing is None:
+                dyn_obj = 0x08AC0000 + len(self.dynamic_wbi_pools) * 0x40
+                existing = CapturedWbiDmmPool(name_str, dyn_obj, pbase, psize, 0xFFFF, 0xFFFF, has_msp)
+                self.dynamic_wbi_pools.insert(0, existing)
+            if memory_writer:
+                memory_writer(msg_ptr + 32, struct.pack('<II', MA_ERR_NONE, existing.kernel_handle))
+            event.update({
+                'action': 'ma_create_msp_impl',
+                'name': name_str,
+                'phys_base': f'0x{pbase:08x}',
+                'pool_size': psize,
+                'handle': f'0x{existing.kernel_handle:08x}',
+                'status': MA_ERR_NONE,
+                'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+            })
+
+        elif opcode in (5, 6) and self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+            # Opcode 5/6: ma_cache_flush_impl / ma_cache_invalidate_impl (coherent host RAM)
+            count = struct.unpack_from('<I', raw_msg, 8)[0] if len(raw_msg) >= 12 else 0
+            event.update({
+                'action': 'ma_cache_flush_impl' if opcode == 5 else 'ma_cache_invalidate_impl',
+                'count': count,
+                'status': MA_ERR_NONE,
+                'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+            })
+
+        elif opcode == 8 and self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+            # Opcode 8: ma_findbyphys_impl(msg + 4, msg + 8)
+            phys = struct.unpack_from('<I', raw_msg, 4)[0] if len(raw_msg) >= 8 else 0
+            wbi_pool = self._wbi_pool_by_phys(phys)
+            if wbi_pool is None:
+                if memory_writer:
+                    memory_writer(msg_ptr + 8, struct.pack('<iII16sI', MA_ERR_NOT_FOUND, 0, 0, b'\x00' * 16, 0))
+                event.update({
+                    'action': 'ma_findbyphys_impl_not_found',
+                    'phys_base': f'0x{phys:08x}',
+                    'status': MA_ERR_NOT_FOUND,
+                    'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                })
+            else:
+                padded_name = wbi_pool.name.encode('latin1', errors='ignore')[:15].ljust(16, b'\x00')
+                if memory_writer:
+                    memory_writer(
+                        msg_ptr + 8,
+                        struct.pack('<III16sI', MA_ERR_NONE, wbi_pool.phys_base,
+                                    wbi_pool.pool_size, padded_name, wbi_pool.kernel_handle),
+                    )
+                event.update({
+                    'action': 'ma_findbyphys_impl',
+                    'phys_base': f'0x{wbi_pool.phys_base:08x}',
+                    'pool_size': wbi_pool.pool_size,
+                    'handle': f'0x{wbi_pool.kernel_handle:08x}',
+                    'pool_name': wbi_pool.name,
+                    'status': MA_ERR_NONE,
+                    'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                })
+
+        elif opcode == 10 and self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+            # Opcode 10: ma_free_impl(msg + 4, msg + 16)
+            handle = struct.unpack_from('<I', raw_msg, 4)[0] if len(raw_msg) >= 8 else 0
+            alloc_addr = struct.unpack_from('<I', raw_msg, 8)[0] if len(raw_msg) >= 12 else 0
+            wbi_pool = self._wbi_pool_by_handle(handle)
+            if wbi_pool is None:
+                if memory_writer:
+                    memory_writer(msg_ptr + 16, struct.pack('<i', MA_ERR_NOT_FOUND))
+                event.update({
+                    'action': 'ma_free_impl_unknown_handle',
+                    'handle': f'0x{handle:08x}',
+                    'status': MA_ERR_NOT_FOUND,
+                    'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                })
+            else:
+                if not wbi_pool.has_mspace:
+                    self.claimed_whole_units.discard(wbi_pool.object_physical)
+                else:
+                    sz = self.mspace_allocations.pop((wbi_pool.object_physical, alloc_addr), None)
+                    if sz is not None and alloc_addr >= wbi_pool.phys_base:
+                        self.mspace_free_blocks.setdefault(wbi_pool.object_physical, []).append(
+                            (alloc_addr - wbi_pool.phys_base, sz)
+                        )
+                if memory_writer:
+                    memory_writer(msg_ptr + 16, struct.pack('<I', MA_ERR_NONE))
+                event.update({
+                    'action': 'ma_free_impl',
+                    'handle': f'0x{handle:08x}',
+                    'alloc_addr': f'0x{alloc_addr:08x}',
+                    'pool_name': wbi_pool.name,
+                    'status': MA_ERR_NONE,
+                    'pool_policy': POOL_POLICY_CAPTURED_WBI_DMM,
+                })
 
         else:
             # Unsupported opcode
@@ -439,7 +794,9 @@ class GrmMaService:
                              phys_base=_hex_int(event.get('phys_base')),
                              pool_size=event.get('pool_size'),
                              handle=_hex_int(event.get('handle')))
-            provenance = ('captured-e0044-unit-0x0280'
+            provenance = ('captured-wbi-dmm-unit-table'
+                          if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM
+                          else 'captured-e0044-unit-0x0280'
                           if self.pool_policy == POOL_POLICY_CAPTURED_E0044
                           else 'default-gl-common-contract')
         elif action == 'ma_findbyname_impl':
@@ -447,12 +804,20 @@ class GrmMaService:
                              phys_base=_hex_int(event.get('phys_base')),
                              pool_size=event.get('pool_size'),
                              handle=_hex_int(event.get('handle')))
-            provenance = ('captured-e0044-name-table-first-match'
+            provenance = ('captured-wbi-dmm-name-table'
+                          if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM
+                          else 'captured-e0044-name-table-first-match'
                           if self.pool_policy == POOL_POLICY_CAPTURED_E0044
                           else 'default-gl-common-contract')
+        elif action == 'ma_findbyphys_impl':
+            selection.update(pool_name=event.get('pool_name'),
+                             phys_base=_hex_int(event.get('phys_base')),
+                             pool_size=event.get('pool_size'),
+                             handle=_hex_int(event.get('handle')))
+            provenance = 'captured-wbi-dmm-phys-table'
         elif action == 'ma_malloc_impl':
             alloc_addr = _hex_int(event.get('alloc_addr'))
-            if self.pool_policy == POOL_POLICY_CAPTURED_E0044:
+            if self.pool_policy in (POOL_POLICY_CAPTURED_E0044, POOL_POLICY_CAPTURED_WBI_DMM):
                 offset = event.get('pool_offset')
                 phys_base = (alloc_addr - offset
                              if alloc_addr is not None and offset is not None else None)
@@ -461,22 +826,45 @@ class GrmMaService:
                                  pool_size=pool.pool_size if pool else None,
                                  handle=pool.kernel_handle if pool else None,
                                  alloc_offset=offset, alloc_addr=alloc_addr)
-                provenance = 'captured-e0044-per-pool-allocator'
+                provenance = ('captured-wbi-dmm-per-pool-allocator'
+                              if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM
+                              else 'captured-e0044-per-pool-allocator')
             else:
                 offset = (alloc_addr - self.phys_base if alloc_addr is not None else None)
                 selection.update(pool_name='gl_common', phys_base=self.phys_base,
                                  pool_size=self.pool_size, handle=self.kernel_handle,
                                  alloc_offset=offset, alloc_addr=alloc_addr)
                 provenance = 'default-gl-common-allocator'
+        elif action in ('ma_create_msp_impl', 'ma_cache_flush_impl',
+                        'ma_cache_invalidate_impl', 'ma_free_impl'):
+            selection.update(pool_name=event.get('pool_name'),
+                             phys_base=_hex_int(event.get('phys_base')),
+                             handle=_hex_int(event.get('handle')),
+                             alloc_addr=_hex_int(event.get('alloc_addr')))
+            provenance = 'captured-wbi-dmm-contract'
         elif action == 'ma_dmm_open_impl_unsupported_unit':
-            result, error_reason = 'error', 'unit_not_mapped_by_captured_e0044_policy'
-            provenance = 'captured-e0044-policy-refusal'
+            result = 'error'
+            error_reason = ('unit_not_mapped_by_captured_e0044_policy'
+                            if self.pool_policy == POOL_POLICY_CAPTURED_E0044
+                            else action)
+            provenance = f'{self.pool_policy}-policy-refusal'
         elif action == 'ma_findbyname_impl_unknown_name':
-            result, error_reason = 'error', 'name_not_in_captured_e0044_table'
-            provenance = 'captured-e0044-policy-refusal'
+            result = 'error'
+            error_reason = ('name_not_in_captured_e0044_table'
+                            if self.pool_policy == POOL_POLICY_CAPTURED_E0044
+                            else action)
+            provenance = f'{self.pool_policy}-policy-refusal'
         elif action == 'ma_malloc_impl_unknown_handle':
-            result, error_reason = 'error', 'handle_not_in_captured_e0044_table'
-            provenance = 'captured-e0044-policy-refusal'
+            result = 'error'
+            error_reason = ('handle_not_in_captured_e0044_table'
+                            if self.pool_policy == POOL_POLICY_CAPTURED_E0044
+                            else action)
+            provenance = f'{self.pool_policy}-policy-refusal'
+        elif action in ('ma_dmm_open_impl_exhausted_unit', 'ma_findbyphys_impl_not_found',
+                        'ma_malloc_impl_whole_unit_busy', 'ma_malloc_impl_out_of_memory',
+                        'ma_free_impl_unknown_handle'):
+            result, error_reason = 'error', action
+            provenance = f'{self.pool_policy}-policy-refusal'
         elif action == 'ma_dmm_close_impl':
             provenance = 'close-acknowledgement; no pool selected'
         else:
@@ -643,9 +1031,22 @@ class GrmMaService:
         # offset 20 (0x14): size (uint32, 0x02000000) - consumed by this->mem.map
         # offset 24: unused (uint32, 0)
         # offset 28: unused (uint32, 0)
-        reply_data = struct.pack('<hhHHIIIIII', opcode, 0, GRM_DMM_HANDLE, req_id,
-                                 self.phys_base, self.pool_size,
-                                 self.phys_base, self.pool_size,
+        reply_handle = GRM_DMM_HANDLE
+        reply_phys = self.phys_base
+        reply_size = self.pool_size
+        if self.pool_policy == POOL_POLICY_CAPTURED_WBI_DMM:
+            claimed = self.__dict__.setdefault('claimed_dmm_handles', set())
+            candidates = [p for p in CAPTURED_WBI_DMM_POOLS if p.dmm_unit == unit]
+            if candidates:
+                chosen = next((p for p in candidates if p.dmm_handle not in claimed), candidates[0])
+                claimed.add(chosen.dmm_handle)
+                reply_handle = chosen.dmm_handle
+                reply_phys = chosen.phys_base
+                reply_size = chosen.pool_size
+
+        reply_data = struct.pack('<hhHHIIIIII', opcode, 0, reply_handle, req_id,
+                                 reply_phys, reply_size,
+                                 reply_phys, reply_size,
                                  0, 0)
         memory_writer(reply_ptr, reply_data)
 
@@ -659,7 +1060,9 @@ class GrmMaService:
             'opcode': opcode,
             'unit': f'0x{unit:08x}',
             'req_id': req_id,
-            'handle': f'0x{GRM_DMM_HANDLE:04x}',
+            'handle': f'0x{reply_handle:04x}',
+            'phys_base': f'0x{reply_phys:08x}',
+            'pool_size': reply_size,
             'ret_code': 0,
             'reply_ptr': reply_ptr
         }

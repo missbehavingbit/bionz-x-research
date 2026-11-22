@@ -8,10 +8,18 @@ that would be sent to a camera are returned.
 from __future__ import annotations
 
 import hashlib
+import math
+import os
 import re
+import shutil
 import struct
+import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
+from typing import Protocol
 
 from tools.research.wbi_memory import decode_section, parse_sections
 
@@ -134,11 +142,8 @@ def _validated_ram_dir(ram_dir: str) -> str:
     """Validate a RAM directory path without trailing slash, traversal, or newlines."""
     if (
         not ram_dir.startswith(RAM_PREFIXES)
-        or ram_dir.endswith("/")
-        or ".." in ram_dir
-        or "\n" in ram_dir
-        or "\r" in ram_dir
-        or "/setting" in ram_dir
+        or re.fullmatch(r"/[A-Za-z0-9_./-]+", ram_dir) is None
+        or any(part in ("", ".", "..") for part in ram_dir.split("/")[1:])
     ):
         raise ValueError("Chunk directory must be a RAM path without a trailing slash")
     return ram_dir
@@ -168,8 +173,10 @@ def chunk_read_command(path: str, ram_dir: str, offset: int, count: int) -> str:
     blocks = count // 4096
     return (
         f"busybox rm -f {destination} "
-        f"&& busybox dd if={path} of={destination} bs=4096 skip={skip} count={blocks} "
-        f"&& busybox sha256sum {destination}"
+        f"&& if dd_status=$(busybox dd if={path} of={destination} "
+        f"bs=4096 skip={skip} count={blocks} 2>&1); "
+        f"then busybox sha256sum {destination}; "
+        'else printf "%s\\n" "$dd_status"; false; fi'
     )
 
 
@@ -223,24 +230,62 @@ def plan_partition_chunk_dump(
     }
 
 
-def ephemeral_chunk_worker_script(ram_dir: str = "/tmp_network/a6400a-dump") -> bytes:
-    """Return a RAM-only polling worker script for /tmp/jiritsu/run.sh."""
+def ephemeral_chunk_worker_script(
+    ram_dir: str = "/tmp_network/a6400a-dump", *, nonce: str | None = None,
+) -> bytes:
+    """Keep control/chunk files in RAM and identify the owned startup log."""
     _validated_ram_dir(ram_dir)
+    nonce = uuid.uuid4().hex if nonce is None else nonce
+    if re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
+        raise ValueError("Worker nonce must be 32 lowercase hexadecimal characters")
+    parent = ram_dir.rsplit("/", 1)[0]
     script = (
         "#!/bin/sh\n"
-        "busybox grep ' /tmp_network tmpfs ' /proc/mounts >/dev/null || exit 31\n"
-        f"busybox mkdir -p '{ram_dir}' || exit 32\n"
-        f"busybox cat /proc/$$/status >'{ram_dir}/ready'\n"
+        "exec >'/tmp/jiritsu/out.txt' 2>&1\n"
+        f"printf '__A6400A_WORKER_LOG__:{nonce}\\n' || exit 30\n"
+        "init_failure() {\n"
+        ' printf "__A6400A_INIT_ERROR__:%s\\n" "$1"\n'
+        " while :; do busybox sleep 1 || exit 41; done\n"
+        "}\n"
+        f"ram_parent='{parent}'\n"
+        'physical_parent=$(CDPATH= cd -P "$ram_parent" && pwd -P) || { printf "Cannot resolve RAM parent\\n"; init_failure 30; }\n'
+        '[ "$physical_parent" = "$ram_parent" ] || { printf "RAM parent resolves elsewhere: %s\\n" "$physical_parent"; init_failure 30; }\n'
+        "mount_length=0\n"
+        "ram_fs=\n"
+        "mount_conflict=0\n"
+        "while read -r mount_source mount_path mount_fs mount_rest; do\n"
+        ' case "$mount_path" in /) matched=1;; *)\n'
+        '  case "$ram_parent" in "$mount_path"|"$mount_path"/*) matched=1;; *) matched=0;; esac;; esac\n'
+        ' if [ "$matched" -eq 1 ]; then\n'
+        '  printf "MountCandidate: %s %s\\n" "$mount_path" "$mount_fs"\n'
+        '  if [ "${#mount_path}" -gt "$mount_length" ]; then\n'
+        '   mount_length=${#mount_path}; ram_fs=$mount_fs; mount_conflict=0\n'
+        '  elif [ "${#mount_path}" -eq "$mount_length" ] && [ "$ram_fs" != "$mount_fs" ]; then\n'
+        "   mount_conflict=1\n"
+        "  fi\n"
+        " fi\n"
+        "done </proc/mounts\n"
+        '[ "$mount_conflict" -eq 0 ] || { printf "Ambiguous parent mounts refused\\n"; init_failure 31; }\n'
+        'case "$ram_fs" in tmpfs|ramfs|rootfs) ;; *) printf "RAM filesystem refused: %s\\n" "$ram_fs"; init_failure 31;; esac\n'
+        f"busybox mkdir '{ram_dir}' || init_failure 32\n"
+        "poll_delay=1\n"
+        'if busybox sleep 0.1; then poll_delay=0.1; else printf "Fractional sleep unavailable; using one second\\n"; fi\n'
+        f"printf '__A6400A_WORKER__:{nonce}\\n' >'{ram_dir}/ready.tmp' || init_failure 33\n"
+        f'printf "RamFilesystem: %s\\n" "$ram_fs" >>\'{ram_dir}/ready.tmp\' || init_failure 34\n'
+        f'printf "PollDelay: %s\\n" "$poll_delay" >>\'{ram_dir}/ready.tmp\' || init_failure 34\n'
+        f"busybox cat /proc/$$/status >>'{ram_dir}/ready.tmp' || init_failure 34\n"
+        f"busybox mv '{ram_dir}/ready.tmp' '{ram_dir}/ready' || init_failure 35\n"
         "while :; do\n"
         f" if [ -f '{ram_dir}/input' ] && [ -f '{ram_dir}/go' ]; then\n"
-        f"  busybox mv '{ram_dir}/input' '{ram_dir}/current' || exit 33\n"
+        f"  busybox mv '{ram_dir}/input' '{ram_dir}/current' || init_failure 36\n"
+        f"  busybox rm '{ram_dir}/go' || init_failure 37\n"
         f"  . '{ram_dir}/current' >'{ram_dir}/output.tmp' 2>&1\n"
         "  rc=$?\n"
         f"  printf '\\n__A6400A_RC__:%s\\n' \"$rc\" >>'{ram_dir}/output.tmp'\n"
-        f"  busybox mv '{ram_dir}/output.tmp' '{ram_dir}/output'\n"
-        f"  busybox rm -f '{ram_dir}/current' '{ram_dir}/go'\n"
+        f"  busybox mv '{ram_dir}/output.tmp' '{ram_dir}/output' || init_failure 38\n"
+        f"  busybox rm '{ram_dir}/current' || init_failure 39\n"
         " else\n"
-        "  busybox sleep 1\n"
+        '  busybox sleep "$poll_delay" || init_failure 40\n'
         " fi\n"
         "done\n"
     )
@@ -248,6 +293,186 @@ def ephemeral_chunk_worker_script(ram_dir: str = "/tmp_network/a6400a-dump") -> 
     if b"/setting" in encoded or b"ld.so.preload" in encoded or b"/dev/nflasha23" in encoded:
         raise ValueError("Ephemeral worker must not reference flash or excluded storage")
     return encoded
+
+
+class JiritsuStatusError(RuntimeError):
+    def __init__(self, status: int):
+        self.status = status
+        super().__init__(f"Jiritsu returned status {status:#010x}")
+
+
+class ChunkFiles(Protocol):
+    def read(self, path: str, limit: int) -> bytes: ...
+
+    def write(self, path: str, data: bytes, *, verify: bool = True) -> None: ...
+
+
+class JiritsuWorkerSession:
+    """Bound polling of an already-loaded, nonce-identified file worker."""
+
+    def __init__(
+        self, files: ChunkFiles, ram_dir: str, nonce: str, *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        self.files = files
+        self.ram_dir = _validated_ram_dir(ram_dir)
+        if re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
+            raise ValueError("Worker nonce must be 32 lowercase hexadecimal characters")
+        self.nonce = nonce
+        self.clock, self.sleep = clock, sleep
+        self.ready = False
+        self.failed = False
+        self.initialization_failed = False
+        self.number = 0
+        self.capture_receipt: dict = {}
+
+    def _poll(self, path: str, accept: Callable[[bytes], bool], seconds: float, *,
+              startup_error: bool = False, interval: float = 0.05) -> bytes:
+        if (not math.isfinite(seconds) or not 0 < seconds <= 30
+                or not math.isfinite(interval) or not 0 < interval <= 2.0):
+            raise ValueError("Worker deadline and poll interval must stay within bounded positive ranges")
+        deadline = self.clock() + seconds
+        for attempt in range(math.ceil(seconds / interval) + 1):
+            if self.clock() >= deadline:
+                break
+            read_data: bytes | None = None
+            try:
+                read_data = self.files.read(path, 65536)
+            except JiritsuStatusError as error:
+                if error.status not in (0x10000006, 0x10000008, 0x1000000A):
+                    self.failed = True
+                    raise
+            else:
+                if self.clock() >= deadline:
+                    break
+                if accept(read_data):
+                    return read_data
+            if startup_error and (path == "/tmp/jiritsu/out.txt" or attempt % 4 == 3):
+                log: bytes | None = read_data if path == "/tmp/jiritsu/out.txt" else None
+                if log is None and path != "/tmp/jiritsu/out.txt":
+                    try:
+                        log = self.files.read("/tmp/jiritsu/out.txt", 65536)
+                    except JiritsuStatusError as error:
+                        if error.status not in (0x10000006, 0x10000008, 0x1000000A):
+                            self.failed = True
+                            raise
+                if log is not None:
+                    failure = re.search(rb"^__A6400A_INIT_ERROR__:(\d+)$", log, re.M)
+                    if log.startswith(f"__A6400A_WORKER_LOG__:{self.nonce}\n".encode("ascii")) and failure:
+                        self.initialization_failed = True
+                        raise RuntimeError(
+                            f"Worker initialization refused ({int(failure[1])}): "
+                            + log.decode("utf-8", errors="backslashreplace")
+                        )
+            self.sleep(interval)
+        self.failed = True
+        raise TimeoutError("Worker response deadline reached; no command or loader replay")
+
+class RamChunkWorker(JiritsuWorkerSession):
+    """Control a RAM chunk worker through ordinary USB file transfers."""
+
+    def wait_ready(self) -> bytes:
+        prefix = f"__A6400A_WORKER__:{self.nonce}\n".encode("ascii")
+        data = self._poll(self.ram_dir + "/ready", lambda raw: raw.startswith(prefix), 15, startup_error=True)
+        if re.search(rb"^Uid:\s+0\s+0\s+0\s+0\s*$", data, re.M) is None:
+            self.failed = True
+            raise ValueError("Worker did not report all four root UIDs")
+        self.ready = True
+        return data
+
+    def command(self, command: str) -> bytes:
+        if not self.ready or self.failed:
+            raise RuntimeError("Worker is not ready or a previous operation is unresolved")
+        if (not command.isascii() or not command or len(command) > 8192
+                or re.search(r"\b(?:exit|exec|kill|trap|return)\b", command)):
+            raise ValueError("Command cannot replace or terminate the persistent worker")
+        self.number += 1
+        marker = f"__A6400A_CMD_{self.nonce}_{self.number}__\n".encode("ascii")
+        request = b"printf '%s\\n' '" + marker.rstrip(b"\n") + b"'\n" + command.encode("ascii") + b"\n"
+        self.files.write(self.ram_dir + "/input", request)
+        # The worker consumes this commit file, so a readback would race it.
+        self.files.write(self.ram_dir + "/go", b"go\n", verify=False)
+        data = self._poll(
+            self.ram_dir + "/output",
+            lambda raw: raw.startswith(marker) and re.search(rb"\n__A6400A_RC__:\d+\n$", raw) is not None,
+            30,
+        )
+        end = re.search(rb"\n__A6400A_RC__:(\d+)\n$", data)
+        if end is None:
+            raise ValueError("Worker completion has no exit status")
+        output = data[len(marker):end.start()]
+        if int(end[1]) != 0:
+            raise RuntimeError(
+                f"Worker command failed with exit {int(end[1])}: "
+                + output.decode("utf-8", errors="backslashreplace")
+            )
+        return output
+
+    def read_chunk(self, partition: str, total_bytes: int, chunk: dict) -> str:
+        return self.command(
+            "free_kib=; while read -r key value units; do "
+            'if [ "$key" = MemFree: ]; then free_kib=$value; break; fi; '
+            'done </proc/meminfo; if [ -n "$free_kib" ] && [ "$free_kib" -ge 8192 ]; then '
+            + chunk["camera_command"]
+            + '; else printf "Insufficient or unknown MemFree: %s KiB\\n" "$free_kib"; false; fi'
+        ).decode("ascii")
+
+    def remove_chunk(self, chunk: dict) -> None:
+        self.command(chunk["cleanup_command"])
+
+    def capture(self, partition: str, total_bytes: int, output: Path, *,
+                cancel: Event | None = None) -> dict:
+        plan = plan_partition_chunk_dump(partition, total_bytes, self.ram_dir)
+        if shutil.disk_usage(output).free < total_bytes + CHUNK_BYTES + 1024 * 1024:
+            raise OSError("Insufficient host disk space; no chunk requested")
+        name = partition.rsplit("/", 1)[1]
+        partial, final = output / (name + ".bin.partial"), output / (name + ".bin")
+        if final.exists():
+            raise FileExistsError("Refusing to overwrite an existing capture")
+        receipt = self.capture_receipt = {
+            "partition": partition, "expected_bytes": total_bytes, "verified_bytes": 0,
+            "partial_file": partial.name, "complete": False, "chunks": [],
+        }
+        sha = hashlib.sha256()
+        with partial.open("xb") as stream:
+            try:
+                for chunk in plan["chunks"]:
+                    if cancel is not None and cancel.is_set():
+                        raise InterruptedError("Cancelled between completed RAM chunks")
+                    camera_hash = self.read_chunk(partition, total_bytes, chunk)
+                    data = self.files.read(plan["ram_chunk_path"], chunk["count"])
+                    try:
+                        chunk_hash = verify_chunk(data, camera_hash, chunk["count"])
+                    except ValueError:
+                        failed = output / f"chunk-{chunk['index']}-unverified.bin"
+                        with failed.open("xb") as failed_stream:
+                            failed_stream.write(data)
+                            failed_stream.flush()
+                            os.fsync(failed_stream.fileno())
+                        receipt["unverified_chunk_file"] = failed.name
+                        raise
+                    if stream.write(data) != len(data):
+                        raise OSError("Short host capture write; partial file retained")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    sha.update(data)
+                    receipt["verified_bytes"] += len(data)
+                    receipt["chunks"].append({
+                        "offset": chunk["offset"], "bytes": len(data), "sha256": chunk_hash,
+                    })
+                    self.remove_chunk(chunk)
+            finally:
+                stream.flush()
+                os.fsync(stream.fileno())
+        with partial.open("rb") as stream:
+            saved_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        if partial.stat().st_size != total_bytes or saved_sha != sha.hexdigest():
+            raise ValueError("Saved capture length/hash differs from the verified chunks")
+        os.link(partial, final)
+        partial.unlink()
+        receipt.update(complete=True, file=final.name, sha256=saved_sha, host_readback_verified=True)
+        return receipt
 
 
 def verify_chunk(data: bytes, camera_line: str, expected_count: int) -> str:
