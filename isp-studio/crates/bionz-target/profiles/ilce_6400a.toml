@@ -1,0 +1,12 @@
+key = "ilce_6400a"
+label = "ILCE-6400A reference"
+addresses_known = false
+avcam_sha256 = ""
+ec_gamma_pa = 0
+fc_gamma_pa = 0
+color_a0_pa = 0
+color_a1_pa = 0
+color_b2_pa = 0
+cc_tuning_pa = 0
+refadr0_pa = 0
+color_mode_va = 0

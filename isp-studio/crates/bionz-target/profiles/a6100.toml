@@ -1,0 +1,12 @@
+key = "a6100"
+label = "ILCE-6100 Ver.1.00"
+addresses_known = true
+avcam_sha256 = "58b2118db858f3eb1594ae6cef3f628b7fa3cc6db9173b094565535d48e6ff9e"
+ec_gamma_pa = 0x03E553B0
+fc_gamma_pa = 0x03E8F1D4
+color_a0_pa = 0x0444A254
+color_a1_pa = 0x0444A266
+color_b2_pa = 0x0444B178
+cc_tuning_pa = 0x0444A1AE
+refadr0_pa = 0x044ACD37
+color_mode_va = 0

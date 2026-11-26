@@ -1,0 +1,81 @@
+# DMA quiescence contracts for handover_guard.c (dma=FILE), sony-a6400 / CXD90045 (E0639).
+# Format: see dma_load() in handover_guard.c.  Text after '#' on a line is its provenance.
+# [C] = documented interface or local code; [I] = inferred, not hardware-verified.
+
+# USB: Synopsys DWC3 device controller (core base 0xF0200000, device block 0xF020C000, E0590/E0597).
+# Stop = clear DCTL.RUN_STOP, then DSTS.DEVCTRLHLT reads 1 (Linux dwc3_gadget_run_stop).
+run     dwc3-run     0xF020C704 0x80000000  0xF020C70C 0x00400000 0x00400000  # [C] DWC3 DCTL.RUN_STOP / DSTS.DEVCTRLHLT
+
+# PL330 DMAC at 0xF0030000 (opt-in pl330-dma=on).  ARM PL330 TRM: DBGSTATUS bit0 busy,
+# CSRn (0x100 + 8n) [3:0] channel state, 0 = Stopped.  Each status needs its own idle read.
+region  pl330-dbg    0xF0030000 0xF0031000  0xF0030D00 0x1 0x0  # [C] PL330 DBGSTATUS
+region  pl330-ch0    0xF0030000 0xF0031000  0xF0030100 0xF 0x0  # [C] PL330 CSR0 stopped
+region  pl330-ch1    0xF0030000 0xF0031000  0xF0030108 0xF 0x0  # [C] PL330 CSR1 stopped
+region  pl330-ch2    0xF0030000 0xF0031000  0xF0030110 0xF 0x0  # [C] PL330 CSR2 stopped
+region  pl330-ch3    0xF0030000 0xF0031000  0xF0030118 0xF 0x0  # [C] PL330 CSR3 stopped
+
+# Display/OSD: VPH layer enables and AIF output channels ch51..58 (cxd90014_vph.c header,
+# a5000 RE: +0x00 bit0 start/busy cleared by hardware at end of frame).
+run     vph-layers   0xF3440144 0x3  # [I] a5000 VPH 0x144 bit0 panel YUV, bit1 OSD
+run     vph-line     0xF3440184 0x1  # [I] a5000 VPH 0x184 bit0 line (HDMI) YUV layer
+region  vph-ch51     0xF3441200 0xF3441280  0xF3441200 0x1 0x0  # [I] a5000 AIF ch51 panel YUV
+region  vph-ch52     0xF3441280 0xF3441300  0xF3441280 0x1 0x0  # [I] a5000 AIF ch52 line YUV
+region  vph-ch53     0xF3441300 0xF3441380  0xF3441300 0x1 0x0  # [I] a5000 AIF ch53 panel OSD
+region  vph-ch54     0xF3441380 0xF3441400  0xF3441380 0x1 0x0  # [I] a5000 AIF ch54 line OSD
+region  vph-ch55     0xF3441400 0xF3441480  0xF3441400 0x1 0x0  # [I] a5000 AIF ch55
+region  vph-ch56     0xF3441480 0xF3441500  0xF3441480 0x1 0x0  # [I] a5000 AIF ch56
+region  vph-ch57     0xF3441500 0xF3441580  0xF3441500 0x1 0x0  # [I] a5000 AIF ch57
+region  vph-ch58     0xF3441580 0xF3441600  0xF3441580 0x1 0x0  # [I] a5000 AIF ch58
+
+# Sensor/ISP AIF DMA channels (E0622 av-cam table 0x63E23764; per-channel +0x00 bit0 status/busy).
+region  aif-cp0-300  0xF3002300 0xF3002380  0xF3002300 0x1 0x0  # [I] E0622 CamPig0 AIF
+region  aif-cp0-380  0xF3002380 0xF3002400  0xF3002380 0x1 0x0  # [I] E0622 CamPig0 AIF
+region  aif-cp0-400  0xF3002400 0xF3002480  0xF3002400 0x1 0x0  # [I] E0622 CamPig0 AIF
+region  aif-cp0-480  0xF3002480 0xF3002500  0xF3002480 0x1 0x0  # [I] E0622 CamPig0 AIF
+region  aif-cp1-200  0xF3102200 0xF3102280  0xF3102200 0x1 0x0  # [I] E0622 CamPig1 AIF
+region  aif-cp1-280  0xF3102280 0xF3102300  0xF3102280 0x1 0x0  # [I] E0622 CamPig1 AIF
+region  aif-cp1-300  0xF3102300 0xF3102380  0xF3102300 0x1 0x0  # [I] E0622 CamPig1 AIF
+region  aif-cp1-380  0xF3102380 0xF3102400  0xF3102380 0x1 0x0  # [I] E0622 CamPig1 AIF
+region  aif-cp1-400  0xF3102400 0xF3102480  0xF3102400 0x1 0x0  # [I] E0622 CamPig1 AIF
+region  aif-cp1-480  0xF3102480 0xF3102500  0xF3102480 0x1 0x0  # [I] E0622 CamPig1 AIF
+region  aif-pqd-200  0xF3020200 0xF3020280  0xF3020200 0x1 0x0  # [I] E0622 PQD/CamCore AIF
+region  aif-pqd-280  0xF3020280 0xF3020300  0xF3020280 0x1 0x0  # [I] E0622 PQD/CamCore AIF
+region  aif-pqd-300  0xF3020300 0xF3020380  0xF3020300 0x1 0x0  # [I] E0622 PQD/CamCore AIF
+region  aif-pqd-380  0xF3020380 0xF3020400  0xF3020380 0x1 0x0  # [I] E0622 PQD/CamCore AIF
+region  aif-pqd-400  0xF3020400 0xF3020480  0xF3020400 0x1 0x0  # [I] E0622 PQD/CamCore AIF
+region  aif-pqd-480  0xF3020480 0xF3020500  0xF3020480 0x1 0x0  # [I] E0622 PQD/CamCore AIF
+region  aif-f304-200 0xF3041200 0xF3041280  0xF3041200 0x1 0x0  # [I] E0622 0xF3041000 AIF
+region  aif-f304-280 0xF3041280 0xF3041300  0xF3041280 0x1 0x0  # [I] E0622 0xF3041000 AIF
+region  aif-rc0-200  0xF3881200 0xF3881280  0xF3881200 0x1 0x0  # [I] E0622 RC0 AIF
+region  aif-rc0-280  0xF3881280 0xF3881300  0xF3881280 0x1 0x0  # [I] E0622 RC0 AIF
+region  aif-rc0-300  0xF3881300 0xF3881380  0xF3881300 0x1 0x0  # [I] E0622 RC0 AIF
+region  aif-rc0-380  0xF3881380 0xF3881400  0xF3881380 0x1 0x0  # [I] E0622 RC0 AIF
+
+# Work DMA engine at 0xF0102000 (E0640, av-cam 0x635DC8B8..0x635DC93E): enable +0x030 = 1,
+# +0x008/+0x00C = 0x40, channel block +0x1C0 (src, dst, +0x1C8, cfg 0x1C491000|words, start
+# +0x1D0 = 1), wait until +0x01C bit 6 clears, disable +0x030 = 0.
+run     work-dma-en  0xF0102030 0x1  # [C] E0640 av-cam enable/disable word
+region  work-dma-ch6 0xF01021C0 0xF0102200  0xF010201C 0x40 0x0  # [C] E0640 channel +0x1C0, busy +0x01C bit 6
+observe work-dma-chx 0xF0102040 0xF01021C0  # [?] other channel blocks: layout inferred, no stop contract
+observe work-dma-hi  0xF0102200 0xF0103000  # [?] rest of the page: never used by the stock boot
+
+# XDMAC0 (0xF0000000) and XDMAC1 (0xF0010000): channels 0..3 at +0x10 + 0x30*ch,
+# trigger +0x18, IRQ/completion status at +0x20 (bit 3 = 0x8, cleared by writing 0).
+region  xdmac0-ch0   0xF0000010 0xF0000040  0xF0000030 0x8 0x0  # [C] XDMAC0 ch0 status
+region  xdmac0-ch1   0xF0000040 0xF0000070  0xF0000060 0x8 0x0  # [C] XDMAC0 ch1 status
+region  xdmac0-ch2   0xF0000070 0xF00000A0  0xF0000090 0x8 0x0  # [C] XDMAC0 ch2 status
+region  xdmac0-ch3   0xF00000A0 0xF00000D0  0xF00000C0 0x8 0x0  # [C] XDMAC0 ch3 status
+region  xdmac1-ch0   0xF0010010 0xF0010040  0xF0010030 0x8 0x0  # [C] XDMAC1 ch0 status
+region  xdmac1-ch1   0xF0010040 0xF0010070  0xF0010060 0x8 0x0  # [C] XDMAC1 ch1 status
+region  xdmac1-ch2   0xF0010070 0xF00100A0  0xF0010090 0x8 0x0  # [C] XDMAC1 ch2 status
+region  xdmac1-ch3   0xF00100A0 0xF00100D0  0xF00100C0 0x8 0x0  # [C] XDMAC1 ch3 status
+
+# LDEC LZ77 decompressor at 0xF2903000: W1C clear at +0x30, IRQ status at +0x34 bits 0x7B.
+region  ldec-lz77    0xF2903000 0xF2903034  0xF2903034 0x7B 0x0  # [C] LDEC LZ77 IRQ status cleared
+
+# 0xF30A memory-fill accelerator window at 0xF30A1280..0xF30A1300 (E0642): status +0x04 bit 31 busy.
+region  f30a-fill    0xF30A1280 0xF30A1300  0xF30A1284 0x80000000 0x0  # [C] E0642 0xF30A fill busy bit31
+
+# SDHCI controllers: EMMC0 (0xF0304000) and MMC0 (0xF0300000), PRNSTS (+0x24) bits [1:0] CMD/DAT inhibit.
+region  emmc0-sdhci  0xF0304000 0xF0304100  0xF0304024 0x3 0x0  # [C] EMMC0 SDHCI PRNSTS CMD/DAT inhibit idle
+region  mmc0-sdhci   0xF0300000 0xF0300100  0xF0300024 0x3 0x0  # [C] MMC0 SDHCI PRNSTS CMD/DAT inhibit idle

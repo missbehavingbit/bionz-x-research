@@ -1,0 +1,149 @@
+# Knowledge-map source: Native USB debugger, monitor and diagnostic storage.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "native-debugger"
+title = "Native USB debugger, monitor and diagnostic storage"
+scope = """
+Native root USB debugger, native volumes and file API, the existing monitor transport, SD diagnostic journal attempts, debugger v2 and the WinUSB control transport."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0090-E0092",
+  "E0219-E0238",
+  "E0259",
+  "E0400-E0405",
+  "E0407:a-three",
+]
+
+[[entity]]
+id = "tool.native-debugger"
+kind = "tool"
+name = "Native root USB debugger (A6400_USB_DEBUG)"
+aliases = ["camera_debugger.py", "feature 0x23", "a6400-lived"]
+summary = "Root daemon on the camera reached over normal USB external commands (feature 0x23), used by tools/camera_debugger.py for read-only probes, process memory and bounded exec."
+
+[[entity]]
+id = "tool.debugger-v2"
+kind = "tool"
+name = "USB debugger v2 and WinUSB control transport"
+summary = "In-band dmesg/warm-ring readout, process-context recover and an always-on WinUSB control channel (Phase A daemon, B1c bounded 18-byte patch)."
+
+[[entity]]
+id = "proc.native-volumes"
+kind = "process"
+name = "Native file API, volumes and IFSYS"
+aliases = ["A:/dev/mmca", "B:/dev/nflasha23", "Fsys_Open"]
+summary = "Sony native volume table and file API: A: is the SD card (/dev/mmca), B: is internal flash (/dev/nflasha23, excluded)."
+
+[[entity]]
+id = "proc.monitor-transport"
+kind = "process"
+name = "Existing monitor transport and SD diagnostic journal"
+summary = "Sony's existing monitor ring (libMWF) used read-only for output capture and help round trips, plus the bounded SD-journal collector attempts."
+
+[[claim]]
+id = "C01"
+entities = ["tool.native-debugger"]
+status = "verified-physical"
+text = "The native root USB debugger validated on hardware over normal USB external commands without Senser/updater entry: A6400_USB_DEBUG_V1, uid/euid/gid 0, feature 0x23."
+evidence = ["E0090", "E0092"]
+
+[[claim]]
+id = "C02"
+entities = ["tool.native-debugger"]
+status = "verified-physical"
+text = "The first approved debugger bootstrap stopped on an original-driver mismatch before the later validated deployment."
+evidence = ["E0091"]
+
+[[claim]]
+id = "C03"
+entities = ["proc.native-volumes"]
+status = "verified-physical"
+text = "Native file API contracts and the live volume table were read; A: maps to the physical SD (/dev/mmca) and B: to internal flash (/dev/nflasha23)."
+evidence = ["E0220", "E0221", "E0222"]
+
+[[claim]]
+id = "C04"
+entities = ["proc.monitor-transport"]
+status = "verified-physical"
+text = "The existing monitor transport and ring contract were decoded; read-only output capture, preserved-output acknowledgement and a native monitor help round trip work on the camera."
+evidence = ["E0224", "E0225", "E0226", "E0227"]
+
+[[claim]]
+id = "C05"
+entities = ["proc.monitor-transport", "proc.native-volumes"]
+status = "verified-physical"
+text = "An ordinary MSC -> PC Remote -> MSC session answered the fixed IFSYS SD information query."
+evidence = ["E0232", "E0234"]
+
+[[claim]]
+id = "C06"
+entities = ["proc.monitor-transport"]
+status = "verified-physical"
+text = "The physical SD-journal attempt created no file: Fsys_Open failed with 0x80000041 (CreatePathInfo), and the camera self-rebooted twice around PC Remote transitions. Offline execution showed an 8.3 path rejection, not an empty letter table."
+evidence = ["E0236", "E0237", "E0238"]
+
+[[claim]]
+id = "C07"
+entities = ["proc.monitor-transport"]
+status = "verified-physical"
+text = "A read-only MSC log harvest found no retained session logs."
+evidence = ["E0259"]
+
+[[claim]]
+id = "C08"
+entities = ["tool.debugger-v2"]
+status = "verified-physical"
+text = "Debugger v2 reads dmesg and the warm ring in band, recovers in process context and measured the mode-switch boundary; the always-on WinUSB Phase A daemon and the B1c bounded 18-byte patch were verified in Mass Storage only."
+evidence = ["E0400", "E0401", "E0402", "E0403"]
+
+[[claim]]
+id = "C09"
+entities = ["tool.debugger-v2"]
+status = "verified-offline"
+text = "In Mass Storage the gadgetcore gate blocks the MS OS 2.0 WinUSB path; the dynamic device-descriptor builder and an MS OS 2.0 function subset were decoded offline."
+evidence = ["E0404", "E0405:option", "E0405:ab"]
+
+[[claim]]
+id = "C10"
+entities = ["tool.debugger-v2"]
+status = "verified-physical"
+text = "Three-target RAM save/restore was verified in Mass Storage without re-enumeration."
+evidence = ["E0407:a-three"]
+
+[[claim]]
+id = "C11"
+entities = ["proc.monitor-transport"]
+status = "verified-offline"
+text = "Persistent diagnostic authorization and storage preflight were recorded; the authorized SD diagnostic journal still requires verified service ownership, non-overwrite creation, bounded write, flush/readback and restart survival."
+evidence = ["E0219", "E0223"]
+
+[[claim]]
+id = "C12"
+entities = ["proc.monitor-transport"]
+status = "verified-offline"
+text = "The native monitor collector, a bounded passive on-camera collector, the preserve-before-ack fixed SD query and the prefix acknowledgement were built and checked offline; the bounded SD-journal collector was built offline before the physical attempt."
+evidence = ["E0228", "E0229", "E0230", "E0233", "E0235"]
+
+[[claim]]
+id = "C13"
+entities = ["proc.monitor-transport"]
+status = "verified-physical"
+text = "One query session was not published; the receipt was complete and cleanup verified."
+evidence = ["E0231"]
+
+[[hazard]]
+id = "H01"
+title = "PC Remote switching during diagnostic sessions"
+effect = "The camera self-rebooted twice around PC Remote transitions during the journal attempt."
+rule = "Isolate mode transitions before staging collectors; keep each session bounded and verify /proc/uptime continuity afterwards."
+evidence = ["E0236", "E0244", "E0245"]
+
+[[hazard]]
+id = "H02"
+title = "Internal flash volume B:"
+effect = "Writes to /dev/nflasha23 could damage firmware state."
+rule = "B: (/dev/nflasha23) is excluded from every write; do not infer volumes from drive letters."
+evidence = ["E0222"]

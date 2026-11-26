@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "target_id": "ilce_7c",
+  "firmware_identity": {
+    "model": "Sony ILCE-7C",
+    "firmware_version": "2.03",
+    "model_id": "0x91030019",
+    "updater_sha256": "e382c3deecb8d0fe8463a2451ddbfa897cd131a1797170d05936fabc4ffaf6f8"
+  },
+  "firmware_namespace": "firmware/ilce_7c_203/",
+  "application": {
+    "guest_path": "/usr/bin/im.elf",
+    "firmware_path": "firmware/ilce_7c_203/nflasha15/bin/im.elf",
+    "sha256": "ed01c9b3896febbe44e06bc82ddbe0e989ad58da82da9a7fc8c77a68b4da6cab",
+    "guest_path_evidence": {
+      "status": "static_init_mount_candidate",
+      "mount_target": "/usr",
+      "source_partition": "nflasha15",
+      "runtime_mount_success_verified": false
+    }
+  },
+  "interpreter_candidates": [
+    {
+      "id": "nflasha7-ld-2.11.2",
+      "firmware_path": "firmware/ilce_7c_203/nflasha7/lib/ld-2.11.2.so",
+      "sha256": "c37bf426bf64d644f0d0a428ab6e4366d31b232c96985de7bb20399a7fc5fecc",
+      "declared_pt_interp": "//lib/ld-linux.so.3",
+      "resolution_status": "static_package_mapping_conditional_on_mount_pivot",
+      "evidence": "The hash-verified nflasha7 ext2 image contains /lib/ld-linux.so.3 as a relative symlink to ld-2.11.2.so; the packaged init statically attempts to mount nflasha7 at /rootfs, pivot_root there, then chroot. Runtime mount/pivot success and double-leading-slash resolution are unobserved."
+    }
+  ],
+  "kernel": {
+    "firmware_path": "firmware/ilce_7c_203/nflasha3/vmlinux.bin",
+    "sha256": "01d7229106f96142ef28c2096994f1b7b2fb6c93cfb69e6d8629c7426aeee7fe",
+    "uts_extraction": "supported_hash_checked",
+    "kuser_template_extraction": "supported_hash_checked"
+  },
+  "rootfs_image": {
+    "firmware_path": "firmware/ilce_7c_203/nflasha7/rootfs-partition.img",
+    "sha256": "0b05aeba3f137c6f736cf7fddd6371e6496c1b1d11237f84c7f540d5d4a84422",
+    "format": "ext2",
+    "planned_mount_target": "/rootfs",
+    "runtime_mount_success_verified": false
+  },
+  "init": {
+    "firmware_path": "firmware/ilce_7c_203/nflasha7/sbin/init",
+    "sha256": "94b8d6bd8b31dc5881beae992cbadda0c4de01b725351cad97b67d1b081bf142",
+    "mount_evidence": "static_candidates_only"
+  },
+  "guest_filesystem_manifest": {
+    "path": "artifacts/inventory/ilce_7c_203/guest-filesystem.json",
+    "status": "partial",
+    "completeness": "incomplete",
+    "reason": "Only the rootfs ext2 metadata/path used to check PT_INTERP is indexed for this task; a complete / plus /usr runtime namespace and content inventory are not staged."
+  },
+  "firmware_inventory": {
+    "path": "artifacts/inventory/ilce_7c_203/elf-inventory.json",
+    "status": "not_supplied",
+    "reason": "The A7C pinned process/kernel files above are listed directly in this target manifest; a complete ELF inventory is not staged."
+  },
+  "runtime_mount_evidence": {
+    "kind": "static_init_analysis",
+    "success_or_boot_mode_verified": false
+  },
+  "syscall_contracts": {
+    "supported": ["stop"],
+    "unknown": ["brk", "uname runtime identity", "filesystem", "metadata", "mmap", "kuser runtime mapping", "UIPC", "thread scheduling"]
+  },
+  "deployment_status": "reference_only_not_verified_execution_or_installation_target"
+}

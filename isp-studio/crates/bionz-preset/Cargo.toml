@@ -1,0 +1,19 @@
+[package]
+name = "bionz-preset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A6LT, .cube, .bzlook, and Film Sims headers"
+
+[dependencies]
+bionz-core = { path = "../bionz-core" }
+crc32fast.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+bionz-core = { path = "../bionz-core" }

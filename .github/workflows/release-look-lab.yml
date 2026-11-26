@@ -1,0 +1,84 @@
+name: Release BIONZ Look Lab
+
+on:
+  push:
+    tags:
+      - "look-lab-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows x64 Portable
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Generate bionz-golden fixtures
+        run: |
+          python -m pip install --quiet numpy
+          python a6400-lut-converter/tools/export_golden.py --golden-only
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run non-GPU Rust workspace tests
+        working-directory: isp-studio
+        run: cargo test --workspace --exclude bionz-py --exclude bionz-gpu -- --skip chart_develops_identically_on_gpu_and_cpu --skip render_worker_keeps_only_the_newest_request
+
+      - name: Build portable Windows package
+        shell: pwsh
+        run: .\scripts\build_look_lab_release.ps1 -SkipTests
+
+      - name: Verify standalone export from an empty folder
+        shell: pwsh
+        run: .\scripts\verify_look_lab_export.ps1
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BIONZ-Look-Lab-win64-portable
+          path: |
+            dist/BIONZ-Look-Lab-win64-portable.zip
+            dist/BIONZ-Look-Lab-portable/bionz-look-lab.exe
+            dist/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/look-lab-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notes = @'
+          Portable Windows x64 build of **BIONZ Look Lab** (`bionz-look-lab.exe`).
+
+          ### Highlights
+          - **Self-contained executable:** statically linked MSVC CRT (`+crt-static`), no Visual C++ Redistributable, Python, GCC, or WSL required.
+          - **12 built-in Film Simulations:** Classic Chrome, Classic Neg, Portra 400, Gold 200, Vision3 800T, ETERNA, Eterna Bleach Bypass, Pro Negative, Reala Ace, Velvia, Astia, and Acros (compiled against verified `av-cam.bin` stock, Photo and Movie variants).
+          - **Direct Camera Mod Export (`SMOD v2`):** exports single-look `.mod` files and the Live View **Live Picker** (`FilmSimulations.mod`) directly to `<SD>:\mods\`.
+
+          ### Supported Camera Bodies
+          - **Sony ILCE-6400 (a6400)** — Ver. 2.00 with Mod Loader v2
+          - **Sony ILCE-6100 (a6100)** — Ver. 1.00 with Mod Loader v2
+
+          ### Verification & SmartScreen Note
+          - This binary is **unsigned**, so Windows Defender SmartScreen may prompt on first launch (*More info -> Run anyway*).
+          - Verify download integrity against `SHA256SUMS.txt`.
+          '@
+          $notesFile = Join-Path $env:RUNNER_TEMP "look-lab-release-notes.md"
+          Set-Content -Path $notesFile -Value $notes -Encoding UTF8
+          gh release create $tag `
+            dist/BIONZ-Look-Lab-win64-portable.zip `
+            dist/BIONZ-Look-Lab-portable/bionz-look-lab.exe `
+            dist/SHA256SUMS.txt `
+            --title "BIONZ Look Lab $tag" `
+            --notes-file $notesFile

@@ -1,0 +1,821 @@
+# Knowledge-map source: USB / DWC3 EP0 control path (Track B UVC/PTP).
+#
+# This file is the hand-curated source of truth. `docs/map/usb-ep0.md` and
+# `docs/map/index.json` are generated from it by
+#     python -m tools.research.knowledge_map build
+# and `python -m tools.research.knowledge_map check` fails when they drift or
+# when any evidence reference, entity link, or supersession link is invalid.
+#
+# Every claim cites evidence records. The map summarises; the evidence records
+# remain authoritative. When a claim changes, do not edit it in place: add the
+# new claim, then set `superseded_by` on the old one and `status` to
+# "retracted" or "refuted" so the history stays visible.
+#
+# Evidence references are E-IDs ("E0468"). Where two records share a number,
+# qualify with a filename fragment: "E0386:retraction", "E0386:runb16".
+
+[meta]
+area = "usb-ep0"
+title = "USB / DWC3 EP0 control path (Track B UVC/PTP)"
+scope = """
+Why the authored UVC+PTP composite (054C:0322) on the ILCE-6400 cannot stream:
+the UVC VS_PROBE GET_CUR control transfer stalls ~5 s, SET_CUR is canceled,
+and EP0 then wedges. Covers the DWC3 EP0 state machine in the stock kernel,
+our bridge module, the physical runs B2..B25, and the open fix E0476."""
+body = "ILCE-6400, kernel 3.0.27_nl-rt106 (retained live-vmlinux.bin, file_off = VA - 0x60108000)"
+evidence_span = "E0354-E0476"
+reviewed = "2026-11-22"
+records = ["E0354-E0399", "E0446:ep0", "E0453:runb23", "E0456:runb23", "E0458", "E0465", "E0468", "E0471", "E0476"]
+# Read in full and checked claim by claim (see docs/map/CURATION_PLAN.md).
+deep_reviewed = ["E0354-E0399", "E0446:ep0", "E0453:runb23", "E0456:runb23", "E0458", "E0465", "E0468", "E0471", "E0476"]
+not_covered = """
+Earlier composite/PC Remote work (E0132-E0343), the native USB debugger
+(E0090, E0400-E0403), QEMU USB modelling (E0579-E0598, E0655) and the
+L3 OTG SET_MODE stop (E0534). Those need their own map areas."""
+
+# ---------------------------------------------------------------- entities
+
+[[entity]]
+id = "problem.get-cur-5s"
+kind = "problem"
+name = "UVC VS_PROBE GET_CUR stalls 5.0 s"
+aliases = ["5 s stall", "GET_CUR timeout", "RenderStream fails", "A1 81 0100 0002 001A"]
+summary = """
+First class request after enumeration, GET_CUR(VS_PROBE_CONTROL) 26 B on
+interface 2, takes 5.000-5.012 s on the host; SET_CUR is then canceled after
+another ~5 s; later retries fail fast with XACT_ERROR; ffmpeg reports
+'Could not RenderStream to connect pins'. Reproduced in B14, B18, B19, B20,
+B21, B24, B25."""
+related = ["dwc3.ep0", "host.windows-xhci", "module.usbg-video", "usb.composite-0322"]
+
+[[entity]]
+id = "dwc3.ep0"
+kind = "device"
+name = "DWC3 EP0 control state machine (stock kernel)"
+aliases = ["ep0state", "ep0_next_event", "dwc3_ep0_interrupt"]
+summary = """
+Stock Synopsys DWC3 gadget backport in the a6400 kernel. ep0state 1=setup,
+2=data, 3=status; ep0_next_event at dwc+0x2dc. The status TRB is armed only
+from the XferNotReady(STATUS) handler (or the delayed_status queue path)."""
+related = ["fn.do-control-status", "fn.dwc3-ep0-interrupt", "field.dwc-2d8", "fn.giveback"]
+
+[[entity]]
+id = "fn.do-control-status"
+inventory = ["kernel.text:__dwc3_ep0_do_control_status", "kernel.dwc3:__dwc3_ep0_do_control_status"]
+kind = "function"
+name = "__dwc3_ep0_do_control_status"
+address = "0x602b253c"
+summary = """
+ABI r0 = struct dwc3 *dwc, r1 = struct dwc3_ep *dep. Only two callers:
+0x602b34b0 (NRDY STATUS, after writing ep0state=3 at 0x602b3454) and
+0x602b27f0 (delayed_status queue path, needs dwc+0x2d8 bit5)."""
+related = ["dwc3.ep0", "fn.start-trans"]
+
+[[entity]]
+id = "fn.start-trans"
+inventory = ["kernel.text:dwc3_ep0_start_trans", "kernel.dwc3:dwc3_ep0_start_trans"]
+kind = "function"
+name = "dwc3_ep0_start_trans"
+address = "0x602b2424"
+summary = """
+Writes the TRB first, then issues DEPCMD STARTTRANSFER via
+send_gadget_ep_cmd 0x602b0220 (polls 500x, -110 on timeout). On success sets
+dep BUSY (flags |= 0x10), resource index, next=1. A BUSY dep makes a second
+arm a silent no-op."""
+related = ["fn.do-control-status", "dwc3.ep0"]
+
+[[entity]]
+id = "fn.dwc3-ep0-interrupt"
+inventory = ["kernel.text:dwc3_ep0_interrupt", "kernel.dwc3:dwc3_ep0_interrupt"]
+kind = "function"
+name = "dwc3_ep0_interrupt / dwc3_ep0_complete_data (inline)"
+address = "0x602b2c68"
+summary = """
+EP0 event dispatcher; complete_data inline at 0x602b30a8..0x3344 sets
+next_event=3 and gives back the request. Vendor status-complete path is
+0x602b334c (5 instructions, no SETUP_PENDING check, unlike mainline)."""
+related = ["dwc3.ep0", "fn.giveback"]
+
+[[entity]]
+id = "fn.giveback"
+inventory = ["kernel.text:dwc3_gadget_giveback", "kernel.dwc3:dwc3_gadget_giveback"]
+kind = "function"
+name = "dwc3_gadget_giveback"
+address = "0x602affb8"
+summary = """
+Drops dwc->lock (rt_spin_unlock + __migrate_enable) before calling
+req->complete(ep, req) at 0x602b00e4 and re-locks afterwards. The completion
+callback is two-argument and runs unlocked."""
+related = ["fn.dwc3-ep0-interrupt"]
+
+[[entity]]
+id = "field.dwc-2d8"
+kind = "field"
+name = "struct dwc3 flags byte at dwc+0x2d8"
+address = "dwc+0x2d8"
+summary = """
+bit0 three_stage_setup (selects STATUS3 0x40 vs STATUS2 0x30, not direction);
+bit1 ep0_bounced; bit2 ep0_expect_in; bit3 start_config_issued;
+bit4 setup_packet_pending; bit5 delayed_status; bit6 resize_fifos; bit7 pullups.
+dwc+0x2dc is ep0_next_event and dwc+0x2e0 is ep0state."""
+related = ["dwc3.ep0"]
+
+[[entity]]
+id = "fn.setup-req"
+inventory = ["kernel.text:setup_req", "kernel.text:make_device_desc"]
+kind = "function"
+name = "gadgetcore setup_req / make_device_desc"
+address = "0x602b94a4"
+aliases = ["make_device_desc", "0x602bb988", "g_setup", "gcw_setup"]
+summary = """
+Sony gadgetcore standard-request dispatcher. Class requests do not pass
+setup_req 0x9b64; they dispatch from the class/vendor branch 0x602b9ffc via
+[class_obj+0x2c]. make_device_desc (0x602bb988) dereferences gc->desc_tbl
+(gc+0x6c) with no NULL check."""
+related = ["dwc3.ep0", "module.usbg-video"]
+
+[[entity]]
+id = "module.usbg-video"
+kind = "module"
+name = "usbg_video_a6400_shared_candidate.ko (our UVC transport module)"
+aliases = ["shared candidate", "uvc transport module"]
+summary = """
+Our module built with --shared-ptp-enumeration-candidate --composite-transport.
+Static audit target 117 checks / 8 skipped / 0 failures. Builds of record in
+this area: e0446-obs 7c87ab37 (B23), e0455-obs-fixed 2c6f82e9 (B24),
+e0459-obs-unbuffered 3ddb6bd5 (B25), e0472-status-prearm dcc2f64f (B26 candidate)."""
+related = ["src.uvc-callback-bridge", "src.uvc-composite-shim", "usb.composite-0322"]
+
+[[entity]]
+id = "src.uvc-callback-bridge"
+kind = "source"
+name = "tools/native_camera/uvc_callback_bridge.c"
+summary = """
+Class callback bridge: class_cb/invoke with local 8-byte wIndex translation
+(never mutates dwc->ctrl_req), RAM ring, read-only OBS observer
+(a6400_uvc_obs_start), and the E0476 status pre-arm in
+a6400_uvc_ring_complete_thunk."""
+related = ["module.usbg-video"]
+
+[[entity]]
+id = "src.uvc-composite-shim"
+kind = "source"
+name = "tools/native_camera/uvc_composite_shim.c"
+summary = """
+Descriptor install/restore. a6400_uvc_restore_descriptors() is the legacy
+Mass Storage restore; since E0465 it refuses (-6) when no legacy table was
+saved or gc+0x6c is NULL."""
+related = ["module.usbg-video", "fn.setup-req"]
+
+[[entity]]
+id = "usb.composite-0322"
+kind = "usb-identity"
+name = "Authored composite 054C:0322 (MI_00 PTP/WPD + MI_01 UVC)"
+aliases = ["054C:0322", "054C:0CAA", "054C:0CA8"]
+summary = """
+Enumerated by our shared module in PC Remote. Stock PC Remote is 054C:0CAA,
+stock Mass Storage is 054C:0CA8. Host harnesses must wait for 0322, not 0CAA."""
+related = ["module.usbg-video", "problem.get-cur-5s"]
+
+[[entity]]
+id = "host.windows-xhci"
+kind = "host"
+name = "Windows host xHCI control transfers"
+summary = """
+AMD USB 3.10 xHCI, Microsoft driver stack (UCX/USBXHCI/USBHUB3). The whole
+control TD (Setup+Data+Status) is queued at dispatch; the control transfer
+timeout is 5.000 s, ending in Stop Endpoint + Set TR Dequeue Pointer. ETW has
+no per-TRB/NAK records."""
+related = ["problem.get-cur-5s"]
+
+# ------------------------------------------------------------------ claims
+
+[[claim]]
+id = "C01"
+entities = ["problem.get-cur-5s", "dwc3.ep0"]
+status = "verified-physical"
+text = "The camera's data stage of GET_CUR completes in about 1 ms (actual=26, status=0); the delay is not in the data stage."
+evidence = ["E0365", "E0392", "E0471"]
+
+[[claim]]
+id = "C02"
+entities = ["problem.get-cur-5s", "dwc3.ep0"]
+status = "verified-physical"
+text = "After the GET_CUR data stage, ep0state goes 2->3 (status TRB armed on eps0 OUT, STARTTRANSFER accepted) within 16.388 ms, then nothing changes for 5000.010 ms until the host aborts and sends the next SETUP (verdict S1)."
+evidence = ["E0468", "E0471"]
+
+[[claim]]
+id = "C03"
+entities = ["problem.get-cur-5s", "host.windows-xhci"]
+status = "verified-physical"
+text = "The 5.000 s is the Windows control-transfer timeout: Stop Endpoint + Set TR Dequeue at +5.000417 s, URB completes SUCCESS 26 B via the cancel path; SET_CUR then canceled 0xC0010000; retries fail with XACT_ERROR 0xC0000011."
+evidence = ["E0382", "E0393", "E0458", "E0471"]
+
+[[claim]]
+id = "C04"
+entities = ["problem.get-cur-5s", "dwc3.ep0"]
+status = "inference"
+text = "Root cause: missed Status OUT handshake. The host sends its single Status OUT right after DATA-IN, before the threaded IRQ arms the status TRB; DWC3 NAKs it (recorded NRDY(STATUS)); no later Status OUT completes the armed TRB."
+evidence = ["E0471"]
+note = "Strongly supported but not directly observed: ETW has no NAK/per-TRB trace and OBS samples every ~10 ms."
+
+[[claim]]
+id = "C05"
+entities = ["dwc3.ep0", "fn.do-control-status"]
+status = "verified-offline"
+text = "With stock code the first status token is NAKed too: complete_data never arms a status TRB, only the NRDY(STATUS) and delayed_status paths call do_control_status. A faster req->complete cannot prevent the NAK."
+evidence = ["E0386:retraction"]
+
+[[claim]]
+id = "C06"
+entities = ["dwc3.ep0", "fn.do-control-status", "field.dwc-2d8"]
+status = "verified-offline"
+text = "The DWC3 status programming is correct: STATUS3 (0x40) for three-stage, direction from the dep argument, OUT len = maxpacket 64 on ctrl_req, ctrl 0xC43 (HWO|LST|IOC|ISP_IMI). Same path stock reads use successfully."
+evidence = ["E0471", "E0382", "E0366"]
+
+[[claim]]
+id = "C07"
+entities = ["problem.get-cur-5s", "usb.composite-0322"]
+status = "inference"
+text = "Descriptors and the composite layout are not implicated in the 5 s stall."
+evidence = ["E0471", "E0389"]
+
+[[claim]]
+id = "C08"
+entities = ["fn.giveback", "src.uvc-callback-bridge"]
+status = "verified-offline"
+text = "Gadget completion ABI is complete(ep, req), called with dwc->lock released."
+evidence = ["E0364", "E0366"]
+
+[[claim]]
+id = "C09"
+entities = ["fn.setup-req"]
+status = "verified-offline"
+text = "Class requests dispatch from the class/vendor branch 0x602b9ffc via [class_obj+0x2c], never through setup_req 0x9b64."
+evidence = ["E0377"]
+
+[[claim]]
+id = "C10"
+entities = ["fn.dwc3-ep0-interrupt"]
+status = "verified-offline"
+text = "Vendor status-complete path 0x602b334c is 5 instructions, never reads trb->size and has no SETUP_PENDING check (unlike mainline)."
+evidence = ["E0386:retraction"]
+
+[[claim]]
+id = "C11"
+entities = ["dwc3.ep0"]
+status = "verified-offline"
+text = "Replaying the observed event order through the real vmlinux dwc3_ep0_interrupt arms the status stage cleanly (2->3->1); the stall is not an EP0 software state-machine or queue bug. NRDY(status) before data-complete would NULL-deref, which was never seen live."
+evidence = ["E0446:ep0"]
+
+[[claim]]
+id = "C14"
+entities = ["fn.start-trans"]
+status = "verified-offline"
+text = "start_trans returns negative with no side effects only when DEPCMD times out (-110); dwc3_send_gadget_ep_cmd keeps only CMDACT and returns 0, so a hardware-rejected STARTTRANSFER (DEPCMD CmdStatus != 0) would still set dep BUSY, the resource index and next=1 with no warning."
+evidence = ["E0386:retraction"]
+
+[[claim]]
+id = "C15"
+entities = ["src.uvc-composite-shim", "fn.setup-req"]
+status = "verified-physical"
+text = "The E0465 restore guard fires in a shared-PTP session ('no legacy Mass Storage table saved ... legacy restore skipped'); no EP0 re-arm over a NULL table and no reboot (Run B25)."
+evidence = ["E0465", "E0468"]
+
+# -- retracted / refuted claims are kept so nobody re-derives them --
+
+[[claim]]
+id = "R01"
+entities = ["problem.get-cur-5s"]
+status = "refuted"
+text = "S2: the IRQ thread handles the status events ~5 s late (scheduling/priority problem)."
+evidence = ["E0446:ep0", "E0468"]
+superseded_by = "C02"
+
+[[claim]]
+id = "R02"
+entities = ["dwc3.ep0"]
+status = "retracted"
+text = "GET_CUR's status NRDY was dropped by the driver because it was processed while next_event was not yet 3."
+evidence = ["E0367", "E0370", "E0371"]
+superseded_by = "C02"
+note = "Retracted by E0373 (lpos is the currently executing event)."
+
+[[claim]]
+id = "R03"
+entities = ["dwc3.ep0"]
+status = "retracted"
+text = "A stale request (609d0240) sits at the head of dep0->request_list at GET/SET queue time; drain it."
+evidence = ["E0379"]
+superseded_by = "C12"
+
+[[claim]]
+id = "C12"
+entities = ["dwc3.ep0"]
+status = "verified-offline"
+text = "dep0->request_list was empty before queue; req 609d0240 is our own freshly queued class request. Do not drop or drain it."
+evidence = ["E0380"]
+
+[[claim]]
+id = "R04"
+entities = ["dwc3.ep0"]
+status = "retracted"
+text = "The initial status NAK is probe-induced (caused by our instrumentation)."
+evidence = ["E0385"]
+superseded_by = "C05"
+
+[[claim]]
+id = "R05"
+entities = ["host.windows-xhci"]
+status = "retracted"
+text = "The 5 s is a host xHC bug."
+evidence = ["E0386:runb16"]
+superseded_by = "C04"
+note = "E0387 replaced this reading; E0471 places the cause in the handshake window, not a host defect."
+
+[[claim]]
+id = "R06"
+entities = ["dwc3.ep0", "src.uvc-callback-bridge"]
+status = "refuted"
+text = "Setting req+0x1a bit1 on the class-IN request removes the 5 s GET_CUR wait."
+evidence = ["E0395"]
+
+[[claim]]
+id = "R07"
+entities = ["problem.get-cur-5s"]
+status = "retracted"
+text = "The clean e0388 build fixed the 5 s timeout (B17 GET_CUR failed in 2.9 ms with XACT_ERROR)."
+evidence = ["E0389"]
+superseded_by = "C13"
+
+[[claim]]
+id = "C13"
+entities = ["problem.get-cur-5s", "host.windows-xhci"]
+status = "verified-physical"
+text = "Fast XACT_ERROR GET_CUR retries are the post-wedge signature; a capture that starts after enumeration misses the initial 5 s transfer. Always capture ETW from before the PC Remote switch."
+evidence = ["E0390", "E0393"]
+
+# ---------------------------------------------------------------- frontier
+
+[[claim]]
+id = "C16"
+entities = ["problem.get-cur-5s"]
+status = "verified-offline"
+text = "Tooling for the 5 s hypothesis: a fail-closed CLASS abort guard (holds before unbind/free/reconnect when a CLASS request may still be outstanding; Unicorn teardown suite 13/13), camera-side CLASS/VENDOR setup and START/STOP logging, and a crash-safe --dmesg-sd kernel trace to A6400K.LOG. Unicorn shows core_cb_class returns 0 synchronously for probe/commit with no deferred queue inside it."
+evidence = ["E0355", "E0356"]
+
+[[claim]]
+id = "C17"
+entities = ["dwc3.ep0"]
+status = "verified-offline"
+text = "The EP0 queue target is the UDC, not gadgetcore: ep0->ops is dwc3_gadget_ep0_ops and its queue slot is dwc3_gadget_ep0_queue 0x602b2ad0 -> __dwc3_gadget_ep0_queue 0x602b26ec. It validates only structural EP0 state (-108 / -16) and returns 0 on three paths that arm no transfer, so a class result of 0 does not prove the reply was submitted. core_cb_class never reads its r0 argument and always uses the singleton this_ex reply buffer."
+evidence = ["E0358"]
+
+[[claim]]
+id = "R08"
+entities = ["problem.get-cur-5s"]
+status = "retracted"
+text = "Run B3: GET_CUR(PROBE) was answered with 0 and never delivered to the host."
+evidence = ["E0357"]
+superseded_by = "C01"
+note = "E0357's erratum (E0358) corrects the gadgetcore framing and the 181-TID park claim; Run B9 (E0365) and the B18 RAM ring (E0392) show the GET_CUR data stage completes in about 1 ms."
+
+[[claim]]
+id = "C18"
+entities = ["module.usbg-video", "dwc3.ep0"]
+status = "verified-physical"
+text = "Runs B4-B7: translated GET_CUR still timed out with clean teardown; both EP0 transfers armed (next=1, BUSY) but SET had dma=0 because both request-prep paths leave dma=0 and the UDC maps only IN; an OUT DMA wrapper fixed the mapping yet both transfers still timed out."
+evidence = ["E0359", "E0360", "E0361", "E0362"]
+
+[[claim]]
+id = "C19"
+entities = ["fn.dwc3-ep0-interrupt"]
+status = "verified-physical"
+text = "Exact TRB captures: the completion handler reads the same unvalidated TRB slot (no HWO check); GET's TRB was consumed (HWO 1->0, size 26->0) while SET's bounce TRB was never consumed (HWO stays 1, size 0x40). The B10 probe saw the raw TRB pointer in DMA space."
+evidence = ["E0367", "E0368", "E0369"]
+
+[[claim]]
+id = "C20"
+entities = ["dwc3.ep0"]
+status = "verified-offline"
+text = "Corrected lpos timeline for Run B12 (lpos is the currently executing event): GET's NRDY(STATUS) at 0x29c arrived after the data completion set next=3, so ep0state became 3 and the status TRB was armed in that same batch; an ep0 XferComplete at 0x2a0 later retired it, ahead of SET_CUR's SETUP at 0x2a4. B12 does not show when 0x2a0 happened; B25 (E0471) shows the retirement only after the host's Stop Endpoint. SET's completion is a separate puzzle (C42)."
+evidence = ["E0373", "E0375", "E0384", "E0471"]
+
+[[claim]]
+id = "R09"
+entities = ["dwc3.ep0"]
+status = "retracted"
+text = "Run B12: a stale pending XferComplete(ep0) caused SET's HWO=1 giveback, and setup_req returning 0 double-queues a delegated zero-length request."
+evidence = ["E0371", "E0372"]
+superseded_by = "C20"
+note = "E0373 corrects the E0371/E0372 lpos reading."
+
+[[claim]]
+id = "C21"
+entities = ["fn.setup-req"]
+status = "verified-physical"
+text = "Run B13: gadgetcore's ep0 is the same object as the class ep0 (68a1c9c0, eq=1). setup_req's delegated queue at 0x9fd8 (caller LR 602b9fdc) is real but was observed only for standard enumeration requests (lengths 18, 39, 26, 4, 20, 9, 0), never during GET_CUR/SET_CUR. The camera rebooted after that run's otherwise clean teardown."
+evidence = ["E0374", "E0375"]
+
+[[claim]]
+id = "C22"
+entities = ["fn.setup-req"]
+status = "verified-offline"
+text = "setup_req branches on bmRequestType & 0x60: standard requests use the bRequest jump table, and SET_CONFIGURATION/SET_INTERFACE reach the driver loop that calls [driver+0x18] = core_cb_start at 0x602b9b64 (return 0 leads to the delegated status queue at 0x9fd8). Class/vendor requests go to 0x602b9ffc and call [class_obj+0x2c] = core_cb_class; a class return of 0 only calls clear_halt_ep0 (one store of 0 to gc+0x83) and cannot stall, restart or re-arm EP0. No +0x34 callback is used."
+evidence = ["E0375", "E0377", "E0378", "E0381"]
+
+[[claim]]
+id = "C23"
+entities = ["problem.get-cur-5s", "dwc3.ep0"]
+status = "inference"
+text = "Synthesis: clear_halt_ep0 cannot re-arm EP0; the 5 s gap is the GET_CUR URB itself and the missing event is GET's status completion, after which SET_CUR is canceled."
+evidence = ["E0381"]
+note = "Consistent with the later S1 verdict (C02)."
+
+[[claim]]
+id = "C24"
+entities = ["fn.giveback"]
+status = "verified-offline"
+text = "The reference req->complete is a single free_request (kfree); the 4.997 s gap is not inside it."
+evidence = ["E0385"]
+
+[[claim]]
+id = "R10"
+entities = ["fn.giveback"]
+status = "retracted"
+text = "Run B15: the 4.997 s gap starts inside the EP0 completion callback, before any status-stage processing."
+evidence = ["E0383"]
+superseded_by = "C24"
+
+[[claim]]
+id = "C25"
+entities = ["dwc3.ep0"]
+status = "verified-offline"
+text = "Event-loop semantics: evt->count is a snapshot of GEVNTCOUNT for the whole batch and is not decremented; lpos is the currently executing event and advances by 4 after the handler returns. With that, the B12 batches are [0x294, 0x298, 0x29c] and [0x2a0, 0x2a4, 0x2a8] (not three ep0 XferCompletes before 'SET pre'). dwc3_ep0_start_trans has five call sites (0x25a4 status, 0x26c8 data, 0x2b68 out_start, 0x31d8 / 0x3314 inside complete_data); 0x3408 is an Update-Transfer DEPCMD, not a TRB arm."
+evidence = ["E0381", "E0382", "E0384", "E0385"]
+
+[[claim]]
+id = "C26"
+entities = ["problem.get-cur-5s"]
+status = "verified-physical"
+text = "GET_DESCRIPTOR completes data and status in 1.4-3.8 ms while GET_CUR's data completes in about 1 ms and the host then waits about 5.01 s; both carry the same request flag byte (req+0x1a = 02) in the early RAM ring. The gap before GET_CUR is the host's configuration window; UCX emits no SELECT_* records, so SET_CONFIGURATION/SET_INTERFACE are not directly visible, and no PTP interface-0 transfer appears."
+evidence = ["E0394", "E0396", "E0397"]
+
+[[claim]]
+id = "C27"
+entities = ["module.usbg-video"]
+status = "verified-physical"
+text = "Run B: the live START endpoint selector accepted the 0x84 bulk-IN wrapper (flags&1 set, ownership wrapper+0x24 == raw, descriptor 7,5,0x84,bulk,512); the *(dep+0x4C)&1 precondition did not reject it, so endpoint selection is not the RenderStream failure."
+evidence = ["E0354"]
+
+[[claim]]
+id = "R11"
+entities = ["module.usbg-video"]
+status = "refuted"
+text = "Track B's RenderStream failure originates at START endpoint selection (E0351 ranking, item b)."
+evidence = ["E0351"]
+superseded_by = "C27"
+
+[[claim]]
+id = "C28"
+entities = ["usb.composite-0322", "host.windows-xhci"]
+status = "verified-physical"
+text = "In composite mode Windows PnP shows MI_00 as 'MTP USB Device' with status OK, but PortableDeviceManager lists 0 Sony WPD devices (12 retries in Run B2, again in B3-B5); the PMCA filter parses composite IDs correctly and is not the cause, so a host PTP consumer could not run during these sessions."
+evidence = ["E0354", "E0355", "E0357", "E0359"]
+
+[[claim]]
+id = "C29"
+entities = ["host.windows-xhci"]
+status = "verified-offline"
+text = "USBXHCI/USBHUB3 ETW events are TRB-level (slot/endpoint/ring counters) with no setup packet or USBD_STATUS; they still show the host received the correct 173-byte composite configuration descriptor and that ffmpeg's 5.3 s abort had no bus-level reset or re-read."
+evidence = ["E0355"]
+
+[[claim]]
+id = "C30"
+entities = ["host.windows-xhci", "problem.get-cur-5s"]
+status = "verified-offline"
+text = "With the UCX provider and tracerpt XML, control URBs can be extracted with their setup packets, durations and USBD_STATUS (B17/B18 decodes)."
+evidence = ["E0389", "E0393"]
+
+[[claim]]
+id = "R12"
+entities = ["host.windows-xhci"]
+status = "retracted"
+text = "UCX ETW payloads are pointer/TRB-level only, so setup packets and status cannot be decoded from the host capture."
+evidence = ["E0357"]
+superseded_by = "C30"
+
+[[claim]]
+id = "C31"
+entities = ["module.usbg-video", "problem.get-cur-5s"]
+status = "verified-physical"
+text = "Run B3 saw exactly one CLASS request per session, GET_CUR VS_PROBE (A1 81 0100 0002 001A), arriving with raw wire wIndex 2 while the reference expects native interface 1; the bridge now translates wire 2 -> native 1 (module 2be32cac, Unicorn selector 23/23, bridge 12/12, reference-class 10/10). In Run B4 the translation is live and the host proceeds to SET_CUR(PROBE) exactly +5.002 s later; no COMMIT or SET_INTERFACE follows."
+evidence = ["E0357", "E0359"]
+
+[[claim]]
+id = "C32"
+entities = ["module.usbg-video"]
+status = "verified-physical"
+text = "A failed STOP attestation reports the daemon's sentinel state -1,-1,-1,-1 and parked the session without re-enumeration (Run B3 battery pull). The park-recovery daemon (99047575, 630,536 B) flushes SD evidence, writes status=degraded_teardown, retries STOP exactly once, retires the hook and always resumes; from Run B4 on, teardown was clean without needing it."
+evidence = ["E0357", "E0358", "E0359"]
+
+[[claim]]
+id = "R13"
+entities = ["dwc3.ep0"]
+status = "refuted"
+text = "Run B4's two 5 s timeouts most probably came from a queue path that armed no transfer (Case B)."
+evidence = ["E0359"]
+superseded_by = "C18"
+note = "The B4 snapshots printed no-udc-ep because the kernel-pointer guard only accepted 0x60000000..0x61000000; with that fixed, Run B5 shows both transfers armed (next=1, BUSY)."
+
+[[claim]]
+id = "C33"
+entities = ["fn.giveback", "dwc3.ep0"]
+status = "verified-physical"
+text = "Armed EP0 requests are released only when the next SETUP or the teardown aborts them: the STOP-pre residual snapshot shows state 0x89/0x99, next=3 and an empty request list after both 5 s timeouts."
+evidence = ["E0361", "E0362"]
+
+[[claim]]
+id = "C34"
+entities = ["module.usbg-video"]
+status = "verified-offline"
+text = "usbg_video ignores the SET_CUR payload: the SET path sets buf/length, dma=0 and complete=uvc_ep0_comp, queues the request and never reads the buffer; uvc_ep0_comp only calls free_request(ep, req). The 26 OUT bytes do not matter to the reference (actual=0 in Run B9)."
+evidence = ["E0361", "E0364", "E0365"]
+
+[[claim]]
+id = "R14"
+entities = ["fn.start-trans", "dwc3.ep0"]
+status = "refuted"
+text = "The control status ZLP never starts: dwc3_ep0_start_trans silently no-ops through its DWC3_EP_BUSY early return or an ignored DEPCMD rejection."
+evidence = ["E0364", "E0365"]
+superseded_by = "C02"
+note = "E0386 finds no rejected STARTTRANSFER; E0446 and Run B25 (E0468) show the stock code arms the status TRB within 16.388 ms."
+
+[[claim]]
+id = "C35"
+entities = ["dwc3.ep0", "fn.dwc3-ep0-interrupt", "field.dwc-2d8"]
+status = "verified-offline"
+text = "DWC3 EP0 memory map in this kernel: [dwc+4] is the single ep0_trb CPU pointer (coherent window, live 0xffdfd000) and [dwc+0x14] its DMA address; [dwc+8] / [dwc+0x18] are the bounce buffer virtual / DMA addresses; dwc+0xcc is the ev_buffs[] array, GEVNTCOUNT0 is regs+0xc30c. The one TRB slot is reused for SETUP, DATA and STATUS (dwc3_ep0_out_start re-arms SETUP into it). Event words decode as type=(w>>6)&0xf (1 XferComplete, 3 XferNotReady), epnum=(w>>1)&0x1f, NRDY subtype byte1 bits 4-7 (1 DATA, 2 STATUS)."
+evidence = ["E0368", "E0369", "E0371", "E0376", "E0381"]
+
+[[claim]]
+id = "C36"
+entities = ["fn.dwc3-ep0-interrupt", "fn.giveback"]
+status = "verified-offline"
+text = "XferComplete dispatches only on ep0state (dwc+0x2e0): 2 -> complete_data, 3 -> status-complete (give back any eps0 request, ep0state=1, out_start), 1 -> setup completion; nothing checks the event's transfer identity or TRB ownership. dwc3_gadget_giveback has seven call sites; the EP0 data completion uses 0x602b3344 with the event status."
+evidence = ["E0370", "E0375"]
+
+[[claim]]
+id = "C37"
+entities = ["problem.get-cur-5s", "host.windows-xhci"]
+status = "verified-offline"
+text = "Run B14 host ETL (UCX): only five control URBs to 054C:0322 in 229 s. GET_CUR VS_PROBE stays pending 5.010962 s and completes SUCCESS with 26 bytes; SET_CUR is submitted 17 us later and canceled after 5.009888 s (0xC0010000); then GET_CUR and PTP class requests fail in about 2.3 ms with XACT_ERROR. No host request lies between GET_CUR and SET_CUR, and the device finished the GET data stage about 5 s before the host URB completed."
+evidence = ["E0381"]
+
+[[claim]]
+id = "R15"
+entities = ["fn.setup-req"]
+status = "refuted"
+text = "A class handler returning 0 makes setup_req queue a delegated zero-length EP0 request, so every UVC class request is double-queued and the delegated completion is what corrupts SET_CUR."
+evidence = ["E0371", "E0374"]
+superseded_by = "C22"
+note = "E0375/E0377: class requests never pass 0x9b64; the delegated queue is standard-request only."
+
+[[claim]]
+id = "R16"
+entities = ["fn.setup-req", "problem.get-cur-5s"]
+status = "refuted"
+text = "The 5 s gap comes from a delayed IRQ thread plus a ctrl_req overwrite: a zero-length standard control transfer (SET_INTERFACE/SET_CONFIGURATION) between GET_CUR and SET_CUR leaves the control pipe out of sync."
+evidence = ["E0375", "E0378"]
+superseded_by = "C37"
+note = "The B14 ETL has no host request between GET_CUR and SET_CUR, and GET_CUR returned its 26 bytes correctly."
+
+[[claim]]
+id = "R17"
+entities = ["dwc3.ep0"]
+status = "refuted"
+text = "In Run B9 the SET_CUR data-OUT bounce TRB made zero progress because the host never left the data phase, so no status stage existed to complete."
+evidence = ["E0366"]
+superseded_by = "C20"
+
+[[claim]]
+id = "R18"
+entities = ["fn.setup-req"]
+status = "refuted"
+text = "gadgetcore never queues or manipulates ep0 after the class handler returns; the class hook's own queue is the only EP0 queue."
+evidence = ["E0370"]
+superseded_by = "C21"
+
+[[claim]]
+id = "C38"
+entities = ["fn.setup-req", "module.usbg-video"]
+status = "verified-offline"
+text = "core_cb_start (module 0x10f0..0x11ac) has no EP0 queue, request allocation or TRB call; the 0x1318 queue belongs to the GET_CUR probe helper 0x11bc (26-byte rodata template, dwFrameInterval patch, complete=uvc_ep0_comp). B12-B16 logs show one standard delegated queue (lr 602b9fdc) per request, so a double queue during START is not demonstrated."
+evidence = ["E0391"]
+
+[[claim]]
+id = "R19"
+entities = ["fn.setup-req"]
+status = "refuted"
+text = "core_cb_start queues an EP0 request at 0x1318, giving SET_CONFIGURATION/SET_INTERFACE a standard-request double queue."
+evidence = ["E0376", "E0378"]
+superseded_by = "C38"
+
+[[claim]]
+id = "C39"
+entities = ["fn.start-trans", "dwc3.ep0"]
+status = "verified-physical"
+text = "Run B16 sampled DEPCMD0/DEPCMD1 at every probe point: CmdStatus 0 with valid XferRscIdx (0 and 1) throughout, so no hardware-rejected STARTTRANSFER explains the stall."
+evidence = ["E0386:runb16"]
+
+[[claim]]
+id = "C40"
+entities = ["host.windows-xhci"]
+status = "verified-offline"
+text = "On the host the whole GET_CUR control TD (Setup, Data, Status) is queued at dispatch and no event for that slot appears until the Stop Endpoint at +5.0107 s; host congestion is ruled out (another device on the same controller was serviced every ~1.06 s, maximum interrupter/DPC gap 1.013 ms). The device-side status arm is geometrically correct (STATUS3 0x0c43, len 64, ctrl_req) and dep0 was not BUSY at GET completion."
+evidence = ["E0382"]
+
+[[claim]]
+id = "C41"
+entities = ["fn.giveback"]
+status = "verified-offline"
+text = "dwc3_gadget_giveback runs req->complete with dwc->lock released; the DWC3 IRQ is IRQF_SHARED|IRQF_ONESHOT, so dwc3_thread_interrupt cannot re-enter while unlocked and lpos/count accounting is unaffected."
+evidence = ["E0385", "E0366"]
+
+[[claim]]
+id = "C42"
+entities = ["fn.dwc3-ep0-interrupt", "dwc3.ep0"]
+status = "open"
+text = "SET_CUR is given back with actual=0 by a third ep0 XferComplete (B12 0x2ac, B14 0x314) that has no software-visible TRB arm while the bounce TRB still reads HWO=1, size 0x40; complete_data has no HWO/ownership check and consumes it as the data completion. Best current reading: a controller-side duplicate of a control-phase completion on the shared ep0_trb; which fetch duplicated is not derivable from the logs. It does not affect the GET_CUR stall."
+evidence = ["E0373", "E0384", "E0385", "E0386:runb16"]
+
+[[claim]]
+id = "C43"
+entities = ["module.usbg-video", "problem.get-cur-5s"]
+status = "verified-physical"
+text = "The e0388 build (eda3f8d6) removed every hot-path hook (no ops shadow, queue wrapper, completion thunk or printk; the 26-byte OUT data uses the stock bounce path). With a zero-printk RAM ring (B18) GET data still completes in 0.95 ms and SET_CUR still starts 5.011 s later, so our instrumentation was not the cause of the stall."
+evidence = ["E0388", "E0392"]
+
+[[claim]]
+id = "R20"
+entities = ["problem.get-cur-5s", "module.usbg-video"]
+status = "refuted"
+text = "The 5 s stall is induced by our synchronous EP0 instrumentation: about eight printks before returning to the event loop delay the status arm, the host's Status OUT is NAKed, and it retries only at its 5 s timeout."
+evidence = ["E0387"]
+superseded_by = "C43"
+note = "The handshake-window idea returns in E0471 with stock timing (status armed within 16.388 ms); only the 'instrumentation causes it' part is refuted."
+
+[[claim]]
+id = "C44"
+entities = ["module.usbg-video", "usb.composite-0322"]
+status = "verified-offline"
+text = "The reference VS_PROBE template is 26 bytes; originally dwMaxVideoFrameSize 14,745,600 and dwMaxPayloadTransferSize 300,000 disagreed with the Bulk 512 endpoint and a 1280x720 frame. e0388 aligned the reply and frame descriptor to 1,843,200 / 131,060. The VS format descriptor is the 11-byte MJPEG shape, and header endpoint 0x84, VC baInterfaceNr 2 and wTotalLength 40/61 are consistent. The stall persisted after the alignment."
+evidence = ["E0387", "E0388", "E0389"]
+
+[[claim]]
+id = "C45"
+entities = ["module.usbg-video"]
+status = "verified-physical"
+text = "STOP alone never releases the UVC configuration: only module unload runs a6400_uvc_restore_descriptors (pullup 0, setup_disconnect, gcw_stop, driver demote). Run B17 reached MSC cleanly because the module was unloaded before the switch; in B16 and B18-B20 the switch happened with the module loaded (the debugger is unreachable in PC Remote) and needed a battery pull."
+evidence = ["E0386:runb16", "E0387", "E0388", "E0393", "E0394", "E0395", "E0396"]
+
+[[claim]]
+id = "C46"
+entities = ["src.uvc-callback-bridge", "module.usbg-video"]
+status = "verified-physical"
+text = "The bridge disconnect hook fires on host disconnect, but calling the descriptor restore synchronously inside disconnect_cb hung with in_flight=1 (B21). The deferred version scheduled a zero-initialised static work_struct and tripped __queue_work's BUG_ON(!list_empty) at 0x6014a280 in the DISCONNECT branch (B23 reboot). Self-linking the work entry (E0456, module 2c6f82e9) fixed it: B24's teardown reached uvc_stop verified without the BUG."
+evidence = ["E0398", "E0399", "E0453:runb23", "E0456:runb23", "E0458"]
+
+[[claim]]
+id = "C47"
+entities = ["fn.setup-req", "src.uvc-composite-shim"]
+status = "verified-offline"
+text = "The B24 reboot was a NULL halfword read (ldrh r3,[r7], r7=0) at make_device_desc+0x70 in irq/229-dwc3 while answering GET_DESCRIPTOR(device), 0.33 s after the scheduled teardown: the legacy deferred restore ran after the shared teardown had reconnected, cleared gc+0x6c and raised D+ again. It was not an EP0 timeout."
+evidence = ["E0458", "E0465"]
+
+[[claim]]
+id = "R21"
+entities = ["src.uvc-composite-shim"]
+status = "retracted"
+text = "The B24 crash was a vector exception at 0x00000000 (a jump through NULL) in the dwc3 IRQ thread, EP0-adjacent."
+evidence = ["E0458"]
+superseded_by = "C47"
+
+[[claim]]
+id = "C48"
+entities = ["src.uvc-callback-bridge"]
+status = "verified-physical"
+text = "The read-only OBS observer (E0446) was inconclusive twice before B25: in B23 the harness waited for 054C:0CAA, so no UVC class request was ever sent (only a PTP A1 67 request pending 14.59 s); in B24 OBS start printed but the buffered rows were lost to the reboot. E0465 made rows print immediately with an 'OBS work enter' marker."
+evidence = ["E0446:ep0", "E0453:runb23", "E0458", "E0465"]
+
+[[claim]]
+id = "R22"
+entities = ["dwc3.ep0"]
+status = "refuted"
+text = "After SET_CONFIGURATION the EP0 resource/ownership state is not what the class path assumes, which is why the class status stage stalls."
+evidence = ["E0397"]
+superseded_by = "C04"
+
+[[frontier]]
+id = "F01"
+title = "Run B26: does the status pre-arm remove the 5 s stall?"
+state = "blocked-on-user-go"
+entities = ["problem.get-cur-5s", "src.uvc-callback-bridge", "module.usbg-video"]
+evidence = ["E0476", "E0471"]
+candidate = "artifacts/native/uvc-transport-e0472-status-prearm/usbg_video_a6400_shared_candidate.ko, 83,644 B, sha256 dcc2f64f944790dd1b8519b29ee6f6ce709a03129fb92d363fdafe14f16915cd"
+verified = "Static audit 117/8/0, Unicorn 8/8 PASS (kernel-side snippets are hand-assembled model stubs), 13 unit tests, full suite 1576 OK. No live behavior claimed."
+preflight = "Harness tools/research/run_b26_uvc_prearm.py pins the module and the daemon (a6400-lived, 632,812 B, sha256 1eda8418...). Local observation 2026-11-22, not an evidence record: camera-daemon/build/a6400-lived was 856,320 B, sha256 c92403f6..., so verify_local_artifacts() fails and tests/emulator/test_run_b26_uvc_prearm.py reports it. Restore or re-pin the daemon before any GO."
+next = "One supervised Run B26 after explicit user GO, same harness as B25 (wait for 054C:0322, ETW started before the PC Remote switch, one ffmpeg attempt, SD log)."
+read_in_result = "PREARM st=2 nx=3 r=1 before the GET_CUR status completion; RAMRING ... prearm=1/1/0 st=2 nx=3; ETL GET_CUR URB duration << 5 s."
+hypotheses = [
+  "H1: the host does not re-drive the NAKed Status stage. Pre-arm should then fix it.",
+  "H2: the armed TRB never ACKs a later Status OUT. Then B26 shows PREARM r=1 and still no status completion.",
+]
+
+[[frontier]]
+id = "F02"
+title = "After EP0: sensor video into UVC streaming endpoint 0x82"
+state = "not-started"
+entities = ["module.usbg-video"]
+evidence = ["E0151", "E0143"]
+next = "Only meaningful once VS_PROBE/COMMIT succeed. Sensor JPEG over PTP (E0151) and synthetic 720p30 UVC (E0143) are proven separately."
+
+# ----------------------------------------------------------------- hazards
+
+[[hazard]]
+id = "H01"
+title = "Arming the status stage without writing ep0state=3"
+effect = "Next XferComplete(status) is dispatched to complete_data with an empty request list: NULL read at 0x602b30d8 in IRQ context, a reboot risk."
+rule = "Any status arm must write dwc->ep0state=3 before calling 0x602b253c (mirror 0x602b3454). E0476 does this; the E0366 'status kick' did not."
+evidence = ["E0366", "E0476"]
+
+[[hazard]]
+id = "H02"
+title = "Wrong completion-callback ABI in a thunk"
+effect = "Camera kernel crash and reboot during the session (Run B8)."
+rule = "req->complete is complete(ep, req) and runs with dwc->lock released."
+evidence = ["E0363", "E0364"]
+
+[[hazard]]
+id = "H03"
+title = "schedule_work on a zero-initialised static work_struct"
+effect = "Kernel BUG in __queue_work from the DISCONNECT branch; camera warm-rebooted in teardown (Run B23)."
+rule = "Self-initialise every work_struct (INIT_WORK equivalent) and guard scheduling; fixed in E0456."
+evidence = ["E0453:runb23", "E0456:runb23"]
+
+[[hazard]]
+id = "H04"
+title = "Legacy Mass Storage restore in a shared-PTP build"
+effect = "Restore clears gc+0x6c, re-arms EP0 and raises D+; host GET_DESCRIPTOR -> make_device_desc+0x70 ldrh through NULL -> oops -> warm reboot (Run B24)."
+rule = "Restore must refuse when no legacy table was saved or gc+0x6c is NULL (E0465 guard, confirmed live in B25)."
+evidence = ["E0458", "E0465", "E0468"]
+
+[[hazard]]
+id = "H05"
+title = "Switching to Mass Storage with the module still loaded"
+effect = "The MSC switch hangs and a battery pull is needed, which also wipes /tmp_bt receipts (B16, B18-B21)."
+rule = "STOP does not release the UVC configuration; unload the module (restore descriptors) before the MSC switch, or rely on a verified deferred disconnect restore. The debugger is unreachable in PC Remote, so plan the teardown order before the session."
+evidence = ["E0386:runb16", "E0387", "E0388", "E0393", "E0396", "E0398"]
+
+[[hazard]]
+id = "H06"
+title = "Harness waits for the stock PC Remote PID"
+effect = "Run wasted: composite 054C:0322 present but no class request ever issued (Run B23)."
+rule = "Wait for the authored 054C:0322 with MI_00 + MI_01."
+evidence = ["E0453:runb23", "E0458"]
+
+[[hazard]]
+id = "H07"
+title = "printk and hooks in the EP0 hot path"
+effect = "Instrumentation changes timing and confounds the status-stage measurement."
+rule = "Use the zero-printk RAM ring or the read-only OBS observer; no ops-table shadow in production builds."
+evidence = ["E0387", "E0388", "E0392"]
+
+# ------------------------------------------------------------------- drift
+
+[[hazard]]
+id = "H08"
+title = "Daemon park after a failed STOP attestation"
+effect = "The session stayed parked with no re-enumeration; a battery pull was needed and /tmp_bt receipts would be lost (Run B3)."
+rule = "Run the park-recovery daemon (99047575 or later): SD evidence first, one bounded STOP retry, hook retire, always resume. Read A6400K.LOG/A6400RCPT.JSON from SD afterwards."
+evidence = ["E0357", "E0358"]
+
+[[hazard]]
+id = "H09"
+title = "Nested ep0->ops shadows on one endpoint object"
+effect = "With an EP0 shadow and a gadgetcore shadow installed on the same ep0 (68a1c9c0), the camera rebooted after an otherwise clean teardown (Run B13)."
+rule = "At most one ops shadow per endpoint, restored at STOP; never filter or drop setup_req's delegated queue (lr 0x602b9fdc) - standard enumeration needs it."
+evidence = ["E0374", "E0375"]
+
+[[hazard]]
+id = "H10"
+title = "Synchronous descriptor restore inside disconnect_cb"
+effect = "The restore hung with in_flight=1 in the disconnect callback; the camera did not switch to MSC and needed a battery pull (B21)."
+rule = "Only schedule work from disconnect_cb (with a self-linked work_struct and an idempotent guard); never sleep or restore there, and skip the legacy restore in shared-PTP builds (E0465)."
+evidence = ["E0398", "E0456:runb23", "E0465"]
+
+[[drift]]
+doc = "docs/UVC_PTP_STATUS.md"
+section = "Goal and Current Boundary / Latest Candidate and Checks"
+observed = "Still describes E0207 (first composite enumeration) and the E0206 candidate 7adc42e6..., 605 tests."
+current = "Track B is at F01: E0476 candidate dcc2f64f..., awaiting Run B26 GO. CURRENT_STATE.md is up to date."

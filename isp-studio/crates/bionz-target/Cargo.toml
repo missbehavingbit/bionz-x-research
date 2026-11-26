@@ -1,0 +1,17 @@
+[package]
+name = "bionz-target"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Target profiles with public addresses and hash checks"
+
+[dependencies]
+bionz-preset = { path = "../bionz-preset" }
+serde.workspace = true
+toml.workspace = true
+
+[[bin]]
+name = "bionz-target"
+path = "src/main.rs"
+required-features = []

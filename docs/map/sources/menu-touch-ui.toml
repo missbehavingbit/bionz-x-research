@@ -1,0 +1,149 @@
+# Knowledge-map source: Menu model and touch UI.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "menu-touch-ui"
+title = "Menu model and touch UI"
+scope = """
+Camera menu tree, WidgetSystem, original selection/activation, resource and sprite captures, menu .uxc containers and the touch prototypes up to the live MTF2 touch mod."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0085-E0089",
+  "E0093",
+  "E0094",
+  "E0095:mouse",
+  "E0096:menu",
+  "E0097:real-menu",
+  "E0098-E0109",
+  "E0111-E0131",
+  "E0511-E0520",
+  "E0522:mods",
+  "E0523",
+]
+
+[[entity]]
+id = "ui.widget-system"
+kind = "process"
+name = "WidgetSystem, menu model and selection"
+summary = "Native WidgetSystem singleton and layer list, the camera menu model, original selection/activation routes and the controller refresh contract."
+
+[[entity]]
+id = "ui.resource-manager"
+kind = "process"
+name = "ResourceManager, sprites and bitmaps"
+summary = "Resource accounting, fastbin-linked coupled captures (V4..V12), sprite element arrays, packed resource indices and BitmapImpl round trips."
+
+[[entity]]
+id = "ui.uxc-menu"
+kind = "process"
+name = "ViewSettingMenu and .uxc menu containers"
+aliases = ["uxc", "CmnViewSettingNode", "Mode 67"]
+inventory = ["firmware.elf:nflasha15_unpacked/lib/viewUnified2.so"]
+summary = "Offline ViewSettingMenu/CmnViewSettingNode architecture, the uxc container format, the reconstructed node tree and the complete menu tree for mode 67 (ILCE-6400)."
+
+[[entity]]
+id = "mod.mtf2-touch"
+kind = "module"
+name = "MTF2 full-menu touch mod"
+aliases = ["menu_touch_full.c", "PAS_MenuListTab"]
+summary = "Dual-hook touch mod (tools/native_camera/menu_touch_full.c) giving tabs, page dots, rows and tap-to-enter on the main menu."
+
+[[claim]]
+id = "C01"
+entities = ["ui.widget-system"]
+status = "verified-physical"
+text = "Early touch hooks false-matched and were disabled; live touch returned ENODEV and the first physical menu-touch tests were negative."
+evidence = ["E0085", "E0086", "E0089", "E0093"]
+
+[[claim]]
+id = "C02"
+entities = ["ui.widget-system"]
+status = "verified-physical"
+text = "The native WidgetSystem singleton and layer list were observed; a physical menu test reaches WidgetSystem mouse records and the actual menu tree and mouse-handler boundary."
+evidence = ["E0094", "E0095:mouse", "E0096:menu", "E0097:real-menu"]
+
+[[claim]]
+id = "C03"
+entities = ["ui.widget-system"]
+status = "verified-offline"
+text = "The camera menu model and original selection execute on captured state; menu binding, refresh, action route, widget lookup and world geometry were recovered, and row hit checks are separate from selection controls."
+evidence = ["E0099", "E0100", "E0103", "E0104", "E0106", "E0108"]
+
+[[claim]]
+id = "C04"
+entities = ["ui.resource-manager"]
+status = "verified-offline"
+text = "Original activation reaches thread and resource-management contracts; coupled captures V4..V12 bound the fastbin chain, sprite references, packed indices and BitmapImpl round trips."
+evidence = ["E0109", "E0115", "E0118", "E0122", "E0124", "E0125", "E0126"]
+
+[[claim]]
+id = "C05"
+entities = ["ui.widget-system"]
+status = "verified-physical"
+text = "A natural touch UI thread and release coordinates were observed; coupled physical touch maps to row 6, with native bindings, popup guards and the refresh ABI."
+evidence = ["E0127", "E0128", "E0130", "E0131"]
+
+[[claim]]
+id = "C06"
+entities = ["ui.uxc-menu"]
+status = "verified-offline"
+text = "The ViewSettingMenu/CmnViewSettingNode binary layout, the uxc container format and string resolution give a complete menu tree for mode 67 (ILCE-6400) with runtime limits and modification contracts."
+evidence = ["E0511", "E0512", "E0513", "E0514", "E0515"]
+
+[[claim]]
+id = "C07"
+entities = ["mod.mtf2-touch", "ui.uxc-menu"]
+status = "verified-offline"
+text = "PAS_MenuListTab's vtable and object layout (tab/row/page widget arrays) give the offline touch baseline and a full main-menu touch prototype."
+evidence = ["E0516", "E0517", "E0518"]
+
+[[claim]]
+id = "C08"
+entities = ["mod.mtf2-touch"]
+status = "verified-physical"
+text = "The MTF2 full-menu touch mod was verified live on an ILCE-6400 in RAM-only deployment (op=1), without flash writes; v1 touch was validated and v2 added swipe and popup support."
+evidence = ["E0519", "E0520"]
+
+[[claim]]
+id = "C09"
+entities = ["ui.uxc-menu"]
+status = "verified-offline"
+text = "The Mods tab icon comes from a uxd image container; Mod Loader OK-key routing on tab 7 was diagnosed."
+evidence = ["E0522:mods", "E0523"]
+
+[[claim]]
+id = "C10"
+entities = ["ui.widget-system", "mod.mtf2-touch"]
+status = "verified-physical"
+text = "Live module maps gave a guarded native touch candidate; a camera ELF touch symbol enabled guarded deployment."
+evidence = ["E0087", "E0088"]
+
+[[claim]]
+id = "C11"
+entities = ["ui.widget-system"]
+status = "verified-physical"
+text = "The original cursor read contract, a selection-state observer, a live menu controller with original selection-synchronization replay and the controller observer's coverage limit were recorded."
+evidence = ["E0098", "E0101", "E0102"]
+
+[[claim]]
+id = "C12"
+entities = ["ui.widget-system"]
+status = "verified-physical"
+text = "The active layout was captured (first incomplete, then by binary recursive capture); the retained model matches the active menu and rows associate natively."
+evidence = ["E0105", "E0107"]
+
+[[claim]]
+id = "C13"
+entities = ["ui.resource-manager"]
+status = "verified-physical"
+text = "Resource accounting and original free showed a lifetime mismatch; active-menu references were confirmed, and coupled captures needed a shared freeze: V5 row entry and allocator boundary, a same-freeze fastbin-linked capture, the V6 prefix and payload header, V7 original allocation and rebind, ResourceManager/image accessor and the V9 sprite index."
+evidence = ["E0111", "E0112", "E0113", "E0114", "E0116", "E0117", "E0119", "E0120", "E0121", "E0123"]
+
+[[claim]]
+id = "C14"
+entities = ["ui.widget-system"]
+status = "verified-offline"
+text = "Coordinate controls and a separate refresh path were prepared ahead of the coupled touch capture."
+evidence = ["E0129"]

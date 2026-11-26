@@ -1,0 +1,216 @@
+# Knowledge-map source: USB stack inside the emulators.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "usb-emulated"
+title = "USB stack inside the emulators"
+scope = """
+Original UsbControl/OSAL message paths, SETCONFIG delivery, bus-power lanes, QEMU USB cable, VBUS, FUSB, DWC3 and EP0 models, the USB key inhibit and ModelCamera readiness."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+# Reviewed from each record's lead / result sections.
+deep_reviewed = [
+  "E0303",
+  "E0304",
+  "E0310",
+  "E0318",
+  "E0323-E0335",
+  "E0337",
+  "E0338",
+  "E0524:original",
+  "E0534:original",
+  "E0579-E0589",
+  "E0593-E0598",
+  "E0611",
+  "E0612:captured",
+  "E0613",
+  "E0619",
+  "E0654",
+  "E0655",
+]
+records = [
+  "E0303",
+  "E0304",
+  "E0310",
+  "E0318",
+  "E0323-E0335",
+  "E0337",
+  "E0338",
+  "E0524:original",
+  "E0534:original",
+  "E0579-E0589",
+  "E0593-E0598",
+  "E0611",
+  "E0612:captured",
+  "E0613",
+  "E0619",
+  "E0654",
+  "E0655",
+]
+
+[[entity]]
+id = "proc.usbcontrol"
+kind = "process"
+name = "UsbControl service and its FSM"
+aliases = ["0x00CA8192", "MsgId2EventId", "event 0x13", "0x0A4002"]
+summary = "Original UsbControl message handler: inbound ObjMsg dispatch, MsgId2EventId map and the USB FSM (SETCONFIG -> event 0x13 -> 0x0A4002 broadcast)."
+
+[[entity]]
+id = "proc.mwf-objmsg"
+kind = "process"
+name = "MWF::ObjMsg, ParamMap and MessageSerializer"
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libMWF.so"]
+summary = "Message object layout, typed Param containers and the serialized wire format used by UsbControl and other services."
+
+[[entity]]
+id = "proc.osal-queues"
+kind = "process"
+name = "OSAL queue lanes (local vs kernel sync callback)"
+aliases = ["bit-15 queue", "h4109", "h4110", "FUTEX_WAKE_PRIVATE"]
+summary = "Queue IDs with bit 15 use process-local user-space queues plus FUTEX_WAKE_PRIVATE; kernel sync queues 0x00CA0288 (h4109, adjustment) and 0x00CA01A4 (h4110, input) are separate lanes."
+
+[[entity]]
+id = "proc.buspower"
+kind = "process"
+name = "Bus-power lanes and libBusPower FSM"
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libBusPower.so"]
+summary = "The bus-power 0x012002DA lane and libBusPower FSM driven by VBUS."
+
+[[entity]]
+id = "qemu.usb-models"
+kind = "device"
+name = "QEMU USB cable, FUSB, DWC3 and EP0 models"
+aliases = ["FUSB 0xF2920010", "054C:096F", "GHWPARAMS"]
+summary = "Virtual cable/VBUS delivery to the original FUSB handler, CID kevents, the DWC3 model with a physical GHWPARAMS profile and token-driven EP0."
+
+[[entity]]
+id = "proc.usb-key-inhibit"
+kind = "process"
+name = "USB key inhibit and ModelCamera readiness"
+aliases = ["0x07000001", "reason 0x11", "@M001"]
+summary = "Original application gate: startup natively inhibits USB physical key 0x07000001 and I-InputMain suppresses it with reason 0x11 until still-recording readiness."
+
+[[claim]]
+id = "C01"
+entities = ["proc.usbcontrol", "proc.mwf-objmsg"]
+status = "verified-offline"
+text = "UsbControl inbound dispatch, the MsgId2EventId map, the ObjMsg layout, ParamMap containers and the serialized wire format were decoded."
+evidence = ["E0323", "E0324", "E0325", "E0326", "E0327"]
+
+[[claim]]
+id = "C02"
+entities = ["proc.osal-queues"]
+status = "verified-offline"
+text = "Queue IDs with bit 15 (UsbControl 0x00CA8192, UsbBusPower 0x012182EB, BusPower 0x012282F6) route through process-local queue objects and FUTEX_WAKE_PRIVATE, not kernel UIPC ioctls; the emulated SETCONFIG envelope was first not consumed for that reason."
+evidence = ["E0328", "E0329", "E0330", "E0331"]
+
+[[claim]]
+id = "C03"
+entities = ["proc.osal-queues"]
+status = "verified-offline"
+text = "Kernel-originated delivery to sync-registered callbacks invokes original callbacks; the h4109 lane is the USB adjustment channel (320-byte OsalRequestPacket) and h4110 the input callback, neither a SETCONFIG lane."
+evidence = ["E0332", "E0333", "E0334"]
+
+[[claim]]
+id = "C04"
+entities = ["proc.usbcontrol"]
+status = "verified-offline"
+text = "A local-queue SETCONFIG post reaches the USB FSM (event 0x13) and completes to the 0x0A4002 broadcast; the original local sync-to-async route runs end to end in isolation with balanced heap/mutex fixtures."
+evidence = ["E0335", "E0337", "E0524:original"]
+
+[[claim]]
+id = "C05"
+entities = ["proc.usbcontrol"]
+status = "verified-offline"
+text = "Original-process configure/start commands reach FSM 1 -> 5 -> 6 -> 7 and create a bus-power gadget registration record; createGadget stops at the unanswered OTG SET_MODE 0x4001E30C (mode 2), created=0."
+evidence = ["E0534:original"]
+
+[[claim]]
+id = "C06"
+entities = ["proc.buspower"]
+status = "verified-offline"
+text = "The buspower 0x012002DA lane is a power lane, not the USB-connect path; VBUS wakes the proxies without a USB FSM transition in the live 8.2.6.0 replay."
+evidence = ["E0310", "E0318", "E0303", "E0304"]
+
+[[claim]]
+id = "C07"
+entities = ["qemu.usb-models", "proc.usbcontrol"]
+status = "verified-offline"
+text = "QEMU delivers cable changes to the original FUSB handler; the port monitor sends attach/detach to UsbControl through the local synchronous send path; PostMsg handoff and the ProcessMsg SetJackStatus suppression gate (event 9 / jack 2) were identified."
+evidence = ["E0579", "E0580", "E0581", "E0582", "E0583", "E0584", "E0585"]
+
+[[claim]]
+id = "C08"
+entities = ["qemu.usb-models", "proc.buspower"]
+status = "verified-offline"
+text = "FUSB bit 1 (0xF2920010) drives CID kevent subtype 0; opt-in usb-cid-high unlocks SetJackStatus(1,1) and the 0x0A400A/B broadcast; QMP VBUS then drives the libBusPower FSM while UsbControl stays in STOP."
+evidence = ["E0586", "E0587", "E0588"]
+
+[[claim]]
+id = "C09"
+entities = ["proc.usbcontrol"]
+status = "verified-offline"
+text = "The QEMU USB mode gate runs through DefRootView::ActionOpenUSB and StartGadget (0x0A2000). On the DWC3 model the guest never starts the gadget, and a separate helper cannot reach OTG SET_MODE(2) while the stock application runs: opening /dev/usb/otgcore returns EBUSY (errno 16) in three runs."
+evidence = ["E0589", "E0593", "E0594"]
+
+[[claim]]
+id = "C10"
+entities = ["qemu.usb-models"]
+status = "verified-physical"
+text = "Two read-only MSC samples from the physical camera back an opt-in DWC3 GHWPARAMS profile and a connected-state snapshot; this qualifies identity registers, not capabilities or transfers."
+evidence = ["E0595", "E0597"]
+
+[[claim]]
+id = "C11"
+entities = ["qemu.usb-models", "proc.usbcontrol"]
+status = "verified-offline"
+text = "Through an identity-checked diagnostic mod, original USB service commands run in the captured process; the first run's CUsbSvc state 7 turned out to be the E305 -EBUSY error path. Modelling the unimplemented F0200024 bit-0 guard (with a physical read-only snapshot) lets original SET_MODE(2) and gadget create succeed (state 3, created=1), and GET_DESCRIPTOR returns the bus-power DEVICE descriptor 054C:096F. With strict token-driven EP0 the host completes six standard transfers including SET_ADDRESS, SET_CONFIGURATION and GET_CONFIGURATION=1. The function is bus-power/HID, not UVC."
+evidence = ["E0596", "E0597", "E0598"]
+
+[[claim]]
+id = "C12"
+entities = ["proc.usb-key-inhibit"]
+status = "verified-offline"
+text = "Original USB attach/detach reaches I-InputRecv (0x007A0020) and I-InputMain (0x007A804C); startup inhibits USB physical key 0x07000001 and I-InputMain suppresses it with reason 0x11; binding group 1 gets not-ready replies from ModelCamera (0x0B) while ModelStillRec (0x0F) is ready."
+evidence = ["E0611", "E0612:captured", "E0613", "E0619"]
+
+[[claim]]
+id = "C13"
+entities = ["proc.usb-key-inhibit", "qemu.usb-models"]
+status = "verified-offline"
+text = "With the stock P display, VBUS reaches the original jack handler but starts no DWC3 gadget; early native cable delivery passes FirstView checks and a stock Play press restores ModelCamera readiness, yet USB stays suppressed with reason 0x11. The Unicorn E305 replay enters the bound DWC3 reset and stops before the PL310 sync write."
+evidence = ["E0654", "E0655"]
+
+[[claim]]
+id = "C14"
+entities = ["proc.usbcontrol"]
+status = "verified-offline"
+text = "A console log sink, the message-teardown boundary and the /dev/usb/event map were recorded."
+evidence = ["E0338"]
+
+[[claim]]
+id = "R01"
+entities = ["proc.osal-queues"]
+status = "refuted"
+text = "The kernel sync-callback lane (0x00CA0288, handle 4109) is the inbound SETCONFIG delivery path."
+evidence = ["E0332"]
+superseded_by = "C03"
+note = "E0334: that lane is the USB adjustment channel and expects a 320-byte OsalRequestPacket."
+
+[[claim]]
+id = "R02"
+entities = ["proc.osal-queues", "proc.usbcontrol"]
+status = "refuted"
+text = "An emulated SETCONFIG ObjMsg can be delivered to UsbControl through the kernel UIPC receive queue 0x00CA8192."
+evidence = ["E0328"]
+superseded_by = "C02"
+note = "E0329-E0331: ids with bit 15 set are process-local queue objects that only in-process senders reach."
+
+[[frontier]]
+id = "F01"
+title = "Stock USB startup inside the emulators"
+state = "open"
+entities = ["proc.usb-key-inhibit", "proc.usbcontrol"]
+evidence = ["E0613", "E0619", "E0654", "E0655"]
+next = "Reach authentic still-recording initialization/release so the original clear helper lifts the reason-0x11 inhibit; qualify native OTG/class/gadgetcore startup, then original event production, SETCONFIG and teardown. No injected USB event or ready flag."

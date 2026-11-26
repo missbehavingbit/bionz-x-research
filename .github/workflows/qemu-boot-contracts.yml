@@ -1,0 +1,45 @@
+name: Native QEMU boot contracts
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'qemu-a6400/**'
+      - 'tools/toolchain.json'
+      - 'tools/research/qemu_zve10_menu.py'
+      - 'tools/research/qemu_boot_probe.py'
+      - 'tests/test_qemu_zve10_menu*.py'
+      - '.github/workflows/qemu-boot-contracts.yml'
+
+  pull_request:
+    paths:
+      - 'qemu-a6400/**'
+      - 'tools/toolchain.json'
+      - 'tools/research/qemu_zve10_menu.py'
+      - 'tools/research/qemu_boot_probe.py'
+      - 'tests/test_qemu_zve10_menu*.py'
+      - '.github/workflows/qemu-boot-contracts.yml'
+
+jobs:
+  boot-layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential git ninja-build pkg-config libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev python3-venv
+      - name: Stage pinned upstream QEMU and overlay
+        env:
+          A6400_QEMU_DIR: ${{ runner.temp }}/sony-qemu
+        run: bash qemu-a6400/setup-qemu.sh
+      - name: Build ARM system emulator
+        run: |
+          cd "$RUNNER_TEMP/sony-qemu/build"
+          ../configure --target-list=arm-softmmu --disable-docs --disable-werror --disable-gtk --disable-sdl
+          ninja -j2 qemu-system-arm
+      - name: Test stock and explicit adapted boot layouts without firmware
+        env:
+          BIONZX_QEMU_TEST_BINARY: ${{ runner.temp }}/sony-qemu/build/qemu-system-arm
+        run: python3 -m unittest discover -s tests -p 'test_qemu_zve10_menu*.py' -v

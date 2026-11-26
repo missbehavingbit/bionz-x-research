@@ -1,0 +1,307 @@
+# Knowledge-map source: QEMU sony-a6400 machine.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "qemu-a6400"
+title = "QEMU sony-a6400 machine"
+scope = """
+The QEMU sony-a6400 board: captured four-core boot, av-cam and CamCore sequencing, SIO/sub-micro, display/rear panel, Ydet/CamPig, live-view frame, contributor scores, Custom OS handover guards and DMA engines."""
+evidence_span = "see record index"
+reviewed = "2026-11-25"
+# Reviewed from each record's short-answer / result sections.
+deep_reviewed = ["E0521", "E0522:qemu", "E0524:reproducible", "E0525:qemu", "E0526:qemu", "E0527:real", "E0527:task43",
+  "E0528", "E0529", "E0530:qemu", "E0531", "E0532:qemu", "E0533:qemu", "E0534:qemu", "E0535-E0544",
+  "E0549-E0551", "E0553", "E0557", "E0561", "E0563-E0569", "E0571-E0574", "E0591",
+  "E0614-E0618", "E0636", "E0637", "E0638-E0642", "E0644", "E0650", "E0651", "E0652", "E0665", "E0700"]
+records = [
+  "E0521",
+  "E0522:qemu",
+  "E0524:reproducible",
+  "E0525:qemu",
+  "E0526:qemu",
+  "E0527:real",
+  "E0527:task43",
+  "E0528",
+  "E0529",
+  "E0530:qemu",
+  "E0531",
+  "E0532:qemu",
+  "E0533:qemu",
+  "E0534:qemu",
+  "E0535-E0544",
+  "E0549-E0551",
+  "E0553",
+  "E0557",
+  "E0561",
+  "E0563-E0569",
+  "E0571-E0574",
+  "E0591",
+  "E0614-E0618",
+  "E0636-E0642",
+  "E0644",
+  "E0650",
+  "E0651",
+  "E0652",
+  "E0665",
+  "E0690",
+  "E0692",
+  "E0693",
+  "E0695",
+  "E0696",
+  "E0697",
+  "E0699",
+  "E0700",
+  "E0701",
+  "E0702",
+  "E0703",
+  "E0704",
+  "E0691",
+]
+
+[[entity]]
+id = "qemu.board"
+kind = "tool"
+name = "QEMU sony-a6400 board"
+aliases = ["qemu-a6400", "cxd90045.unmodelled", "CXD4115"]
+summary = "QEMU machine for the a6400: four Cortex-A5 cores, CXD4115 tick timers, native eMMC from captured inputs, opt-in device models and a lowest-priority unmodelled catch-all."
+
+[[entity]]
+id = "qemu.avcam-sequencer"
+kind = "process"
+name = "av-cam mode sequencer and CamCore"
+aliases = ["step 26", "step 32", "step 42", "module 1", "VD_Sequence"]
+summary = "av-cam's mode sequencer steps, module latches, CamCore start, Ydet statistics and the CamPig input sync path."
+
+[[entity]]
+id = "qemu.submicro"
+kind = "device"
+name = "SIO, GPIO, ADC and the sub-micro link"
+aliases = ["SIO ch3", "UPM"]
+inventory = ["kernel.modules:upm"]
+summary = "SIO/GPIO/ADC models; the sub-micro link runs on SIO channel 3; real sub-micro frames were captured once and replayed."
+
+[[entity]]
+id = "qemu.display"
+kind = "device"
+name = "Display, rear panel and viewfinder in QEMU"
+aliases = ["console 0", "FINDER", "MONITOR", "isOutputEvf"]
+summary = "Sugilite P3D/PPF OSD drawing, YUV layer gating, EVF vs monitor layouts, rear-LCD selection, the interactive rear panel and blank-vs-disconnected detection."
+
+[[entity]]
+id = "qemu.handover"
+kind = "process"
+name = "Custom OS handover guards and DMA engines"
+aliases = ["0xF2402000", "0xF0102000", "0xF30A"]
+summary = "Opt-in CXD4115 watchdog, ARMv7 cache/MMU teardown checks, DMA quiescence contracts, the work DMA engine at 0xF0102000 and the 0xF30A fill engine."
+
+[[claim]]
+id = "C01"
+entities = ["qemu.board"]
+status = "verified-offline"
+text = "QEMU boots the main nflasha3 firmware once the Sony entry contract is used (Image at 0x00108000, initrd at 0x00700000, a 'kemco'+cmdline block at 0x00103000, r1=0xDA9) and a backup.ko file_load error that cascaded into about 20 module failures is fixed. Four Cortex-A5 cores start through the pen_release handshake with SRAM mailboxes at 0xFE005010..18 (the CXD90014 pattern from Oein/a5000-emulator). The native eMMC needs 4 MiB boot0 + 4 MiB boot1 before the SDM user area and sector addressing below 2 GiB; two independent input preparations give identical hashes."
+evidence = ["E0521", "E0522:qemu", "E0524:reproducible"]
+
+[[claim]]
+id = "C02"
+entities = ["qemu.board"]
+status = "verified-offline"
+text = "Five threads sleeping in vpool_alloc were a full UIPC realtime queue 0x13A (1,078 pending, no consumer): osal_ulogio.ko failed to load because /setting/ulogio.bin was missing. Supplying it unblocks Appframework."
+evidence = ["E0525:qemu"]
+
+[[claim]]
+id = "C03"
+entities = ["qemu.submicro"]
+status = "verified-offline"
+text = "SIO, GPIO and ADC models carry the sub-micro link on SIO channel 3; real a6400 sub-micro frames captured from one read-only 4 KiB /dev/mem page were replayed."
+evidence = ["E0526:qemu", "E0527:real"]
+
+[[claim]]
+id = "C04"
+entities = ["qemu.avcam-sequencer"]
+status = "verified-offline"
+text = "The ObjMic start stall was an unanswered av-cam ADF request; the ADF decode showed the missing SYSV frame clock, and with VPH timing ObjMic proceeds; the SYSV phase bit had been hidden by the clock stub."
+evidence = ["E0528", "E0529", "E0535"]
+
+[[claim]]
+id = "C05"
+entities = ["qemu.display"]
+status = "verified-offline"
+text = "After SetContentTarget the UI render loop keeps running; Sugilite P3D/PPF draws the shooting-screen OSD while the YUV layer stays off because av-cam never writes GO to the SA DSP and the imager never starts an SA function or sensor transfer."
+evidence = ["E0530:qemu", "E0531", "E0532:qemu", "E0533:qemu", "E0534:qemu"]
+
+[[claim]]
+id = "C06"
+entities = ["qemu.display"]
+status = "verified-offline"
+text = "Console 0 is the viewfinder readout; the eye sensor is not the a5000 hinge pin; the view asks two finder predicates; monitor layouts sit beside EVF layouts; forcing isOutputEvf false does not switch the panel skin."
+evidence = ["E0536", "E0537", "E0538", "E0539", "E0540", "E0541", "E0542"]
+
+[[claim]]
+id = "C07"
+entities = ["qemu.avcam-sequencer"]
+status = "verified-offline"
+text = "CamCore start is gated so PowerOn never runs; the mode sequencer waits at step 12 on module 1, whose 0x0105 latch is never published; source 30 arriving before source 29 kept VD_Sequence from running."
+evidence = ["E0543", "E0544", "E0549", "E0550", "E0551", "E0553", "E0557"]
+
+[[claim]]
+id = "C08"
+entities = ["qemu.avcam-sequencer"]
+status = "verified-offline"
+text = "Module 3 holds step 32 waiting for PQD Ydet statistics (accepts 0x32E only after a per-frame counter passes 6). The Ydet adapter caller (0x63D3DD36), window configuration (0xF3015848..54) and the pending EE callback were traced; CamPig enable readback, dispatch order/input sync and Sgc1 event A are opt-in models. The 0xF3000000 handler runs on IRQ 36 after E0569 corrected the IRQ-table record alignment."
+evidence = ["E0561", "E0563", "E0564", "E0565", "E0566", "E0567", "E0568", "E0569"]
+
+[[claim]]
+id = "C09"
+entities = ["qemu.display"]
+status = "verified-offline"
+text = "A rear-monitor selector, firmware rear-LCD rendering, an interactive rear panel and blank-vs-disconnected detection were added; stock FINDER/MONITOR selection works without a diagnostic overlay."
+evidence = ["E0571", "E0572", "E0573", "E0574", "E0651"]
+
+[[claim]]
+id = "C10"
+entities = ["qemu.display", "qemu.avcam-sequencer"]
+status = "verified-offline"
+text = "Opt-in LIVEVIEW_SOURCE produced the first firmware-driven 640x480 live-view frame on the rear LCD (583,680 active bytes); a synthetic chart does not qualify the sensor or recording."
+evidence = ["E0591"]
+
+[[claim]]
+id = "C11"
+entities = ["qemu.board"]
+status = "verified-offline"
+text = "Merged contributor PRs #35-#42 (alexscemo) report boot scores that this workspace did not re-run: read-back register files at 0xF2800000, 0xF3500000 and 0xF3880000 and the CamCore model at 0xF3010000 keep the same final sequencer state and [VPH] prefix while unmodelled pairs fall (3,065 -> 2,855 -> 2,416 for the first two); TB_JMP_CACHE_BITS 14 cuts time to the final state by about 14%; the v11 SD patch checks insertion per block instead of per byte."
+evidence = ["E0614", "E0615", "E0616", "E0617", "E0618", "E0637"]
+
+[[claim]]
+id = "C12"
+entities = ["qemu.handover"]
+status = "verified-offline"
+text = "Custom OS prerequisites: an opt-in CXD4115 watchdog at 0xF2402000, cache/MMU teardown checks before a kexec-style jump, DMA quiescence contracts, the original work-DMA start/stop/busy contract at 0xF0102000 and an opt-in copy model."
+evidence = ["E0636", "E0638", "E0639", "E0640", "E0641"]
+
+[[claim]]
+id = "C13"
+entities = ["qemu.handover"]
+status = "verified-offline"
+text = "The LIRO ram section copied by the work DMA is av-cam's own initialised RW data (1,878 references from av-cam code), not a sub-core image."
+evidence = ["E0644"]
+
+[[claim]]
+id = "C14"
+entities = ["qemu.board"]
+status = "verified-offline"
+text = "Virtual SD hotplug works with the original file service, and an offline USB Mass Storage baseline exists; settings survive a fresh process after an explicit native save."
+evidence = ["E0650"]
+
+[[claim]]
+id = "C15"
+entities = ["qemu.display"]
+status = "verified-offline"
+text = "Late black-screen scanout and buffers were captured; QEMU reaches the a6400 shooting screen and the step-32 wait from public updaters alone, without a camera capture."
+evidence = ["E0652", "E0665"]
+
+[[claim]]
+id = "C16"
+entities = ["qemu.board"]
+status = "verified-offline"
+text = "In the earlier no-peripheral profile Task 43's first display wait is flag 10, mask 3, pattern zero."
+evidence = ["E0527:task43"]
+
+[[claim]]
+id = "R01"
+entities = ["qemu.handover"]
+status = "retracted"
+text = "The LIRO ram section filled through 0xF30A is a separate sub-core firmware image."
+evidence = ["E0642"]
+superseded_by = "C13"
+
+[[claim]]
+id = "R02"
+entities = ["qemu.avcam-sequencer"]
+status = "retracted"
+text = "No caller of the Ydet producer adapter exists (negative cross-reference search)."
+evidence = ["E0561"]
+superseded_by = "C08"
+note = "E0563 found a direct Thumb call at 0x63D3DD36."
+
+[[claim]]
+id = "C17"
+entities = ["qemu.submicro"]
+status = "verified-offline"
+text = "POWER on the a6400 is a sub-micro front key (CAkey1 bit 0, active low); the guest key table also lists active-low GPIO keys P0.3/P0.4/P0.7/P0.10/P0.11/P1.1, switch P9.22 and ADC ladders on channels 0xC/0xF/0x10/0x11. SIO (5 channels at 0xF2405000, IRQ 201+ch), GPIO (18 ports at 0xF2910000) and ADC models were ported from Oein/a5000-emulator (GPL-2.0, attributed)."
+evidence = ["E0526:qemu"]
+
+[[claim]]
+id = "C18"
+entities = ["qemu.avcam-sequencer"]
+status = "verified-offline"
+text = "The imager was failing its own clock init before any sensor transfer: ulog RAM showed 'Leo Clkgen PLL Wait' timeouts and MIPI-Tx D-PHY init errors. Leo lock is status bit 0 at 0xFC021000 +0x50/+0x54/+0x58 after enable bits 0/4/8 of +0x000; mapping that page and the D-PHY LWAITSTAT bit lets the PLL and D-PHY lock, while the sensor writer stays idle."
+evidence = ["E0534:qemu"]
+
+[[claim]]
+id = "C19"
+entities = ["qemu.display"]
+status = "verified-offline"
+text = "The panel showed the viewfinder layout because GPIO P0.2 (the active-low EVF eye-contact sensor, KEY_OTHER_EYE_CONTACT 0x708B) was missing from the board's reset-high list; idling it high lets stock firmware select the rear-LCD layouts (LayoutST_NORMAL_WITH_INFO_LR etc.) without a diagnostic overlay. Changing the backup output-device bytes or forcing isOutputEvf did not switch the panel; isOutputEvf only moves coordinates inside a layout."
+evidence = ["E0536", "E0540", "E0541", "E0542", "E0651"]
+
+[[claim]]
+id = "C20"
+entities = ["qemu.display"]
+status = "verified-offline"
+text = "A late all-black panel is the guest's own power-save: when Power Save Start Time expires (1 min default, 10 s when selected) the firmware stops drawing and mutes VPH scanout; QEMU is not failing to show an active buffer."
+evidence = ["E0574", "E0652"]
+
+[[claim]]
+id = "C21"
+entities = ["qemu.board"]
+status = "verified-offline"
+text = "QEMU reaches the a6400 shooting screen and the step-32 wait from two public Sony updaters alone (the a6400 2019 package plus ulogio.bin from the ZV-E10 package), without the author's eMMC capture or any guest patch."
+evidence = ["E0665"]
+
+[[claim]]
+id = "C22"
+entities = ["qemu.board", "qemu.display"]
+status = "verified-offline"
+text = "Opt-in CXD90045 peripherals (peripherals=on, or individual touchscreen=on, bcm4339=on, hdmi-cec=on, audio-io=on, emount-lens=...) wire the FocalTech 0x20 I2C0 capacitive touch IC + GPIO P0.12 IRQ 133 + VPH LCD pointer handler (delivering paired MenuTouchFull.mod tab taps and horizontal swipes through original i2c.ko, av-cam.bin, and libObj.so I-TpMain via rear_panel.py /touch), BCM4339 SDIO Wi-Fi at mmc1 (0xF0301000, IRQ 221) and Bluetooth H4 HCI/.hcd on uart3 (/dev/ttyBT), HDMI TX (0xF2A40000 EDID/HPD/TMDS -> VPH Console 1) and CEC (0xF3C10000 virtual TV), AudioIp (0xF3420000..0xF3428FFF DMA rings + synthetic PCM mic), and Sony E-mount BL lens motors (UART1 + PL080 + P1.4), parameterized across all 8 registered camera bodies (sony-a6400, sony-a6400a, sony-zve10, sony-a6100, sony-a6600, sony-a7c, sony-a7m3, sony-a7rm4a)."
+evidence = ["E0700"]
+
+[[claim]]
+id = "R03"
+entities = ["qemu.avcam-sequencer"]
+status = "retracted"
+text = "The 0xF3000000 CamPig/EE handler runs on IRQ 37."
+evidence = ["E0566", "E0568"]
+superseded_by = "C08"
+note = "E0569 found a record alignment issue in the IRQ table; the handler runs on IRQ 36."
+
+[[claim]]
+id = "R04"
+entities = ["qemu.avcam-sequencer"]
+status = "retracted"
+text = "The +0x690 halfword copy at 0x63988EAA is the store that keeps module 1 reporting 0x0100."
+evidence = ["E0549"]
+superseded_by = "C07"
+note = "E0551: that store writes a different object; E0557 found the third writer in VD_Sequence."
+
+[[hazard]]
+id = "H02"
+title = "Git Bash rewrites camera paths in host commands"
+effect = "A host-side read of /tmp_bt/... failed because Git Bash converted the path, and the chained rm removed the helper, forcing a second /dev/mem page read."
+rule = "Run camera-path commands from PowerShell or with path conversion disabled, and never chain cleanup after an unverified read."
+evidence = ["E0527:real"]
+
+[[frontier]]
+id = "F01"
+title = "Stock playback, still capture and remaining controls in QEMU"
+state = "open"
+entities = ["qemu.board", "qemu.display"]
+evidence = ["E0591", "E0650", "E0651", "E0652"]
+next = "Verify remaining application controls, automatic shutdown save, stock JPEG playback and still capture. A synthetic chart does not qualify the sensor or recording."
+
+[[hazard]]
+id = "H01"
+title = "QEMU backs the reserved first MiB with RAM"
+effect = "A /dev/mem read that warm-rebooted the camera passes silently in the default board."
+rule = "Use lowmem-abort=on to reproduce the camera's AXI DECERR for PA 0x000F8000-0x000F8FFF before trusting a low-memory probe."
+evidence = ["E0647"]

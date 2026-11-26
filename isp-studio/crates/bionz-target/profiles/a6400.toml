@@ -1,0 +1,12 @@
+key = "a6400"
+label = "ILCE-6400 Ver.2.00"
+addresses_known = true
+avcam_sha256 = "dd8f8d0cc74ad4b70100e5728cf8b159b5155e7fb50eaf1147b99c9054740209"
+ec_gamma_pa = 0x03E55330
+fc_gamma_pa = 0x03E8F154
+color_a0_pa = 0x0444A244
+color_a1_pa = 0x0444A256
+color_b2_pa = 0x0444B168
+cc_tuning_pa = 0x0444A19E
+refadr0_pa = 0x044ACD27
+color_mode_va = 0x6444a044

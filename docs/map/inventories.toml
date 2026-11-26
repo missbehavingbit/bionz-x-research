@@ -1,0 +1,93 @@
+# Firmware inventories: the denominators for knowledge-map coverage.
+#
+# A map entity joins an inventory through its `inventory` list, for example
+#     inventory = ["kernel.text:__dwc3_ep0_do_control_status"]
+# Coverage counts inventory members that at least one mapped entity names,
+# graded by the strongest current claim about that entity. It measures how much
+# of each inventory the map describes. It is not a firmware compatibility figure.
+#
+# kind = "kallsyms": counted from a captured /proc/kallsyms. `scope` is
+#   "vmlinux" (text symbols without a [module] column) or "modules" (distinct
+#   module names that own text symbols); `match` keeps only symbol names that
+#   contain the given substring. The source is not tracked in Git, so `total`
+#   is recorded here and re-verified (with the SHA-256) whenever the source is
+#   present locally.
+# kind = "json": a local JSON report, same re-verification. With `list`, the total is
+#   the number of entries and members are matched by a suffix of `member_field`
+#   (for example "nflasha15_unpacked/bin/im.elf"); otherwise `key` names an integer.
+# kind = "status": the total of a bounded inventory in
+#   tools/research/a6400_status_data.py (tracked, always verified).
+
+[[inventory]]
+id = "kernel.text"
+title = "Kernel functions (distinct vmlinux text symbols)"
+unit = "functions"
+kind = "kallsyms"
+scope = "vmlinux"
+total = 14401
+source = "artifacts/analysis/e0401-kallsyms-now.txt"
+source_sha256 = "eb2457a033014b3195864ce1876795b56809136f7fc52908ec8be7ddd753c9a9"
+evidence = "E0402"
+
+[[inventory]]
+id = "kernel.dwc3"
+title = "DWC3 USB controller driver functions"
+unit = "functions"
+kind = "kallsyms"
+scope = "vmlinux"
+match = "dwc3"
+total = 91
+source = "artifacts/analysis/e0401-kallsyms-now.txt"
+source_sha256 = "eb2457a033014b3195864ce1876795b56809136f7fc52908ec8be7ddd753c9a9"
+evidence = "E0402"
+
+[[inventory]]
+id = "kernel.modules"
+title = "Loaded kernel modules"
+unit = "modules"
+kind = "kallsyms"
+scope = "modules"
+total = 41
+source = "artifacts/analysis/e0401-kallsyms-now.txt"
+source_sha256 = "eb2457a033014b3195864ce1876795b56809136f7fc52908ec8be7ddd753c9a9"
+evidence = "E0402"
+
+[[inventory]]
+id = "kernel.drivers"
+title = "Kernel drivers in the boot inventory"
+unit = "drivers"
+kind = "status"
+category = "kernel_drivers"
+
+[[inventory]]
+id = "firmware.elf"
+title = "Firmware ELF files (executables and libraries)"
+unit = "files"
+kind = "json"
+total = 474
+source = "artifacts/inventory/elf-inventory.json"
+source_sha256 = "ee9db0bfac7c63c7bb4a4cc90ec60cdb99a9e719a2c0487631758cc1b59f2da9"
+list = "entries"
+member_field = "path"
+evidence = "E0001"
+
+[[inventory]]
+id = "imdb.plugins"
+title = "im.elf static plugins"
+unit = "plugins"
+kind = "status"
+category = "imdb_plugins"
+
+[[inventory]]
+id = "devno.nodes"
+title = "Device nodes"
+unit = "nodes"
+kind = "status"
+category = "devno_nodes"
+
+[[inventory]]
+id = "flash.partitions"
+title = "Flash partitions"
+unit = "partitions"
+kind = "status"
+category = "flash_parts"

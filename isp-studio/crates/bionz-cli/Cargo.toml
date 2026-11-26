@@ -1,0 +1,25 @@
+[package]
+name = "bionz-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "bionz-cli"
+path = "src/main.rs"
+
+[features]
+default = ["gpu"]
+gpu = ["dep:bionz-gpu", "bionz-raw/gpu"]
+
+[dependencies]
+anyhow.workspace = true
+bionz-compare = { path = "../bionz-compare" }
+bionz-core = { path = "../bionz-core" }
+bionz-gpu = { path = "../bionz-gpu", optional = true }
+bionz-preset = { path = "../bionz-preset" }
+bionz-raw = { path = "../bionz-raw", default-features = false }
+clap = { version = "4", features = ["derive"] }
+serde_json.workspace = true
+image.workspace = true

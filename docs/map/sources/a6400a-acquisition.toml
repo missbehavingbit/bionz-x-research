@@ -1,0 +1,136 @@
+# Knowledge-map source: ILCE-6400A qualification and firmware acquisition.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "a6400a-acquisition"
+title = "ILCE-6400A qualification and firmware acquisition"
+scope = """
+The ILCE-6400A 1.01 reference target: native debugger boundary, kernel/partition map, Jiritsu/Senser service packets, DMM fixtures, MISCREG/eFuse and the read-only partition captures."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0506-E0509",
+  "E0525:a6400a",
+  "E0532:a6400a",
+  "E0552",
+  "E0554",
+  "E0643",
+  "E0667-E0675",
+  "0678-qemu-ilce-6400a-captured-firmware-boot.md",
+  "0679-ilce-6400a-mod-loader-v2-and-mods-port.md",
+]
+
+[[entity]]
+id = "body.ilce6400a"
+kind = "usb-identity"
+name = "ILCE-6400A firmware 1.01 (reference target)"
+aliases = ["054C:0F0F", "8.2.7.6"]
+summary = "Second a6400 variant qualified as a reference target: kernel 8.2.7.6, Mass Storage identity verified natively; no root debugger."
+
+[[entity]]
+id = "proc.jiritsu-senser"
+kind = "process"
+name = "Jiritsu / Senser service packets"
+aliases = ["libJiritsu", "GET_FILE", "0xFF01", "RAM_READ"]
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libJiritsu.so"]
+summary = "Sony service-mode routing (Jiritsu) with Senser encoding: offline packet fixtures, live authenticated entry, file-read refusal and the fixed nflasha5 reader route."
+
+[[entity]]
+id = "proc.partition-capture"
+kind = "process"
+name = "Read-only partition capture"
+aliases = ["nflasha5", "msc-lun1.bin", "plan-chunk-dump"]
+summary = "Captures of ILCE-6400A partitions through guarded readers: first nflasha5 (62,914,560 bytes), MSC LUN 1, then all 17 allowed nonzero nflasha partitions."
+
+[[entity]]
+id = "soc.miscreg-efuse"
+kind = "device"
+name = "MISCREG / eFuse MMIO"
+address = "0xF2915000"
+summary = "Live ILCE-6400 MISCREG/eFuse values 0xF2915000 = 0x00000500 and 0xF2915010 = 0x0c01002b read with a bounded single-page /dev/mem probe."
+
+[[claim]]
+id = "C01"
+entities = ["body.ilce6400a"]
+status = "verified-physical"
+text = "ILCE-6400A 1.01 was qualified as a reference target with its kernel, partition, MMIO and emulator-hook map; the native read-only transport hit an unresolved model-info BUSY before MSC reply lifetime fixes verified the native identity."
+evidence = ["E0506", "E0507", "E0508", "E0509"]
+
+[[claim]]
+id = "C02"
+entities = ["proc.jiritsu-senser"]
+status = "verified-offline"
+text = "Jiritsu routing and Senser encoding reproduce offline packet fixtures; explicit DMM fixtures cover 24-byte metadata, share/open counters and bounded borrowed replies to a memory-only sink, with USB disabled."
+evidence = ["E0525:a6400a", "E0532:a6400a"]
+
+[[claim]]
+id = "C03"
+entities = ["proc.jiritsu-senser"]
+status = "verified-offline"
+text = "ILCE-6400A nflasha5 is a WBI1 image that names Jiritsu, and 1.01 libJiritsu dispatches GET_FILE on halfword 8."
+evidence = ["E0552", "E0554"]
+
+[[claim]]
+id = "C04"
+entities = ["soc.miscreg-efuse", "proc.partition-capture"]
+status = "verified-physical"
+text = "Neither DGU5 nor the ILCE-6400 / ILCE-6400A kernels verify kernel signatures; live MISCREG/eFuse values were read with a bounded single-page /dev/mem probe; a single-slot <= 512 KiB chunk planner was added."
+evidence = ["E0643"]
+
+[[claim]]
+id = "C05"
+entities = ["proc.jiritsu-senser", "body.ilce6400a"]
+status = "verified-physical"
+text = "Bounded debugger ioctl fixtures pass, but feature 0x23 returns 05/20/00 with no data; repeated live Senser authentication works and the bounded file request returns 0xFF01 / status 0x80 with zero payload."
+evidence = ["E0667", "E0668"]
+
+[[claim]]
+id = "C06"
+entities = ["proc.jiritsu-senser"]
+status = "verified-offline"
+text = "Offline Senser dispatch reproduces the missing-handler 0x80 decision; Ghidra finds a level-3 fallback to a fixed read-only /dev/nflasha5 callback; fixed-reader framing and completion controls and a guarded acquisition client were built without weakening FF01 guards."
+evidence = ["E0669", "E0670", "E0671", "E0672"]
+
+[[claim]]
+id = "C07"
+entities = ["proc.partition-capture"]
+status = "verified-physical"
+text = "The first real ILCE-6400A nflasha5 partition was captured (62,914,560 bytes, SHA-256 d131b73f...) with independent host readback agreement; STOP remained unacknowledged."
+evidence = ["E0673"]
+
+[[claim]]
+id = "C08"
+entities = ["proc.partition-capture"]
+status = "verified-physical"
+text = "2,097,152 genuine MSC LUN 1 bytes were saved through unchanged USBSTOR (SHA-256 824fb214...); the matching-size nflasha23 backing is unattested. An expanded review obtained no further bytes."
+evidence = ["E0674", "E0675"]
+
+[[claim]]
+id = "C09"
+entities = ["proc.partition-capture"]
+status = "verified-physical"
+text = "A native reader captured and SHA-256 verified all 17 allowed nonzero nflasha partitions (1,354,694,656 bytes) without lowering the 8-MiB memory guard; nflasha5 matches E0673 bit for bit. nflasha23 and the whole device stay unacquired, and mounted partitions are live snapshots."
+evidence = ["E0643"]
+
+[[frontier]]
+id = "F01"
+title = "Remaining ILCE-6400A flash boundary"
+state = "open"
+entities = ["proc.partition-capture"]
+evidence = ["E0643", "E0675"]
+next = "Excluded nflasha23 and the whole-device image remain; mounted partitions are non-atomic snapshots. Any further capture needs an explicit scope decision, not a weakened guard."
+
+[[hazard]]
+id = "H01"
+title = "Lowering the reader memory guard"
+effect = "Free memory below the 8-MiB floor risks the live camera during transfers."
+rule = "Keep the 8,192-KiB guard; reclaim page cache read-only (POSIX_FADV_DONTNEED) instead of lowering it."
+evidence = ["E0643"]
+
+[[hazard]]
+id = "H02"
+title = "Service-mode side effects"
+effect = "Native feature 7 can delete/back up configuration before a getter; Ghidra shows internal-flash effects before the Jiritsu library load."
+rule = "No speculative loader, driver change or mode entry; review body-specific entry and cleanup contracts first."
+evidence = ["E0669", "E0675"]

@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sony a6400 · QEMU</title>
+<style>
+  :root { color-scheme: dark; font: 16px system-ui, sans-serif; color: #ecece9; background: #191918 }
+  * { box-sizing: border-box }
+  body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: 1rem }
+  main { width: min(950px, 100%) }
+  header { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin: 0 0 .8rem;
+    flex-wrap: wrap }
+  h1 { font-size: .95rem; font-weight: 550; margin: 0 .3rem 0 0; white-space: nowrap }
+  output { color: #c7c5be; font-size: .8rem }
+  .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem }
+  .toolbar .sep { width: 1px; align-self: stretch; background: #414141; margin: 0 .25rem }
+  .tool { position: static; transform: none; min-height: 0; border-radius: 7px; padding: .32em .65em;
+    font: 550 .78rem system-ui, sans-serif; box-shadow: 0 1px 2px #0008; display: inline-flex; gap: .35em;
+    align-items: center }
+  .tool[aria-pressed="true"] { background: #6b4a1f; border-color: #b07a35 }
+  .watch { display: none; gap: .3rem; align-items: center; width: 100%; margin-top: .45rem }
+  .watch.open { display: flex }
+  .watch input { flex: 1; min-width: 0; background: #121212; color: inherit; border: 1px solid #565655;
+    border-radius: 6px; padding: .35em .5em; font: .8rem ui-monospace, monospace }
+  .mods { margin-top: .8rem; border: 1px solid #333; border-radius: 10px; padding: .55rem .7rem;
+    font-size: .8rem; background: #151514 }
+  .mods h2 { font-size: .8rem; font-weight: 600; margin: 0 0 .4rem; color: #c7c5be }
+  .mods table { width: 100%; border-collapse: collapse }
+  .mods td { padding: .25rem .3rem; border-top: 1px solid #262625; vertical-align: middle }
+  .mods td.last { color: #c7c5be; font: .74rem ui-monospace, monospace }
+  .mods td.act { text-align: right; white-space: nowrap }
+  .mods .empty { color: #a09d98 }
+  .mods details { margin-top: .5rem; font: .74rem ui-monospace, monospace; color: #c7c5be }
+  .mods summary { cursor: pointer; font-family: system-ui, sans-serif }
+  .mods pre, .mods ol { margin: .35rem 0 0; max-height: 11rem; overflow: auto; white-space: pre-wrap }
+  .mods ol { padding-left: 1.2rem }
+  body.dragging main { outline: 2px dashed #f1b86d; outline-offset: 8px; border-radius: 14px }
+  .camera { display: grid; grid-template-columns: 1fr 24%; gap: 1%; padding: 2%;
+    border: 1px solid #414141; border-radius: 19px;
+    background: linear-gradient(148deg, #303030, #181818 55%, #101010);
+    box-shadow: 0 12px 40px #0009, inset 0 1px 1px #ffffff26 }
+  /* The rear LCD is a 16:9 panel scanned as 640x480 (4:3-wide pixels); the firmware draws its OSD
+     pre-squeezed (E0298), so the 640x480 frame is shown stretched to 16:9 like the panel. */
+  .lcd { display: block; align-self: end; width: 100%; aspect-ratio: 16 / 9;
+    background: #000; border: 4px solid #121212; border-radius: 8px; object-fit: fill;
+    cursor: crosshair; touch-action: none; user-select: none; -webkit-user-drag: none }
+  .controls { position: relative; min-height: 17rem; container-type: inline-size }
+  button { position: absolute; border: 1px solid #565655; color: inherit; background: linear-gradient(#3a3a39,#1a1a19);
+    font: 600 clamp(9px,8cqw,15px) system-ui, sans-serif; border-radius: 40%;
+    cursor: pointer; box-shadow: 0 2px 3px #000b; padding: .25em .45em;
+    min-height: 2em; transform: translate(-50%, -50%); touch-action: manipulation }
+  button:focus-visible { outline: 2px solid #f1b86d; outline-offset: 3px }
+  button:active { background: #52514d; box-shadow: inset 0 2px 5px #111 }
+  button:disabled { color: #a09d98; cursor: default; border-color: #414140 }
+  .flash { left: 14%; top: 6% }
+  .menu { left: 41%; top: 6% }
+  .lever { left: 59%; top: 19%; width: 53%; border-radius: 12px; font-size: clamp(8px, 6cqw, 12px) }
+  .af-button { left: 85%; top: 19%; aspect-ratio: 1; border-radius: 50% }
+  .movie { left: 90%; top: 35%; border-radius: 50%; aspect-ratio: 1; color: #f37a6e }
+  .fn { left: 29%; top: 41% }
+  .wheel { position: absolute; left: 51%; top: 64%; width: 78%; aspect-ratio: 1; transform: translate(-50%,-50%);
+    border: 5px solid #444442; border-radius: 50%; background: radial-gradient(#353534,#252524 67%,#161615 68%);
+    box-shadow: 0 3px 5px #000a }
+  .wheel button { background: transparent; box-shadow: none; border-radius: 5px; border-color: transparent }
+  .wheel button:active { background: #55534c }
+  .wheel .center { width: 35%; aspect-ratio: 1; border-radius: 50%; border: 1px solid #555;
+    background: linear-gradient(#343433,#222221); left: 50%; top: 50% }
+  .disp { left: 50%; top: 14% }
+  .drive { left: 14%; top: 50% }
+  .iso { left: 84%; top: 50% }
+  .exposure { left: 50%; top: 85% }
+  .play { left: 28%; top: 89% }
+  .delete { left: 74%; top: 89% }
+  @media (max-width: 540px) {
+    body { padding: .35rem }
+    .camera { grid-template-columns: 1fr 27% }
+    .controls { min-height: 12rem }
+    .wheel { width: 89%; border-width: 3px }
+  }
+</style>
+<main>
+  <header>
+    <div class="toolbar" role="toolbar" aria-label="Emulator tools">
+      <h1>Sony a6400</h1>
+      <button class="tool" id="load" data-needs-mods title="Load .mod files into the running camera (or drop them on the page)">＋ Load mod</button>
+      <input type="file" id="file" accept=".mod" multiple hidden>
+      <button class="tool" id="watch-toggle" data-needs-mods aria-expanded="false" title="Watch a build output and hot-reload it on every rebuild">◉ Watch build…</button>
+      <button class="tool" id="reload-all" data-needs-mods title="Reload every loaded mod now">↻ Reload all</button>
+      <button class="tool" id="core" data-needs-mods title="Push the Mod Loader core again">⟳ Core</button>
+      <button class="tool" id="rescan" data-needs-mods title="Press MENU so the menu root (and Mods list) is rebuilt">☰ Rescan</button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="tool" id="pause" aria-pressed="false" title="Pause or resume the emulated CPUs">⏸ Pause</button>
+      <button class="tool" id="restart" title="Reboot QEMU; loaded mods are installed again">⟲ Restart</button>
+      <a class="tool" id="frame" href="/lcd.png" download="a6400-lcd.png" title="Save the current LCD frame" style="text-decoration:none;color:inherit;border:1px solid #565655;background:linear-gradient(#3a3a39,#1a1a19)">⤓ Frame</a>
+    </div>
+    <output id="status" aria-live="polite">Connecting to QEMU…</output>
+    <form class="watch" id="watch">
+      <input id="watch-path" placeholder="Path of a .mod build output, e.g. C:\…\artifacts\tests\NEW_MTF\MenuTouchFull.mod" aria-label="Mod file to watch">
+      <button class="tool" type="submit">Watch</button>
+    </form>
+  </header>
+  <div class="camera">
+    <img class="lcd" id="lcd" alt="Live display from the a6400 firmware">
+    <div class="controls" aria-label="Rear camera controls">
+      <button class="flash" data-key="flash" aria-label="Flash pop-up" title="Flash pop-up">ϟ</button>
+      <button class="menu" data-key="menu">MENU</button>
+      <button class="lever" data-key="af-lever" aria-label="AF/MF–AEL selector" title="Toggle AF/MF–AEL selector">AF/MF · AEL</button>
+      <button class="af-button" data-key="af-button" aria-label="AF/MF–AEL button" title="AF/MF–AEL button">●</button>
+      <button class="movie" data-key="movie" aria-label="Movie record" title="Movie record">●</button>
+      <button class="fn" data-key="fn">Fn</button>
+      <div class="wheel" role="group" aria-label="Control wheel" title="Scroll to rotate the control wheel">
+        <button class="disp" data-key="disp" aria-label="Up / DISP">DISP</button>
+        <button class="drive" data-key="drive" aria-label="Left / Drive mode">◂</button>
+        <button class="center" data-key="center" aria-label="Center / Confirm">●</button>
+        <button class="iso" data-key="iso" aria-label="Right / ISO">ISO</button>
+        <button class="exposure" data-key="exposure" aria-label="Down / Exposure compensation">±</button>
+      </div>
+      <button class="play" data-key="play" aria-label="Playback" title="Playback">▶</button>
+      <button class="delete" data-key="delete" aria-label="C2 / Delete" title="C2 / Delete">C2</button>
+    </div>
+  </div>
+  <div role="group" aria-label="Shutter controls">
+    <button data-key="shutter-half">Half-press shutter</button>
+    <button data-key="shutter-full">Full press shutter</button>
+    <button data-key="power-lever">Toggle power lever</button>
+  </div>
+  <section class="mods" id="mods" hidden aria-label="Loaded mods">
+    <h2>Mods · <span id="moddev-state">…</span></h2>
+    <table><tbody id="mod-rows"></tbody></table>
+    <details id="log-box"><summary>Loader log</summary><pre id="loader-log">…</pre></details>
+    <details><summary>Events</summary><ol id="moddev-events"></ol></details>
+  </section>
+</main>
+<script>
+  const lcd = document.querySelector('#lcd');
+  const status = document.querySelector('#status');
+  let frame;
+  let inputError = false;
+  let noteUntil = 0;              // toolbar messages stay visible for a few seconds
+  async function refresh() {
+    try {
+      const response = await fetch('/lcd.png', { cache: 'no-store' });
+      if (!response.ok) throw new Error(response.status);
+      const next = URL.createObjectURL(await response.blob());
+      lcd.src = next;
+      if (frame) URL.revokeObjectURL(frame);
+      frame = next;
+      if (!inputError && performance.now() > noteUntil) {
+        status.textContent = response.headers.get('X-Camera-LCD') === 'blank'
+          ? 'QEMU LCD output is blank' : 'Live QEMU LCD';
+      }
+    } catch {
+      lcd.removeAttribute('src');
+      if (frame) URL.revokeObjectURL(frame);
+      frame = undefined;
+      status.textContent = 'QEMU LCD unavailable';
+    }
+    setTimeout(refresh, 600);
+  }
+  async function press(key) {
+    try {
+      const response = await fetch('/press/' + key, {
+        method: 'POST', headers: {'X-Camera-Panel': '1'}
+      });
+      if (!response.ok) throw new Error(response.status);
+      inputError = false;
+    } catch {
+      inputError = true;
+      status.textContent = 'Camera input unavailable';
+    }
+  }
+  document.querySelectorAll('[data-key]').forEach(button => {
+    button.addEventListener('click', () => press(button.dataset.key));
+  });
+  let touchPointerId = null;
+  let lastTouchMove = 0;
+  function lcdCoords(event) {
+    const rect = lcd.getBoundingClientRect();
+    const x = rect.width > 0 ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) : 0.5;
+    const y = rect.height > 0 ? Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) : 0.5;
+    return { x, y };
+  }
+  async function sendTouch(action, event) {
+    const { x, y } = lcdCoords(event);
+    try {
+      const response = await fetch('/touch', {
+        method: 'POST',
+        headers: { 'X-Camera-Panel': '1', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, x, y })
+      });
+      if (!response.ok) throw new Error(response.status);
+      inputError = false;
+    } catch {
+      inputError = true;
+      status.textContent = 'Camera touch input unavailable';
+    }
+  }
+  lcd.addEventListener('dragstart', event => event.preventDefault());
+  lcd.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || touchPointerId !== null) return;
+    event.preventDefault();
+    touchPointerId = event.pointerId;
+    lcd.setPointerCapture(event.pointerId);
+    lastTouchMove = performance.now();
+    sendTouch('down', event);
+  });
+  lcd.addEventListener('pointermove', event => {
+    if (event.pointerId !== touchPointerId) return;
+    const now = performance.now();
+    if (now - lastTouchMove >= 25) {
+      lastTouchMove = now;
+      sendTouch('move', event);
+    }
+  });
+  function finishTouch(event) {
+    if (event.pointerId !== touchPointerId) return;
+    touchPointerId = null;
+    sendTouch('up', event);
+  }
+  lcd.addEventListener('pointerup', finishTouch);
+  lcd.addEventListener('pointercancel', finishTouch);
+  let lastDetent = 0;
+  document.querySelector('.wheel').addEventListener('wheel', event => {
+    if (event.ctrlKey || !event.deltaY) return;
+    event.preventDefault();
+    const now = performance.now();
+    if (now - lastDetent >= 200) {
+      lastDetent = now;
+      press(event.deltaY > 0 ? 'wheel-right' : 'wheel-left');
+    }
+  }, {passive: false});
+  document.addEventListener('keydown', event => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) return;
+    if (event.key === '[' || event.key === ']') {
+      event.preventDefault();
+      press(event.key === ']' ? 'wheel-right' : 'wheel-left');
+    }
+  });
+  const $ = s => document.querySelector(s);
+  let modsEnabled = false;
+  function note(text) { status.textContent = text; noteUntil = performance.now() + 5000; }
+  async function post(path, body, type) {
+    const response = await fetch(path, {
+      method: 'POST', body,
+      headers: Object.assign({'X-Camera-Panel': '1'}, type ? {'Content-Type': type} : {})
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || response.statusText || response.status);
+    return data;
+  }
+  async function act(label, path, body, type) {
+    try { await post(path, body, type); note(label); moddev(); }
+    catch (error) { note(label.split(':')[0] + ' failed: ' + error.message); }
+  }
+  async function upload(files) {
+    for (const file of files) {
+      if (!file.name.endsWith('.mod')) { note(file.name + ' is not a .mod file'); continue; }
+      await act('Loading ' + file.name + '…', '/mods/upload?name=' + encodeURIComponent(file.name),
+                await file.arrayBuffer(), 'application/octet-stream');
+    }
+  }
+  function cell(text, cls) {
+    return Object.assign(document.createElement('td'), { textContent: text, className: cls || '' });
+  }
+  function tool(text, title, onclick) {
+    const b = Object.assign(document.createElement('button'), { textContent: text, title, onclick });
+    b.className = 'tool';
+    return b;
+  }
+  function renderMods(list) {
+    const rows = list.map(m => {
+      const tr = document.createElement('tr');
+      const name = cell(m.name); name.title = m.path;
+      const act_ = cell('', 'act');
+      act_.append(tool('↻', 'Reload ' + m.name, () => act('Reloading ' + m.name + '…', '/mods/reload/' + encodeURIComponent(m.name))),
+                  tool('✕', 'Stop watching and delete the guest copy (switch it OFF in the Mods menu first)',
+                       () => act('Removed ' + m.name, '/mods/remove/' + encodeURIComponent(m.name))));
+      tr.append(name, cell(m.last || 'loaded', 'last'), act_);
+      return tr;
+    });
+    if (!rows.length) {
+      const tr = document.createElement('tr');
+      tr.append(cell('No mods loaded. Use “Load mod” or drop .mod files here.', 'empty'));
+      rows.push(tr);
+    }
+    $('#mod-rows').replaceChildren(...rows);
+  }
+  async function moddev() {
+    try {
+      const response = await fetch('/moddev', { cache: 'no-store' });
+      if (response.status === 404) { setModsEnabled(false); return; }
+      const s = await response.json();
+      setModsEnabled(true);
+      $('#mods').hidden = false;
+      $('#moddev-state').textContent = s.state + (s.queued ? ` (${s.queued} queued)` : '');
+      renderMods(s.mods || []);
+      $('#moddev-events').replaceChildren(
+        ...s.events.map(e => Object.assign(document.createElement('li'), { textContent: e })));
+    } catch {}
+  }
+  function setModsEnabled(on) {
+    modsEnabled = on;
+    document.querySelectorAll('[data-needs-mods]').forEach(b => {
+      b.disabled = !on;
+      if (!on) b.title = 'Start the panel with --loader (the launcher does this) to load mods';
+    });
+  }
+  async function emu() {
+    try {
+      const s = await (await fetch('/emu', { cache: 'no-store' })).json();
+      const paused = s.running === false;
+      $('#pause').setAttribute('aria-pressed', String(paused));
+      $('#pause').textContent = paused ? '▶ Resume' : '⏸ Pause';
+    } catch {}
+  }
+  $('#load').onclick = () => $('#file').click();
+  $('#file').onchange = event => { upload(event.target.files); event.target.value = ''; };
+  $('#watch-toggle').onclick = () => {
+    const open = $('#watch').classList.toggle('open');
+    $('#watch-toggle').setAttribute('aria-expanded', String(open));
+    if (open) $('#watch-path').focus();
+  };
+  $('#watch').onsubmit = event => {
+    event.preventDefault();
+    act('Watching ' + $('#watch-path').value, '/mods/watch',
+        JSON.stringify({ path: $('#watch-path').value }), 'application/json');
+  };
+  $('#reload-all').onclick = async () => {
+    const s = await (await fetch('/moddev', { cache: 'no-store' })).json();
+    for (const m of s.mods || []) await act('Reloading ' + m.name + '…', '/mods/reload/' + encodeURIComponent(m.name));
+  };
+  $('#core').onclick = () => act('Core queued for push', '/loader/core');
+  $('#rescan').onclick = () => act('MENU pressed to rebuild the menu root', '/loader/rescan');
+  $('#pause').onclick = () => act($('#pause').getAttribute('aria-pressed') === 'true' ? 'Resumed' : 'Paused',
+    $('#pause').getAttribute('aria-pressed') === 'true' ? '/emu/resume' : '/emu/pause').then(emu);
+  $('#restart').onclick = () => {
+    if (confirm('Reboot QEMU? Loaded mods are installed again after boot (about 40 s).'))
+      act('Restarting QEMU…', '/emu/restart');
+  };
+  setInterval(() => $('#log-box').open && $('#log-box').ontoggle(), 3000);   // guest log only while open
+  $('#log-box').ontoggle = async () => {
+    if (!$('#log-box').open) return;
+    try { $('#loader-log').textContent = (await (await fetch('/moddev/log')).json()).loader_log?.join('\n') || '(empty)'; }
+    catch { $('#loader-log').textContent = 'unavailable'; }
+  };
+  let dragDepth = 0;
+  addEventListener('dragenter', e => { if (modsEnabled) { dragDepth++; document.body.classList.add('dragging'); e.preventDefault(); } });
+  addEventListener('dragover', e => { if (modsEnabled) e.preventDefault(); });
+  addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+  addEventListener('drop', e => {
+    if (!modsEnabled) return;
+    e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+    upload(e.dataTransfer.files);
+  });
+  setInterval(moddev, 1500);
+  setInterval(emu, 3000);
+  emu();
+  refresh();
+  moddev();
+</script>
+</html>
