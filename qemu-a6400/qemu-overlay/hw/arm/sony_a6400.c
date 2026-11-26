@@ -2515,14 +2515,17 @@ static void sony_set_dwc3_gadget(Object *obj, bool enabled, Error **errp)
 }
 
 /*
- * Opt-in hardware watchdog (Custom OS prerequisite 3, E0636).  The stock
- * kernel's cxd900x0_wdt_setup/start/stop and watchdog_touch/tick
+ * Hardware watchdog, on by default (Custom OS prerequisite 3, E0636).  The
+ * stock kernel's cxd900x0_wdt_setup/start/stop and watchdog_touch/tick
  * (nflasha3-Image, 0x60120050..0x60120534) drive one CXD4115 channel at
  * 0xF2402000: CTRL 0x80000012, CMP 1001 * timeout_ms, CTRL 0x80001012
- * (START), kick CLR 0x10, stop CTRL 0 + CLR 0x11.  Off by default so the
- * earlier unmodelled (write-dropped) baseline is unchanged.
+ * (START), kick CLR 0x10, stop CTRL 0 + CLR 0x11.
+ *
+ * L0159: default on so the E0636 model serves the kernel's watchdog setup and
+ * kicks; a missed kick resets the machine (-action watchdog=).  watchdog=off
+ * restores the write-dropped behaviour.
  */
-static bool sony_a6400_watchdog;
+static bool sony_a6400_watchdog = true;
 
 static bool sony_get_watchdog(Object *obj, Error **errp)
 {
@@ -5125,8 +5128,9 @@ static void sony_cxd90045_common_machine_init(MachineClass *mc,
     object_class_property_add_bool(OBJECT_CLASS(mc), "watchdog",
                                    sony_get_watchdog, sony_set_watchdog);
     object_class_property_set_description(OBJECT_CLASS(mc), "watchdog",
-        "Model the CXD4115 hardware watchdog at 0xF2402000; expiry follows "
-        "-action watchdog= (E0636)");
+        "Model the CXD4115 hardware watchdog at 0xF2402000 (default on); "
+        "expiry follows -action watchdog=; watchdog=off drops the writes "
+        "(E0636)");
     object_class_property_add_bool(OBJECT_CLASS(mc), "work-dma",
                                    sony_get_work_dma, sony_set_work_dma);
     object_class_property_set_description(OBJECT_CLASS(mc), "work-dma",
