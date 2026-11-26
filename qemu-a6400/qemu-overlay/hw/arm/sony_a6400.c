@@ -3478,6 +3478,54 @@ static const Cxd90045F292Rule cxd90045_f290_rules[] = {
       "kernel clk-init write/read pair; read returns 0 (F-0104) (L0116)" },
 };
 
+/*
+ * L0118: four clock/reset-group pages next to the f2a_clk siblings
+ * (0xF2A01000..0xF2A30000, f2a_bases[] below, which reads back written values
+ * and is NOT extended).  F-0107 names 0xF2A00000 and 0xF2A10000 as the
+ * group's offset-0 pages; 0xF2A20000 and 0xF2A32000 are added from the
+ * baseline unmodelled list only.  All four are ZERO-only windows: every row
+ * reads 0, the catch-all value, and writes are stored but never read back.
+ * F-0107 classifies +0x004/+0x008/+0x024/+0x028 as read-modify-write (RF);
+ * RF is deferred until their read-back values are captured, so these rows are
+ * ZERO.  Write-only rows also answer an (unobserved) read with 0 instead of
+ * logging it.  Unruled offsets still log as unmodelled.
+ */
+static const Cxd90045F292Rule cxd90045_f2a0_rules[] = {
+    { 0x008, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x024, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x028, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x0A4, CXD90045_F292_ZERO,
+      "write-only; the value is stored but never read back (F-0107) (L0118)" },
+};
+
+static const Cxd90045F292Rule cxd90045_f2a1_rules[] = {
+    { 0x004, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x008, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x024, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x028, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+};
+
+static const Cxd90045F292Rule cxd90045_f2a2_rules[] = {
+    { 0x024, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+    { 0x028, CXD90045_F292_ZERO,
+      "read/write pair; read returns 0, the catch-all value (F-0107) (L0118)" },
+};
+
+static const Cxd90045F292Rule cxd90045_f2a3_rules[] = {
+    { 0x030, CXD90045_F292_ZERO,
+      "write-only; the value is stored but never read back (F-0107) (L0118)" },
+    { 0x1A0, CXD90045_F292_ZERO,
+      "write-only; the value is stored but never read back (F-0107) (L0118)" },
+};
+
 typedef struct Cxd90045F292 {
     MemoryRegion mmio;
     const Cxd90045F292Rule *rules;
@@ -4625,6 +4673,23 @@ static void sony_a6400_init(MachineState *machine)
     cxd90045_f292_create(sysmem, 0xF2900000ULL, 0x1000ULL,
                          "cxd90045.f290", cxd90045_f290_rules,
                          ARRAY_SIZE(cxd90045_f290_rules));
+
+    /*
+     * L0118: clock/reset-group pages beside f2a_clk, ZERO-only, priority -600.
+     * The f2a_clk siblings at 0xF2A01000/0xF2A11000/... are separate pages.
+     */
+    cxd90045_f292_create(sysmem, 0xF2A00000ULL, 0x1000ULL,
+                         "cxd90045.f2a0", cxd90045_f2a0_rules,
+                         ARRAY_SIZE(cxd90045_f2a0_rules));
+    cxd90045_f292_create(sysmem, 0xF2A10000ULL, 0x1000ULL,
+                         "cxd90045.f2a1", cxd90045_f2a1_rules,
+                         ARRAY_SIZE(cxd90045_f2a1_rules));
+    cxd90045_f292_create(sysmem, 0xF2A20000ULL, 0x1000ULL,
+                         "cxd90045.f2a2", cxd90045_f2a2_rules,
+                         ARRAY_SIZE(cxd90045_f2a2_rules));
+    cxd90045_f292_create(sysmem, 0xF2A32000ULL, 0x1000ULL,
+                         "cxd90045.f2a3", cxd90045_f2a3_rules,
+                         ARRAY_SIZE(cxd90045_f2a3_rules));
 
     /*
      * I2C controller channel 0 at 0xF2401000 (4 KiB, E0525: i2c-sony driver
