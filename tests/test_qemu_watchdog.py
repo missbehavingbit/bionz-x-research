@@ -1,5 +1,6 @@
-"""Opt-in QEMU sony-a6400 hardware watchdog (CXD4115 channel at 0xF2402000, E0636).
+"""QEMU sony-a6400 hardware watchdog (CXD4115 channel at 0xF2402000, E0636).
 
+The watchdog is on by default since L0159; watchdog=off drops the writes.
 The register sequence is the one the stock kernel writes (nflasha3-Image
 cxd900x0_wdt_setup/start/stop and watchdog_touch, observed 7,527 times per
 run in the E0524 unimp access log).
@@ -44,12 +45,22 @@ class QemuWatchdogTests(unittest.TestCase):
         self.qtest(proc, pending, f'clock_step {TIMEOUT_NS - 400000000 - 1000}')
         self.assertEqual(self.qtest(proc, pending, f'readl {WDT:#x}'), CTRL_RUN)
 
-    def test_default_machine_drops_watchdog_writes(self):
-        proc, root, pending = self.start_wdt('sony-a6400')
+    def test_disabled_watchdog_drops_writes(self):
+        proc, root, pending = self.start_wdt('sony-a6400,watchdog=off')
         self.assertEqual(self.qtest(proc, pending, f'readl {WDT:#x}'), 0)
         self.qtest(proc, pending, f'clock_step {2 * TIMEOUT_NS}')
         self.assertEqual(self.qtest(proc, pending, f'readl {WDT:#x}'), 0)
         self.assertNotIn(b'cxd4115-wdt', (root / 'qemu.log').read_bytes())
+
+    def test_default_machine_expires_after_missed_kick(self):
+        proc, root, pending = self.start_wdt('sony-a6400')
+        self.kicked_until_last_step(proc, pending)
+        self.qtest(proc, pending, 'clock_step 2000')
+        # Default -action watchdog=reset: the device reset clears CTRL and CMP.
+        self.assertEqual(self.qtest(proc, pending, f'readl {WDT:#x}'), 0)
+        self.assertEqual(self.qtest(proc, pending, f'readl {WDT + 8:#x}'), 0)
+        log = (root / 'qemu.log').read_bytes()
+        self.assertIn(b'cxd4115-wdt: ch0 expired (ctrl=0x80001012 cmp=0x0007a314)', log)
 
     def test_missed_kick_resets_machine(self):
         proc, root, pending = self.start_wdt('sony-a6400,watchdog=on')

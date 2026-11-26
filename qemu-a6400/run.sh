@@ -30,8 +30,8 @@
 # USB_CID_HIGH=1 (opt-in FUSB CID bit 1 high / peripheral idle, E0587).
 # DWC3_GADGET (default on, E0590): CXD90045 DWC3 gadget at 0xF020C000 and IRQ 229.
 # Set DWC3_GADGET=0 to disable it.
-# WATCHDOG=1 (opt-in CXD4115 hardware watchdog at 0xF2402000, E0636; expiry follows
-# QEMU -action watchdog=, add e.g. QEMU_EXTRA="-icount shift=0,sleep=on -action watchdog=pause").
+# WATCHDOG (default on, E0636): CXD4115 hardware watchdog at 0xF2402000; expiry follows
+# QEMU -action watchdog=. Set WATCHDOG=0 to drop the writes (unmodelled baseline).
 # WORK_DMA=1 (opt-in work DMA copy channel at 0xF0102000, E0641).
 # F30A_FILL=1 (opt-in 0xF30A memory-fill engine at 0xF30A1280, E0642).
 # DDRB_CONTROL=1 (opt-in initialized DDR-B idle/active-mode sequence).
@@ -344,8 +344,8 @@ fi
 if [ "${PL330_DMA:-0}" = 1 ]; then
     MACHINE="$MACHINE,pl330-dma=on"
 fi
-if [ "${WATCHDOG:-0}" = 1 ]; then
-    MACHINE="$MACHINE,watchdog=on"
+if [ "${WATCHDOG:-1}" = 0 ]; then
+    MACHINE="$MACHINE,watchdog=off"
 fi
 if [ "${WORK_DMA:-0}" = 1 ]; then
     MACHINE="$MACHINE,work-dma=on"

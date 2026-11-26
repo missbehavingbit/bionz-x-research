@@ -12275,6 +12275,9 @@
     "0705-qemu-dwc3-gadget-default-on-boot-score.md": [
       "qemu-a6400"
     ],
+    "0706-qemu-watchdog-default-on-boot-score.md": [
+      "qemu-a6400"
+    ],
     "9001-l3-grm-osd-unit-4092e-refusal-and-newselect-timer-fix.md": [
       "l3-userspace"
     ],
