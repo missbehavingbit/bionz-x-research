@@ -18,7 +18,7 @@
 <rect x="408.117" y="68" width="217.574" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
 <rect x="473.157" y="68" width="152.534" height="26" rx="5" fill="#1f6feb" />
 <text x="417.117" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">evidence</text>
-<text x="482.157" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">736 indexed · 247 deep</text>
+<text x="482.157" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">737 indexed · 247 deep</text>
 <rect x="633.691" y="68" width="89.3904" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
 <rect x="692.851" y="68" width="30.2304" height="26" rx="5" fill="#d29922" />
 <text x="642.691" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">hazards</text>
@@ -99,7 +99,7 @@
 <text x="40" y="770" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">CXD90045 multi-device platform</text>
 <text x="434" y="770" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/20 · 13/1</text>
 <text x="40" y="790" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">QEMU sony-a6400 machine</text>
-<text x="434" y="790" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">60/73 · 22/4</text>
+<text x="434" y="790" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">60/74 · 22/4</text>
 <text x="40" y="810" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Storage, SD card and backup service</text>
 <text x="434" y="810" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/21 · 7/0</text>
 <text x="40" y="830" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">USB composite UVC/PTP on the physical camera (before EP0...</text>
@@ -111,17 +111,17 @@
 <text x="40" y="890" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Wi-Fi and remote control</text>
 <text x="434" y="890" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/15 · 6/1</text>
 <text x="40" y="912" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Evidence records indexed by an area</text>
-<text x="434" y="912" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">736 / 736 · 100.0%</text>
+<text x="434" y="912" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">737 / 737 · 100.0%</text>
 <rect x="40" y="918" width="394" height="6" rx="3" fill="#21262d" />
 <rect x="40" y="918" width="394" height="6" rx="3" fill="#1f6feb" />
 <text x="40" y="944" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Evidence records cited by curated claims</text>
-<text x="434" y="944" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">713 / 736 · 96.9%</text>
+<text x="434" y="944" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">713 / 737 · 96.7%</text>
 <rect x="40" y="950" width="394" height="6" rx="3" fill="#21262d" />
-<rect x="40" y="950" width="381.688" height="6" rx="3" fill="#8957e5" />
+<rect x="40" y="950" width="381.17" height="6" rx="3" fill="#8957e5" />
 <text x="40" y="976" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Evidence records deep-reviewed (read in full)</text>
-<text x="434" y="976" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">247 / 736 · 33.6%</text>
+<text x="434" y="976" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">247 / 737 · 33.5%</text>
 <rect x="40" y="982" width="394" height="6" rx="3" fill="#21262d" />
-<rect x="40" y="982" width="132.226" height="6" rx="3" fill="#2ea043" />
+<rect x="40" y="982" width="132.046" height="6" rx="3" fill="#2ea043" />
 <text x="486" y="609" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Remaining ILCE-6400A flash boundary</text>
 <text x="486" y="623" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · a6400a-acquisition</text>
 <text x="486" y="645" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  From RCRAW enable to an actual RAW/high-bit-depth recording</text>
@@ -159,6 +159,6 @@
 <rect x="382.72" y="1131" width="10" height="10" rx="2" fill="#21262d" stroke="#30363d" stroke-width="1" />
 <text x="398.72" y="1140" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">not yet mapped</text>
 <text x="24" y="1162" fill="#9da7b3" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Counts what the knowledge map describes, not an overall firmware compatibility percentage.</text>
-<text x="24" y="1178" fill="#9da7b3" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">All 736 evidence records are indexed; claims summarise them and the records stay authoritative.</text>
+<text x="24" y="1178" fill="#9da7b3" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">All 737 evidence records are indexed; claims summarise them and the records stay authoritative.</text>
 </g>
 </svg>

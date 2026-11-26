@@ -12239,6 +12239,9 @@
     "0693-qemu-gate-force-probe-step-26-stimulus.md": [
       "qemu-a6400"
     ],
+    "0694-qemu-clock-reset-f2a-zero-windows-boot-score.md": [
+      "qemu-a6400"
+    ],
     "0695-qemu-camcore-f312-write-only-row-boot-score.md": [
       "qemu-a6400"
     ],
