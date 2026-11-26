@@ -12269,6 +12269,9 @@
     "0704-qemu-fusb-f022-zero-rows-boot-score.md": [
       "qemu-a6400"
     ],
+    "0705-qemu-dwc3-gadget-default-on-boot-score.md": [
+      "qemu-a6400"
+    ],
     "9001-l3-grm-osd-unit-4092e-refusal-and-newselect-timer-fix.md": [
       "l3-userspace"
     ],

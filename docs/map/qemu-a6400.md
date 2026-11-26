@@ -4,7 +4,7 @@
 
 - **Scope:** The QEMU sony-a6400 board: captured four-core boot, av-cam and CamCore sequencing, SIO/sub-micro, display/rear panel, Ydet/CamPig, live-view frame, contributor scores, Custom OS handover guards and DMA engines.
 - **Evidence span:** see record index; last reviewed 2026-11-25.
-- **Deep review:** 60 of 72 records read in full and checked claim by claim ([curation plan](CURATION_PLAN.md)); the rest are curated from titles, lead paragraphs and consolidated documents.
+- **Deep review:** 60 of 73 records read in full and checked claim by claim ([curation plan](CURATION_PLAN.md)); the rest are curated from titles, lead paragraphs and consolidated documents.
 - **Status legend:** PHYSICAL = observed on the camera/host; OFFLINE = disassembly, Unicorn or static proof; INFERENCE = argued from evidence, not observed directly; RETRACTED/REFUTED = do not rely on, kept to prevent re-derivation.
 
 The evidence records are authoritative; follow the links before acting on a claim.
@@ -115,7 +115,7 @@ Do not rely on:
 
 - ~~The LIRO ram section filled through 0xF30A is a separate sub-core firmware image.~~ **R01** `RETRACTED` ([E0642](../evidence/0642-a6400-f30a-fill-engine-and-liro-ram-section.md)); see C13: The LIRO ram section copied by the work DMA is av-cam's own initialised RW data (1,878 references from av-cam code), not a sub-core image.
 
-## Record index (72 files)
+## Record index (73 files)
 
 Extracted from the files themselves: title, first date, and up to two lines that mention a correction, retraction or supersession. Every file under `docs/evidence/` belongs to at least one area.
 
@@ -193,3 +193,4 @@ Extracted from the files themselves: title, first date, and up to two lines that
 | [E0702](../evidence/0702-qemu-rcraw-idt-page-windows-boot-score.md) | 2026-11-25 | Boot score for a per-offset window on the `0xF3030000` RCRAW/IDT page |  |  |
 | [E0703](../evidence/0703-qemu-f304-aif-page-windows-boot-score.md) | 2026-11-25 | Boot score for a per-offset window on the `0xF3040000` AIF page |  |  |
 | [E0704](../evidence/0704-qemu-fusb-f022-zero-rows-boot-score.md) | 2026-11-25 | Boot score for ZERO-only rows on the `0xF0220000` FUSB block |  | A first read-back version of this window was measured and refuted: returning the guest's own last write made the / window does not overlap DWC3. It upheld the change with a comment correction only. |
+| [E0705](../evidence/0705-qemu-dwc3-gadget-default-on-boot-score.md) | 2026-11-26 | Boot score for the DWC3 gadget model enabled by default at `0xF020C000` |  | correction only: the retired set is six pairs, four writes and two reads, not the four |
