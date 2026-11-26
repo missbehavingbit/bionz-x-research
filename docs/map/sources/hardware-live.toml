@@ -1,0 +1,158 @@
+# Knowledge-map source: Live hardware observations and peripheral contracts.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "hardware-live"
+title = "Live hardware observations and peripheral contracts"
+scope = """
+Read-only observations of the physical ILCE-6400: GPIO, bus power, HDMI/CEC, touch input, display/OSD, GPES BAR, MISCREG and the /dev/mem safety boundary, lens interface."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0068",
+  "E0069",
+  "E0071-E0075",
+  "E0084",
+  "E0297",
+  "E0298",
+  "E0313",
+  "E0314",
+  "E0647",
+  "E0648",
+  "E0649",
+]
+
+[[entity]]
+id = "dev.gpio-buspower"
+kind = "device"
+name = "GPIO and USB bus-power drivers"
+inventory = ["kernel.modules:usb_buspwr", "kernel.modules:usbg_buspower"]
+summary = "GPIO driver contract and the USB bus-power kernel modules seen during L3 bring-up."
+
+[[entity]]
+id = "dev.hdmi-cec"
+kind = "device"
+name = "HDMI and CEC drivers"
+inventory = ["kernel.modules:hdmi", "kernel.modules:cec"]
+summary = "HDMI driver contract, the pipe subsystem boundary and /dev/cec."
+
+[[entity]]
+id = "dev.touch-input"
+kind = "device"
+name = "Touch panel and input event nodes"
+inventory = ["kernel.modules:input"]
+summary = "Live touch subsystem, input event nodes and the camera communication architecture."
+
+[[entity]]
+id = "dev.osd-display"
+kind = "device"
+name = "OSD A/B display planes"
+aliases = ["640x480 RGBA4444", "0x23A80000", "0x23B16000"]
+summary = "Two 640x480 RGBA4444 OSD planes at PA 0x23A80000 (A) and 0x23B16000 (B); captured safely through im.elf's existing mapping via ptrace."
+
+[[entity]]
+id = "dev.gpes-bar"
+kind = "device"
+name = "GPES BAR (SMAPH-S30) at 0xF1000000"
+address = "0xF1000000"
+summary = "128 KiB GPU register window: identity word 0x000b0000, IRQ status at +0x34, acks at +0x1000/+0xC18/+0x1C/+0x3C/+0x44, command block +0xE8..+0x170."
+
+[[entity]]
+id = "policy.devmem"
+kind = "process"
+name = "/dev/mem access policy"
+aliases = ["PA 0x000F8000", "devmem_policy.py"]
+summary = "Single-page /dev/mem reads are gated by tools/devmem_policy.py: verified pages only, per-address go-ahead for device/SRAM pages, the first MiB and holes forbidden."
+
+[[entity]]
+id = "dev.lens"
+kind = "device"
+name = "Body-lens (BL) interface"
+summary = "Body-lens focus command IDs and the capability gate; lens capability data is not readable from the Linux side."
+
+[[claim]]
+id = "C01"
+entities = ["dev.gpio-buspower"]
+status = "verified-offline"
+text = "The GPIO driver contract and the USB bus-power driver contract are modelled; L3 execution passes 100 million instructions at that boundary."
+evidence = ["E0068", "E0069"]
+
+[[claim]]
+id = "C02"
+entities = ["dev.hdmi-cec"]
+status = "verified-offline"
+text = "The HDMI driver contract, the pipe/poll path and the /dev/cec driver contract are modelled at about 88M instructions."
+evidence = ["E0072", "E0075", "E0076", "E0077"]
+
+[[claim]]
+id = "C03"
+entities = ["dev.gpio-buspower", "dev.osd-display"]
+status = "verified-physical"
+text = "Live hardware ground truth and boot telemetry were read from an ILCE-6400, including a native tally REC frame milestone."
+evidence = ["E0073", "E0074"]
+
+[[claim]]
+id = "C04"
+entities = ["dev.touch-input"]
+status = "verified-physical"
+text = "The live touch subsystem exposes input event nodes; the camera communication architecture was recorded from the running body."
+evidence = ["E0084"]
+
+[[claim]]
+id = "C05"
+entities = ["dev.osd-display"]
+status = "verified-physical"
+text = "OSD A/B (640x480 RGBA4444) can be captured safely through im.elf's existing mapping with ptrace; the Sugilite buffer is not a display."
+evidence = ["E0298"]
+
+[[claim]]
+id = "C06"
+entities = ["dev.gpes-bar"]
+status = "verified-physical"
+text = "A read-only physical observation of the GPES BAR, GRM state and OSAL tables decoded the BAR/IRQ contract used by the opt-in engine-completion model."
+evidence = ["E0313", "E0314"]
+
+[[claim]]
+id = "C07"
+entities = ["policy.devmem"]
+status = "verified-physical"
+text = "A single-page /dev/mem read of PA 0x000F8000 returned an AXI external abort that Sony's exception monitor turned into a warm reboot; the kernel does not guard /dev/mem."
+evidence = ["E0647"]
+
+[[claim]]
+id = "C08"
+entities = ["dev.lens"]
+status = "verified-physical"
+text = "Body-lens focus command IDs and a capability gate exist; with a Sigma 18-50 F2.8 DC DN attached, lens capability data is not readable from the Linux side."
+evidence = ["E0648", "E0649"]
+
+[[claim]]
+id = "R01"
+entities = ["dev.osd-display"]
+status = "retracted"
+text = "The live display contract from E0297 (display buffer identification)."
+evidence = ["E0297"]
+superseded_by = "C05"
+note = "E0297 carries an explicit 'Superseded display claim' pointer to E0298."
+
+[[claim]]
+id = "C09"
+entities = ["dev.gpio-buspower"]
+status = "verified-offline"
+text = "The setting overlay, media detection and the USB event driver contract were modelled."
+evidence = ["E0071"]
+
+[[hazard]]
+id = "H01"
+title = "Reading /dev/stream for OSD capture"
+effect = "The camera rebooted during the OSD probe."
+rule = "Never read /dev/stream for capture; use host-side ptrace of im.elf's existing mapping (E0298)."
+evidence = ["E0297", "E0298"]
+
+[[hazard]]
+id = "H02"
+title = "Unvetted /dev/mem pages"
+effect = "External abort on PA 0x000F8000 warm-rebooted the camera."
+rule = "Every /dev/mem access passes tools/devmem_policy.py; never bulk-scan physical memory or read DRAM through /dev/mem."
+evidence = ["E0647"]

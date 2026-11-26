@@ -1,0 +1,41 @@
+{
+  "schema": "bionz-film-sim-template/1",
+  "source": "mods/film_sims/template/film_sim_template.c",
+  "source_sha256": "394bade23f2fef190fb38aa40cd33db97e3deb9606d16a226ab19753f1731231",
+  "compiler": "arm-linux-gnueabi-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+  "flags": "-mthumb -mcpu=cortex-a5 -mfloat-abi=softfp -Os -ffreestanding -fno-builtin -nostdlib -nostartfiles -fno-stack-protector -fomit-frame-pointer -Wall -Wextra -Werror -fpie -fvisibility=hidden -Imods/film_sims/template",
+  "code_len": 3756,
+  "code_fnv1a_32": "0x79c5eb0d",
+  "code_sha256": "c86b26b1981b9929ed5846ca87d54e7e73d1be8604eb06e50646b4ed377d00d5",
+  "on_off": "0x1",
+  "off_off": "0x1",
+  "payload": {
+    "magic": "0x4b4c5a42",
+    "offset": 1152,
+    "size": 2604,
+    "fields": {
+      "magic": 0,
+      "ec_gamma_pa": 4,
+      "fc_gamma_pa": 8,
+      "color_a0_pa": 12,
+      "color_a1_pa": 16,
+      "color_b2_pa": 20,
+      "cc_tuning_pa": 24,
+      "refadr0_pa": 28,
+      "mod_tag": 32,
+      "mod_log_path": 64,
+      "ec_stock": 128,
+      "ec_sim": 512,
+      "fc_stock": 896,
+      "fc_sim": 1088,
+      "a0_stock": 1280,
+      "a0_sim": 1298,
+      "a1_stock": 1316,
+      "a1_sim": 1334,
+      "b2_stock": 1352,
+      "b2_sim": 1370,
+      "refadr_sim": 1388,
+      "pad": 2603
+    }
+  }
+}

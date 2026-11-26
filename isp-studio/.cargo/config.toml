@@ -1,0 +1,4 @@
+# Portable release: link the MSVC C runtime statically so `bionz-look-lab.exe` does not need
+# `vcruntime140.dll` / `msvcp140.dll` on a machine without the Visual C++ redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

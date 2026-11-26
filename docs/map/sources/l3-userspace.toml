@@ -1,0 +1,315 @@
+# Knowledge-map source: L3 user space: original im.elf under InterpreterProbe.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "l3-userspace"
+title = "L3 user space: original im.elf under InterpreterProbe"
+scope = """
+Original Sony user-space processes (interpreter, linker, libc/NPTL, UIPC/OSAL, DMM, timers, GRM, GLES/Sugilite) executed under InterpreterProbe with explicit guest contracts."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0001-E0008",
+  "E0015-E0028",
+  "E0033-E0055",
+  "E0063-E0067",
+  "E0070",
+  "E0076-E0083",
+  "E0095:uipc",
+  "E0096:proc-modules",
+  "E0097:mediadetect",
+  "E0300-E0302",
+  "E0305-E0309",
+  "E0311",
+  "E0312",
+  "E0526:stella",
+  "E0530:gles",
+  "E0657",
+  "E9001-E9006",
+]
+
+[[entity]]
+id = "process.im-elf"
+kind = "process"
+name = "im.elf (Sony main application process)"
+aliases = ["PID 149", "im.elf debug s g r u l i a lazy-global"]
+inventory = ["firmware.elf:nflasha15_unpacked/bin/im.elf"]
+summary = "Sony's main application process. On the camera it runs as PID 149 with argv 'im.elf debug s g r u l i a lazy-global' and about 181 threads. Executed unmodified under InterpreterProbe."
+
+[[entity]]
+id = "tool.interpreter-probe"
+kind = "tool"
+name = "InterpreterProbe (L3 user-space executor)"
+summary = "Bounded Unicorn user-space executor with explicit, opt-in guest contracts (syscalls, devices, mounts). Stops with PC, arguments and reason at anything unsupported."
+
+[[entity]]
+id = "lib.loader-libc"
+kind = "module"
+name = "ld-2.11.2.so and libc-2.11.2.so"
+inventory = ["firmware.elf:nflasha7_unpacked/lib/ld-2.11.2.so", "firmware.elf:nflasha7_unpacked/lib/libc-2.11.2.so"]
+summary = "Original dynamic linker and glibc 2.11.2. Their brk, mmap2, kuser-helper, TLS, NPTL and sysconf paths were the first L3 contracts."
+
+[[entity]]
+id = "lib.libobj"
+kind = "module"
+name = "libObj.so (application object library)"
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libObj.so"]
+summary = "20,860,436-byte application library holding the stella allocator, Appframework, GLES client and most application logic."
+
+[[entity]]
+id = "dev.uipc-osal"
+kind = "device"
+name = "/dev/uipc and the OSAL UIPC runtime"
+inventory = ["kernel.modules:osal_uipc", "firmware.elf:nflasha15_unpacked/lib/libosal_uipc.so"]
+summary = "Kernel UIPC character device plus libosal_uipc user-space queues, semaphores and callbacks used by every Sony process."
+
+[[entity]]
+id = "dev.dmm-grm"
+kind = "device"
+name = "DMM / GRM memory managers"
+aliases = ["unit 0x280", "unit 0x4092e", "GRM-MA"]
+inventory = ["kernel.modules:dmm", "kernel.modules:grm_ma"]
+summary = "Sony's DMM configuration/allocation service and the GRM memory allocator. Units name physical pools such as OSD A/B."
+
+[[entity]]
+id = "dev.timer"
+kind = "device"
+name = "Sony timer service (utimer / freerun)"
+inventory = ["kernel.modules:utimer"]
+summary = "Freerun timer, rollover and calendar services that the application programs through DMM-backed state."
+
+[[entity]]
+id = "dev.gles-sugilite"
+kind = "device"
+name = "grm_gles / Sugilite GPU path"
+aliases = ["dmpgles2", "SMAPH-S30", "IRQ 76"]
+inventory = ["kernel.modules:grm_gles", "firmware.elf:nflasha15_unpacked/kmod/grm_gles.ko"]
+summary = "DMP SMAPH-S30 GPU driver (grm_gles.ko, /dev/dmpgles2). 128 KiB software-shared memory plus a 16 KiB MMIO window; jobs complete through IRQ 76."
+
+[[entity]]
+id = "problem.l3-display"
+kind = "problem"
+name = "L3 display stays transparent"
+summary = "The first OSD A/B frames presented by unmodified im.elf are transparent because DefRootView waits for external av-cam / sub-micro producers."
+
+[[claim]]
+id = "C01"
+entities = ["tool.interpreter-probe", "lib.loader-libc"]
+status = "verified-offline"
+text = "The original interpreter executes to its first syscall; guarded brk, image-backed kernel identity and a read-only guest filesystem carry it into original library search and header reads."
+evidence = ["E0003", "E0004", "E0005", "E0006", "E0007"]
+
+[[claim]]
+id = "C02"
+entities = ["lib.loader-libc"]
+status = "verified-offline"
+text = "Guarded ARM EABI mmap2 and dynamic-linker library loading work; kuser helpers at 0xFFFF0FA0..0xFFFF0FFC, hardware TLS switching and shared-library initialization run original code."
+evidence = ["E0015", "E0016", "E0026"]
+
+[[claim]]
+id = "C03"
+entities = ["process.im-elf", "dev.uipc-osal"]
+status = "verified-offline"
+text = "im.elf's main entry uses the /dev/uipc IPC contract; stdio, UIPC callbacks, sys_clone threads, NPTL multithreading and a cooperative scheduler bring up its infrastructure threads."
+evidence = ["E0017", "E0018", "E0019", "E0027"]
+
+[[claim]]
+id = "C04"
+entities = ["dev.uipc-osal"]
+status = "verified-offline"
+text = "UIPC semaphores and message queues drive a 1 Hz application event-loop heartbeat; System V IPC semaphores are needed later for steady-state rendering."
+evidence = ["E0020", "E0080"]
+
+[[claim]]
+id = "C05"
+entities = ["dev.dmm-grm", "dev.timer"]
+status = "verified-offline"
+text = "Original DMM configuration, boot reservations and timer runtime were recovered; the timer clock origin, rollover, freerun state and message ABI execute as original code."
+evidence = ["E0035", "E0036", "E0037", "E0040", "E0041", "E0042"]
+
+[[claim]]
+id = "C06"
+entities = ["dev.dmm-grm"]
+status = "verified-offline"
+text = "A captured GRM allocator list and page tables let original DMM search connect unit 0x280 to GRM; original allocation, failure cleanup and the MA client run on captured state."
+evidence = ["E0044", "E0045", "E0047", "E0048", "E0049", "E0050"]
+
+[[claim]]
+id = "C07"
+entities = ["dev.gles-sugilite"]
+status = "verified-offline"
+text = "The original captured GLES open, kernel locks, ioctl queries, new-owner lifecycle and process binding run against the grm_gles contract."
+evidence = ["E0064", "E0065", "E0066", "E0067"]
+
+[[claim]]
+id = "C08"
+entities = ["process.im-elf"]
+status = "verified-physical"
+text = "On the camera im.elf is PID 149 with argv 'im.elf debug s g r u l i a lazy-global'; clone-derived GLES identity and /dev/stream2 follow from the observed startup."
+evidence = ["E0301", "E0302"]
+
+[[claim]]
+id = "C09"
+entities = ["process.im-elf", "dev.uipc-osal"]
+status = "verified-offline"
+text = "With a modelled positive UIPC receive timeout the app leaves a 19M-instruction poll loop for a real wait and, at 308.6M instructions, is service-idle waiting for producers."
+evidence = ["E0308", "E0309"]
+
+[[claim]]
+id = "C10"
+entities = ["dev.gles-sugilite"]
+status = "verified-offline"
+text = "GLES completion is keyed by task TGID (task+0x108); the 128 KiB dmpgles2 mapping is uninitialized software-shared memory, not the 16 KiB GPU BAR; caller bit 24 selects recovery, not event presence."
+evidence = ["E0530:gles"]
+
+[[claim]]
+id = "C11"
+entities = ["lib.libobj", "process.im-elf"]
+status = "verified-offline"
+text = "Every former heap assertion was caused by Unicorn 2.1.4 carrying stale Thumb-2 ITSTATE across IT-block branches; with the fix, unmodified im.elf runs 1.50B instructions and 120 threads with 0 heap ownership errors and no 0x4C->0x50 padding."
+evidence = ["E0657"]
+
+[[claim]]
+id = "C12"
+entities = ["dev.gles-sugilite", "problem.l3-display"]
+status = "verified-offline"
+text = "Unmodified im.elf decompresses 62 /dev/ldec UI atlases, completes 24 Sugilite GPU jobs with 24 IRQ 76 completions and presents double-buffered 640x480 RGBA4444 viewRootPowerSw.uxc frames on OSD A and B; the frames are transparent."
+evidence = ["E0657"]
+
+[[claim]]
+id = "C13"
+entities = ["dev.dmm-grm", "problem.l3-display"]
+status = "verified-offline"
+text = "Appframework CreateFramebuffer(640,480) is a GRM-MA open for DMM unit 0x4092e; captured unit 0x4092e is OSD A/B and an opt-in mapping opens the authentic 640x480 surface. The post-CreateFramebuffer wait is a fixed 20 ms sleep-poll, not a render loop."
+evidence = ["E9001", "E9002", "E9004", "E9006"]
+
+[[claim]]
+id = "C14"
+entities = ["dev.gles-sugilite"]
+status = "verified-offline"
+text = "The display is OSD A/B 640x480 RGBA4444 and the GPU is a DMP SMAPH-S30; the gl_common/Sugilite buffer is an internal buffer, not the screen."
+evidence = ["E0298", "E0314"]
+
+[[claim]]
+id = "C15"
+entities = ["lib.libobj"]
+status = "verified-offline"
+text = "The isolated original log-block constructor writes only through offset 0x48 and fits libc's 0x4C usable extent; the opt-in 0x50 request padding is a trial, not an allocator correction."
+evidence = ["E0526:stella"]
+
+[[claim]]
+id = "R01"
+entities = ["lib.libobj"]
+status = "retracted"
+text = "The Appframework malloc assertion is a confirmed stella pool-boundary bug, not an emulator bug."
+evidence = ["E0526:stella"]
+superseded_by = "C11"
+
+[[claim]]
+id = "R02"
+entities = ["lib.libobj"]
+status = "refuted"
+text = "A subtract-four edit at libObj+0x79E8C2 / +0x79E902 is a justified size correction."
+evidence = ["E0526:stella"]
+superseded_by = "C15"
+
+[[claim]]
+id = "R03"
+entities = ["dev.gles-sugilite"]
+status = "retracted"
+text = "The GPU is a DMP PICA200 rasterizer and the Sugilite gl_common buffer is the GUI framebuffer."
+evidence = ["E0081", "E0082"]
+superseded_by = "C14"
+
+[[claim]]
+id = "C16"
+entities = ["lib.loader-libc", "process.im-elf"]
+status = "verified-offline"
+text = "Platform and loader facts were extracted from the firmware: 474 ARM ELF files parse without errors; original process startup lacks filesystem metadata until guarded inode metadata and the original module request are modelled."
+evidence = ["E0001", "E0002", "E0028"]
+
+[[claim]]
+id = "C17"
+entities = ["process.im-elf"]
+status = "verified-offline"
+text = "Event dispatch and the display subsystem were discovered; Task 94 boot events, the dynamic ID contract and camera subsystem activation, and the original boot launch dispatch with its application-stage thread boundary were recovered."
+evidence = ["E0021", "E0022", "E0025"]
+
+[[claim]]
+id = "C18"
+entities = ["process.im-elf"]
+status = "verified-offline"
+text = "Package H reaches the stack-guard entropy boundary; original urandom dispatch and a guarded entropy read pass it; the OpenSSL SIGILL capability probe meets a /tmp boundary."
+evidence = ["E0023", "E0024", "E0033"]
+
+[[claim]]
+id = "C19"
+entities = ["dev.dmm-grm", "dev.timer"]
+status = "verified-offline"
+text = "The stream device ABI and graphics allocator boundary, timer programming against the missing setting partition, and packaged WBI memory that recovers the logging input were established."
+evidence = ["E0034", "E0038", "E0043"]
+
+[[claim]]
+id = "C20"
+entities = ["tool.interpreter-probe"]
+status = "verified-offline"
+text = "A bounded dependency planner and reusable REA evidence support call-chain work; REA deep analysis is unavailable for the ARM libObj on this host, and the 20 ms constant has six libObj sites."
+evidence = ["E0039", "E9005"]
+
+[[claim]]
+id = "C21"
+entities = ["dev.dmm-grm", "lib.loader-libc"]
+status = "verified-offline"
+text = "Original GRM open requires DMM and its returned handle; callback locking requires kernel thread state; the original client constructor reaches page-size, sysconf and pthread initialization; the trace allocator reaches UIPC runtime state."
+evidence = ["E0046", "E0051", "E0052", "E0053", "E0054", "E0055"]
+
+[[claim]]
+id = "C22"
+entities = ["dev.gles-sugilite"]
+status = "verified-offline"
+text = "Backup reads and reply-queue wakes satisfy the original GLES prerequisites; the Sugilite pipeline handshake, render loop and surface memory transfer run in the emulator."
+evidence = ["E0063", "E0070"]
+
+[[claim]]
+id = "C23"
+entities = ["process.im-elf", "dev.uipc-osal"]
+status = "verified-offline"
+text = "An authentic standby LCD and a 125M fast-hooks milestone came with the THREAD_INFRA0 synchronous dispatch architecture; the authentic UIPC OSAL header and MonDrv WBI log buffer reach 143.74M instructions; /proc/modules, FBResourceManager and the MediaDetect polling boundary follow, and the THREAD_INFRA1 poll is MonDrv output-queue back-pressure."
+evidence = ["E0083", "E0095:uipc", "E0096:proc-modules", "E0097:mediadetect"]
+
+[[claim]]
+id = "C24"
+entities = ["dev.uipc-osal"]
+status = "verified-offline"
+text = "Original UIPC proxy threads start and consume a VBUS notification."
+evidence = ["E0300"]
+
+[[claim]]
+id = "C25"
+entities = ["process.im-elf"]
+status = "verified-physical"
+text = "Read-only dumps of the MPR partition (erased-state ioctl identity), nflasha1 vfat (observed /mnt mount/umount, updater-state read) and the nflasha2 /setting namespace carry the replay past /dev/nflasha4 to the app's idle/poll state."
+evidence = ["E0305", "E0306", "E0307"]
+
+[[claim]]
+id = "C26"
+entities = ["dev.gles-sugilite", "dev.uipc-osal"]
+status = "verified-offline"
+text = "The first UsbControl wake is wake-only; two evidence-backed model contracts lead to the GRM wait; a blocking GPES wait deadlock and a teardown-only writer bound the remaining GRM contracts."
+evidence = ["E0311", "E0312"]
+
+[[claim]]
+id = "C27"
+entities = ["problem.l3-display"]
+status = "verified-offline"
+text = "After CreateFramebuffer the labelled single-pool run idles on a timer wait instead of reaching OSD."
+evidence = ["E9003"]
+
+[[frontier]]
+id = "F01"
+title = "Advance DefRootView past the transparent root view"
+state = "open"
+entities = ["problem.l3-display", "process.im-elf"]
+evidence = ["E0657"]
+next = "Qualify the external av-cam.bin / sub-micro UPM (0x920572 / 0x920021) and ObjPower (0x0059000E) producers so CheckerBootState / CheckerBootType can advance, without injecting replies."

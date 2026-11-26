@@ -1,0 +1,3 @@
+numpy>=1.22
+Pillow>=9.0      # GUI and PNG charts; lut_core / lut_cli need numpy only
+rawpy>=0.21      # GUI raw/ARW development via LibRaw

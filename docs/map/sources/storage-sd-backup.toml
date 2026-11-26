@@ -1,0 +1,113 @@
+# Knowledge-map source: Storage, SD card and backup service.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "storage-sd-backup"
+title = "Storage, SD card and backup service"
+scope = """
+Storage tables, ring-buffer write pipeline, backup service and presets, SD/SDHCI/ADMA2 stack, mmca/ms character devices and SD recovery."""
+evidence_span = "see record index"
+reviewed = "2026-11-24"
+records = [
+  "E0009-E0014",
+  "E0029-E0032",
+  "E0056-E0062",
+  "E0078",
+  "E0079",
+  "E0138",
+  "E0689",
+]
+
+[[entity]]
+id = "proc.storage-ringbuffer"
+kind = "process"
+name = "Storage tables and RingBuffer write pipeline"
+summary = "Updater/storage tables, the ring-buffer dispatcher and the producer pipeline down to physical storage writes, with an emulator write guard."
+
+[[entity]]
+id = "proc.backup"
+kind = "process"
+name = "Backup service and presets"
+aliases = ["Backup.bin", "/setting/Backup"]
+inventory = ["kernel.modules:backup"]
+summary = "Sony backup service (backup.ko + user dispatch) that reads/writes presets and settings; saved to /setting/Backup.* on power-off."
+
+[[entity]]
+id = "dev.sd-stack"
+kind = "device"
+name = "SD stack (mmc_drv, SDHCI, ADMA2)"
+aliases = ["/dev/mmca-char", "/dev/ms-char", "A: drive"]
+inventory = ["kernel.modules:mmc_drv", "kernel.modules:ms_drv"]
+summary = "SD communication layers, the registered read ioctl, the serialized transfer pipeline, SDHCI host context and ADMA2 scatter-gather DMA, and the mmca/ms character devices."
+
+[[claim]]
+id = "C01"
+entities = ["proc.storage-ringbuffer"]
+status = "verified-offline"
+text = "Storage-table consumers, the updater partition-image copy/write path, ring-buffer dispatch and the RingBuffer producer pipeline down to the physical storage write were traced; emulated writes stop at a storage write guard."
+evidence = ["E0009", "E0011", "E0012", "E0013"]
+
+[[claim]]
+id = "C02"
+entities = ["proc.storage-ringbuffer"]
+status = "verified-offline"
+text = "Boot mount selection, device-node resolution and runtime mount state were recovered; unsupplied runtime mounts stay unknown."
+evidence = ["E0008", "E0014"]
+
+[[claim]]
+id = "C03"
+entities = ["proc.backup"]
+status = "verified-offline"
+text = "The backup service is guarded with a bounded LIRO entry; original backup dispatch, packaged preset lookups, boot parameters, kernel address conversion and the write pipeline run, and preset-backed RAM mutations are verified."
+evidence = ["E0029", "E0030", "E0031", "E0032"]
+
+[[claim]]
+id = "C04"
+entities = ["dev.sd-stack"]
+status = "verified-offline"
+text = "SD layers, original read bounds, the registered read ioctl, serialized transfer pipeline, SDHCI host context with recursive mutexes and ADMA2 scatter-gather DMA execute down to SD sector requests."
+evidence = ["E0056", "E0057", "E0058", "E0059", "E0060", "E0061", "E0062"]
+
+[[claim]]
+id = "C05"
+entities = ["dev.sd-stack", "proc.backup"]
+status = "verified-offline"
+text = "Backup_read_multi and the WBI /dev/stream log area at 0x20030000 lead to /dev/mmca-char; the mmca-char and ms-char driver contracts are modelled."
+evidence = ["E0078", "E0079"]
+
+[[claim]]
+id = "C06"
+entities = ["proc.backup"]
+status = "verified-physical"
+text = "A cold boot with a forced 1080p NVRAM/Backup.bin configuration stalled recording and USB; recovery used an emergency SD card reset procedure."
+evidence = ["E0138"]
+
+[[claim]]
+id = "C07"
+entities = ["proc.storage-ringbuffer"]
+status = "verified-offline"
+text = "The original compressed-header comparison was reproduced on the extracted images."
+evidence = ["E0010"]
+
+[[hazard]]
+id = "H01"
+title = "Persisted settings written from RAM"
+effect = "Forced Backup.bin values (1080p NVRAM patch) survived power cycles and stalled the cold boot."
+rule = "Treat /setting/Backup.* as persistent: RAM patches to backed-up tables are saved on power-off. Never write it without explicit scope."
+evidence = ["E0138", "E0137"]
+
+[[hazard]]
+id = "H02"
+title = "Physical SD card is an input, not a scratch disk"
+effect = "SD changes can corrupt camera state or lose captures."
+rule = "Physical SD (E:) is read-only for emulator inputs; diagnostic writes stay under /tmp_bt unless explicitly authorized."
+evidence = ["E0056", "E0219"]
+
+[[frontier]]
+id = "F01"
+title = "Zero-scratch read-only DCIM/100MSDCF USTAR streaming from /dev/mmca1"
+state = "not-started"
+entities = ["dev.sd-stack"]
+evidence = ["E0056", "E0689"]
+next = "Extend card_read.c's read-only FAT32/exFAT parser (/dev/mmca1 250:11) with 2-level DCIM/100MSDCF lookup and stream 16 KiB-page-aligned POSIX ustar headers + ARW clusters over a backpressured socket with 0 B written to /tmp_bt or SD."

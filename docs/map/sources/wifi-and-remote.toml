@@ -1,0 +1,104 @@
+# Knowledge-map source: Wi-Fi and remote control.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "wifi-and-remote"
+title = "Wi-Fi and remote control"
+scope = """
+BCM4339 Wi-Fi/Bluetooth, SDIO and the WLAN baseline, ScalarWebAPI over Wi-Fi, Imaging Edge Mobile behavior and the Wi-Fi shutter."""
+evidence_span = "see record index"
+reviewed = "2026-11-24"
+records = [
+  "E0406-E0412",
+  "-E0407:a-three",
+  "-E0407:b1",
+  "E0658-E0662",
+  "E0664",
+  "E0688",
+  "E0689",
+  "cross_model/a6400-scalarwebapi-*",
+  "cross_model/scalarwebapi-apis.json",
+  "cross_model/imaging-edge-mobile-control.json",
+]
+
+[[entity]]
+id = "dev.bcm4339"
+kind = "device"
+name = "BCM4339 Wi-Fi/Bluetooth and SDIO"
+aliases = ["bcmdhd", "CLM", "mmcio_mount"]
+inventory = ["firmware.elf:nflasha15_unpacked/kmod/bcmdhd.ko", "kernel.modules:wlanMemoryAllocator"]
+summary = "Broadcom BCM4339 combo chip on SDIO with the bcmdhd driver, CLM regulatory blobs and the WLAN loader."
+
+[[entity]]
+id = "api.scalarwebapi"
+kind = "process"
+name = "ScalarWebAPI over Wi-Fi"
+aliases = ["orb-server", "Smart Remote Control", "Imaging Edge Mobile"]
+summary = "Sony's Wi-Fi camera API: 221 camera methods shipped, 47 advertised; drives remote shooting."
+
+[[claim]]
+id = "C01"
+entities = ["dev.bcm4339"]
+status = "verified-offline"
+text = "BCM4339 Wi-Fi/Bluetooth capability and tuning surface, bcmdhd insmod arguments, compiled defaults, CLM ownership and the a6400 vs ZV-E10 WLAN/BT differences were analysed statically; CLM blobs were parsed."
+evidence = ["E0406", "E0407:bcm4339", "E0408"]
+
+[[claim]]
+id = "C02"
+entities = ["dev.bcm4339"]
+status = "verified-physical"
+text = "On one unit, enabling Wi-Fi from the camera menu rebooted the camera every time (WLAN-loader error-path null write after an mmcio_mount failure); preload interference was ruled out and an SDIO fault confirmed for that unit."
+evidence = ["E0409", "E0410", "E0411"]
+
+[[claim]]
+id = "C03"
+entities = ["dev.bcm4339"]
+status = "verified-physical"
+text = "A live Wi-Fi baseline and the SDIO detection contract were recorded; the saved crash does not show whether CMD5 was sent or answered."
+evidence = ["E0412"]
+
+[[claim]]
+id = "C04"
+entities = ["api.scalarwebapi", "dev.bcm4339"]
+status = "verified-physical"
+text = "Camera Wi-Fi works and exposes ScalarWebAPI, which has no Creative Style; the camera ships 221 camera methods and advertises 47, the shutter among the missing."
+evidence = ["E0658", "E0659", "doc:cross_model/a6400-scalarwebapi-session.json"]
+
+[[claim]]
+id = "C05"
+entities = ["api.scalarwebapi"]
+status = "verified-physical"
+text = "Sony's own app drives the camera with a sequence a naive client misses; file access is a different camera mode, not a different method; the portable part of Imaging Edge Mobile is decided by the camera's answers."
+evidence = ["E0660", "E0661", "E0662"]
+
+[[claim]]
+id = "C06"
+entities = ["api.scalarwebapi"]
+status = "verified-physical"
+text = "The a6400 shutter works over Wi-Fi; the drive mode decides which shutter is offered: at Single the list includes actTakePicture, at Continuous it offers startContShooting/stopContShooting instead."
+evidence = ["E0664"]
+
+[[claim]]
+id = "R01"
+entities = ["dev.bcm4339"]
+status = "retracted"
+text = "Wi-Fi on the a6400 is blocked: enabling it reboots the camera."
+evidence = ["E0409"]
+superseded_by = "C04"
+note = "E0658: Wi-Fi works, contrary to what was recorded from a single failing unit."
+
+[[hazard]]
+id = "H01"
+title = "Enabling Wi-Fi on the unit with the SDIO fault"
+effect = "The camera rebooted every time Wi-Fi was enabled from the menu."
+rule = "Treat that unit's WLAN as faulty; do not inject OSAL 0x1000 or override bands/TX while investigating."
+evidence = ["E0409", "E0411"]
+
+[[frontier]]
+id = "F01"
+title = "Send to Smartphone .ARW original availability and HTTP throughput"
+state = "open"
+entities = ["api.scalarwebapi", "dev.bcm4339"]
+evidence = ["E0662", "E0688", "E0689"]
+next = "Place a physical ILCE-6400 into Send to Smartphone mode via the camera menu, run tools.research.camera_transfer with --transcript, and determine whether avContent/getContentList exposes full 24.5 MB ARW 2.3 originals or only proxy JPEGs."

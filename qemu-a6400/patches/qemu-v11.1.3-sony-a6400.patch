@@ -1,0 +1,263 @@
+diff --git a/accel/tcg/tb-jmp-cache.h b/accel/tcg/tb-jmp-cache.h
+index c3a505e..9aacc66 100644
+--- a/accel/tcg/tb-jmp-cache.h
++++ b/accel/tcg/tb-jmp-cache.h
+@@ -12,7 +12,7 @@
+ #include "qemu/rcu.h"
+ #include "exec/cpu-common.h"
+ 
+-#define TB_JMP_CACHE_BITS 12
++#define TB_JMP_CACHE_BITS 14
+ #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
+ 
+ /*
+diff --git a/hw/arm/Kconfig b/hw/arm/Kconfig
+index 6f5b2ad..87c4133 100644
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -727,3 +727,15 @@ config ARMSSE
+     select UNIMP
+     select SSE_COUNTER
+     select SSE_TIMER
++
++config SONY_A6400
++    bool
++    default y
++    depends on TCG && ARM
++    select A9MPCORE
++    select ARM_MPTIMER
++    select PL011 # UART
++    select PL310 # cache controller
++    select SPLIT_IRQ
++    select UNIMP
++    select CXD4115_TIMER
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index 4233a80..1b67b81 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -111,5 +111,6 @@ arm_common_ss.add(when: 'CONFIG_VERSATILE', if_true: files('versatilepb.c'))
+ arm_common_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
+ 
+ arm_common_ss.add(files('boot.c'))
++arm_common_ss.add(when: 'CONFIG_SONY_A6400', if_true: files('sony_a6400.c', '../misc/cxd90014_sio.c', '../misc/cxd90014_gpio.c', '../misc/cxd90014_adc.c', '../misc/cxd90014_evsel.c', '../misc/cxd90014_regfile.c', '../misc/cxd90014_vph.c', '../display/dmp_smaph.c', '../display/dmp_shader.c', '../display/cxd90045_hdmi_cec.c', '../misc/cxd90014_sa.c', '../misc/cxd90014_p2s.c', '../misc/cxd90045_camcore.c', '../misc/cxd90045_i2c.c', '../misc/cxd90045_tpu.c', '../misc/cxd90045_touch.c', '../misc/cxd90045_bcm4339.c', '../misc/cxd90045_audio.c', '../misc/cxd90045_lens.c', '../usb/cxd90045_dwc3.c', '../misc/cxd90045_cam.c'))
+ 
+ hw_common_arch += {'arm': arm_common_ss}
+diff --git a/hw/cpu/a9mpcore.c b/hw/cpu/a9mpcore.c
+index 2127f95..6898ead 100644
+--- a/hw/cpu/a9mpcore.c
++++ b/hw/cpu/a9mpcore.c
+@@ -63,8 +63,9 @@ static void a9mp_priv_realize(DeviceState *dev, Error **errp)
+ 
+     cpu0 = qemu_get_cpu(0);
+     cpuobj = OBJECT(cpu0);
+-    if (strcmp(object_get_typename(cpuobj), ARM_CPU_TYPE_NAME("cortex-a9"))) {
+-        /* We might allow Cortex-A5 once we model it */
++    if (strcmp(object_get_typename(cpuobj), ARM_CPU_TYPE_NAME("cortex-a9")) &&
++        strcmp(object_get_typename(cpuobj), ARM_CPU_TYPE_NAME("cortex-a5"))) {
++        /* Allow Cortex-A5 MPCore with A9 MPCore private memory map */
+         error_setg(errp,
+                    "Cortex-A9MPCore peripheral can only use Cortex-A9 CPU");
+         return;
+diff --git a/hw/sd/sd.c b/hw/sd/sd.c
+index 780e9f6..5f8a5d6 100644
+--- a/hw/sd/sd.c
++++ b/hw/sd/sd.c
+@@ -164,6 +164,7 @@ struct SDState {
+     uint8_t spec_version;
+     uint64_t boot_part_size;
+     uint64_t rpmb_part_size;
++    bool sony_legacy_backend;
+     BlockBackend *blk;
+     uint8_t boot_config;
+ 
+@@ -537,7 +538,7 @@ static void emmc_set_ext_csd(SDState *sd, uint64_t size)
+     sd->ext_csd[205] = 0x46; /* Min read perf for 4bit@26Mhz */
+     sd->ext_csd[EXT_CSD_CARD_TYPE] = 0b11;
+     sd->ext_csd[EXT_CSD_STRUCTURE] = 2;
+-    sd->ext_csd[EXT_CSD_REV] = 5;
++    sd->ext_csd[EXT_CSD_REV] = 7;
+     sd->ext_csd[EXT_CSD_RPMB_MULT] = sd->rpmb_part_size / (128 * KiB);
+     sd->ext_csd[EXT_CSD_PARTITION_SUPPORT] = 0b111;
+ 
+@@ -2272,6 +2273,11 @@ static sd_rsp_type_t sd_cmd_SEND_OP_COND(SDState *sd, SDRequest req)
+         return sd_invalid_state_for_cmd(sd, req);
+     }
+ 
++    /* Preserve CMD1 sector addressing for the captured sub-2 GiB eMMC. */
++    if (sd_is_emmc(sd) && FIELD_EX32(req.arg, OCR, CARD_CAPACITY)) {
++        sd->ocr = FIELD_DP32(sd->ocr, OCR, CARD_CAPACITY, 1);
++    }
++
+     /*
+      * If it's the first ACMD41 since reset, we need to decide
+      * whether to power up. If this is not an enquiry ACMD41,
+@@ -2300,7 +2306,8 @@ static sd_rsp_type_t sd_cmd_SEND_OP_COND(SDState *sd, SDRequest req)
+         sd->state = sd_ready_state;
+         return sd_r1;
+     } else {
+-        if (FIELD_EX32(sd->ocr & req.arg, OCR, VDD_VOLTAGE_WINDOW)) {
++        if (FIELD_EX32(sd->ocr & req.arg, OCR, VDD_VOLTAGE_WINDOW) ||
++            (sd_is_emmc(sd) && (req.arg & 0x80))) {
+             /*
+              * We accept any voltage.  10000 V is nothing.
+              *
+@@ -2665,7 +2672,7 @@ static size_t sd_write_data(SDState *sd, const void *buf, size_t length)
+     int i;
+     const uint8_t *value = buf;
+ 
+-    if (!sd->blk || !blk_is_inserted(sd->blk)) {
++    if (!sd->blk || (sd->data_offset == 0 && !blk_is_inserted(sd->blk))) {
+         return length;
+     }
+ 
+@@ -2813,7 +2820,7 @@ static size_t sd_read_data(SDState *sd, void *buf, size_t length)
+     uint32_t io_len;
+     uint8_t *value = buf;
+ 
+-    if (!sd->blk || !blk_is_inserted(sd->blk)) {
++    if (!sd->blk || (sd->data_offset == 0 && !blk_is_inserted(sd->blk))) {
+         memset(buf, dummy_byte, length);
+         return length;
+     }
+@@ -3117,9 +3124,14 @@ static void sd_realize(DeviceState *dev, Error **errp)
+             return;
+         }
+ 
+-        int64_t blk_size = blk_getlength(sd->blk);
++        int64_t backend_size = blk_getlength(sd->blk);
++        int64_t blk_size = backend_size;
+         if (blk_size >= 0) {
+             blk_size -= sd->boot_part_size * 2 + sd->rpmb_part_size;
++            /* The retained Sony backend rounds the whole device, not user data. */
++            bool sony_legacy_size = sd_is_emmc(sd) && sd->sony_legacy_backend &&
++                !sd->rpmb_part_size && is_power_of_2(backend_size) &&
++                QEMU_IS_ALIGNED(blk_size, 512 * KiB);
+             if (blk_size > SDSC_MAX_CAPACITY) {
+                 if (sd_is_emmc(sd) &&
+                     !QEMU_IS_ALIGNED(blk_size, 1 << HWBLOCK_SHIFT)) {
+@@ -3135,7 +3147,8 @@ static void sd_realize(DeviceState *dev, Error **errp)
+                                       "multiples of 512K", errp);
+                     return;
+                 }
+-            } else if (blk_size > 0 && !is_power_of_2(blk_size)) {
++            } else if (blk_size > 0 && !is_power_of_2(blk_size) &&
++                       !sony_legacy_size) {
+                 sd_blk_size_error(sd, blk_size, pow2ceil(blk_size),
+                                   "a power of 2", errp);
+                 return;
+@@ -3213,6 +3226,7 @@ static const Property sd_properties[] = {
+ };
+ 
+ static const Property emmc_properties[] = {
++    DEFINE_PROP_BOOL("x-sony-legacy-backend", SDState, sony_legacy_backend, false),
+     DEFINE_PROP_UINT64("boot-partition-size", SDState, boot_part_size, 0),
+     DEFINE_PROP_UINT8("boot-config", SDState, boot_config, 0x0),
+     DEFINE_PROP_UINT64("rpmb-partition-size", SDState, rpmb_part_size, 0),
+diff --git a/hw/sd/sdhci.c b/hw/sd/sdhci.c
+index a612e5c..d1fc86f 100644
+--- a/hw/sd/sdhci.c
++++ b/hw/sd/sdhci.c
+@@ -994,7 +994,7 @@ static void sdhci_data_transfer(void *opaque)
+ 
+ static bool sdhci_can_issue_command(SDHCIState *s)
+ {
+-    if (!SDHC_CLOCK_IS_ON(s->clkcon) ||
++    if (!(s->clkcon & SDHC_CLOCK_SDCLK_EN) ||
+         (((s->prnsts & SDHC_DATA_INHIBIT) || s->stopped_state) &&
+         ((s->cmdreg & SDHC_CMD_DATA_PRESENT) ||
+         ((s->cmdreg & SDHC_CMD_RESPONSE) == SDHC_CMD_RSP_WITH_BUSY &&
+diff --git a/hw/timer/Kconfig b/hw/timer/Kconfig
+index b3d823c..44c8809 100644
+--- a/hw/timer/Kconfig
++++ b/hw/timer/Kconfig
+@@ -65,3 +65,6 @@ config STELLARIS_GPTM
+ 
+ config AVR_TIMER16
+     bool
++
++config CXD4115_TIMER
++    bool
+diff --git a/hw/timer/meson.build b/hw/timer/meson.build
+index 201b5d8..12ba1ac 100644
+--- a/hw/timer/meson.build
++++ b/hw/timer/meson.build
+@@ -34,3 +34,4 @@ specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
+ 
+ system_ss.add(when: 'CONFIG_AVR_TIMER16', if_true: files('avr_timer16.c'))
++system_ss.add(when: 'CONFIG_CXD4115_TIMER', if_true: files('cxd4115_timer.c'))
+diff --git a/system/runstate.c b/system/runstate.c
+index 3c8693c..dd48662 100644
+--- a/system/runstate.c
++++ b/system/runstate.c
+@@ -85,6 +85,8 @@ static const RunStateTransition runstate_transitions_def[] = {
+     { RUN_STATE_DEBUG, RUN_STATE_FINISH_MIGRATE },
+     { RUN_STATE_DEBUG, RUN_STATE_PRELAUNCH },
+ 
++    /* Restoring a VM stopped by a GDB breakpoint is a debug runstate. */
++    { RUN_STATE_INMIGRATE, RUN_STATE_DEBUG },
+     { RUN_STATE_INMIGRATE, RUN_STATE_INTERNAL_ERROR },
+     { RUN_STATE_INMIGRATE, RUN_STATE_IO_ERROR },
+     { RUN_STATE_INMIGRATE, RUN_STATE_PAUSED },
+diff --git a/target/arm/tcg/cpu32.c b/target/arm/tcg/cpu32.c
+index c49265e..fedb144 100644
+--- a/target/arm/tcg/cpu32.c
++++ b/target/arm/tcg/cpu32.c
+@@ -358,6 +358,49 @@ static void cortex_a9_initfn(Object *obj)
+     define_arm_cp_regs(cpu, cortexa9_cp_reginfo);
+ }
+ 
++/*
++ * Cortex-A5 MPCore with VFPv4-D16 (no NEON) for BIONZ X bring-up.
++ * Sony vfp_init requires D16 VFP identification.
++ */
++static void cortex_a5_initfn(Object *obj)
++{
++    ARMCPU *cpu = ARM_CPU(obj);
++    ARMISARegisters *isar = &cpu->isar;
++
++    cpu->dtb_compatible = "arm,cortex-a5";
++    set_feature(&cpu->env, ARM_FEATURE_V7);
++    set_feature(&cpu->env, ARM_FEATURE_THUMB2EE);
++    set_feature(&cpu->env, ARM_FEATURE_EL3);
++    set_feature(&cpu->env, ARM_FEATURE_PMU);
++    set_feature(&cpu->env, ARM_FEATURE_V7MP);
++    set_feature(&cpu->env, ARM_FEATURE_CBAR);
++    cpu->midr = 0x410fc051;          /* Cortex-A5 r0p1 */
++    cpu->reset_fpsid = 0x41023051;
++    cpu->isar.mvfr0 = 0x10110221;   /* VFPv4, 16 D-regs */
++    cpu->isar.mvfr1 = 0x01000011;   /* FPHP, no Advanced SIMD */
++    cpu->ctr = 0x80038003;
++    cpu->reset_sctlr = 0x00c50078;
++    SET_IDREG(isar, ID_PFR0, 0x1031);
++    SET_IDREG(isar, ID_PFR1, 0x11);
++    SET_IDREG(isar, ID_DFR0, 0x000);
++    SET_IDREG(isar, ID_AFR0, 0);
++    SET_IDREG(isar, ID_MMFR0, 0x00100103);
++    SET_IDREG(isar, ID_MMFR1, 0x40000000);
++    SET_IDREG(isar, ID_MMFR2, 0x01230000);
++    SET_IDREG(isar, ID_MMFR3, 0x00102111);
++    SET_IDREG(isar, ID_ISAR0, 0x00101111);
++    SET_IDREG(isar, ID_ISAR1, 0x13112111);
++    SET_IDREG(isar, ID_ISAR2, 0x21232041);
++    SET_IDREG(isar, ID_ISAR3, 0x11112131);
++    SET_IDREG(isar, ID_ISAR4, 0x00011142);
++    cpu->isar.dbgdidr = 0x1203f001;
++    SET_IDREG(isar, CLIDR, (1 << 27) | (1 << 24) | 3);
++    cpu->ccsidr[0] = 0xe01fe019; /* 32k L1 dcache. */
++    cpu->ccsidr[1] = 0x201fe019; /* 32k L1 icache. */
++    cpu->isar.reset_pmcr_el0 = 0x41051000;
++    define_arm_cp_regs(cpu, cortexa9_cp_reginfo);
++}
++
+ #ifndef CONFIG_USER_ONLY
+ static uint64_t a15_l2ctlr_read(CPUARMState *env, const ARMCPRegInfo *ri)
+ {
+@@ -726,6 +769,7 @@ static const ARMCPUInfo arm_tcg_cpus[] = {
+     { .name = "arm11mpcore", .initfn = arm11mpcore_initfn },
+     { .name = "cortex-a7",   .initfn = cortex_a7_initfn },
+     { .name = "cortex-a8",   .initfn = cortex_a8_initfn },
++    { .name = "cortex-a5",   .initfn = cortex_a5_initfn },
+     { .name = "cortex-a9",   .initfn = cortex_a9_initfn },
+     { .name = "cortex-a15",  .initfn = cortex_a15_initfn },
+     { .name = "cortex-r5",   .initfn = cortex_r5_initfn },

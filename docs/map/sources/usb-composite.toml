@@ -1,0 +1,348 @@
+# Knowledge-map source: USB composite UVC/PTP on the physical camera (before EP0 runs).
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "usb-composite"
+title = "USB composite UVC/PTP on the physical camera (before EP0 runs)"
+scope = """
+Live-view sources, UVC/PTP gadget infrastructure, the shared UVC+PTP module, native hooks and CPU barriers, composite enumeration, teardown, PTP live view and the Track B roadmap up to Run A."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0132-E0137",
+  "E0139-E0218",
+  "E0239-E0258",
+  "E0260-E0296",
+  "E0315-E0317",
+  "E0319-E0322",
+  "E0339-E0353",
+  "E0407:b1",
+]
+
+[[entity]]
+id = "usb.liveview-source"
+kind = "process"
+name = "Live-view JPEG source and DMM/ScalarInfra path"
+aliases = ["GET_JPEG", "SET_PATH", "DMM Rule 5"]
+summary = "The camera's live-view JPEG producer, DMM AllocRule/Rule 5, ScalarInfra SET_PATH and the shooting-state contract used as a UVC feed candidate."
+
+[[entity]]
+id = "module.uvc-shared"
+kind = "module"
+name = "Shared UVC+PTP gadget module (usbg_video candidates)"
+inventory = ["kernel.modules:usbg_stillimage"]
+summary = "Our composite UVC module built against the ZV-E10 reference stack, sharing the PTP/PC Remote gadget (usbg_stillimage) with gadgetcore dual-shadow registration."
+
+[[entity]]
+id = "tool.native-hook"
+kind = "tool"
+name = "Native entry hook, CPU barrier and MOD ioctl guard"
+aliases = ["0x602b8844", "mov ip,sp"]
+summary = "Native hook at 0x602b8844 with four-core cache sync, the retry-safe CPU barrier over PID 149 threads and the MOD atomic ioctl guard."
+
+[[entity]]
+id = "usb.ptp-pcremote"
+kind = "usb-identity"
+name = "PTP / PC Remote live view (054C:0CAA)"
+aliases = ["GetObject 0xFFFFC002", "SDIOConnect", "s_LiveViewStatus"]
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libInfraRemote.so"]
+summary = "Stock PC Remote PTP session: live-view GetObject, the app dispatcher, InfraRemoteUsb queues and the s_LiveViewStatus gate."
+
+[[entity]]
+id = "proc.teardown"
+kind = "process"
+name = "Session teardown and return to Mass Storage"
+aliases = ["unconfigure-first", "soft-disconnect", "phases=0x1ff"]
+summary = "Stopping the composite session and returning to stock Mass Storage (054C:0CA8) without a battery pull."
+
+[[entity]]
+id = "ref.zve10-uvc"
+kind = "module"
+name = "ZV-E10 2.03 reference UVC stack"
+summary = "The ZV-E10's usbg_video.ko, devno.ko nodes 248:32/33 and descriptors, used as the a6400 UVC source and overlay plan."
+
+[[claim]]
+id = "C01"
+entities = ["usb.liveview-source"]
+status = "verified-offline"
+text = "USB live view comes from an original JPEG source with a width gate; DMM AllocRule Rule 5 activation and ScalarInfra SET_PATH start were verified, with the sensor still bounded in Mass Storage mode."
+evidence = ["E0132", "E0144", "E0145", "E0146", "E0147", "E0148", "E0149"]
+
+[[claim]]
+id = "C02"
+entities = ["ref.zve10-uvc", "module.uvc-shared"]
+status = "verified-offline"
+text = "The ZV-E10 2.03 reference UVC stack (device node, gadget callback ABI, registration, quiescence, endpoint contract) was decoded and assembled into a composite kernel module with verified symbols."
+evidence = ["E0134", "E0135", "E0136", "E0139", "E0316", "E0317", "E0319", "E0320"]
+
+[[claim]]
+id = "C03"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "Physical UVC transport of a static 1280x720 test pattern at about 30 FPS was verified, and an authentic Sony ILCE-6400 UVC stream displayed in CinemaHUD at 720p30; this is transport of a JPEG, not live sensor acquisition."
+evidence = ["E0140", "E0141", "E0143", "E0150"]
+
+[[claim]]
+id = "C04"
+entities = ["usb.ptp-pcremote", "usb.liveview-source"]
+status = "verified-physical"
+text = "In PC Remote, real sensor JPEG frames (1024x680) arrive over PTP; a foreign GET_JPEG sees live-view frames without starving the PTP stream, and the CinemaHUD PTP live-view demo works with confirmed PTP control."
+evidence = ["E0151", "E0256", "E0343", "E0349"]
+
+[[claim]]
+id = "C05"
+entities = ["tool.native-hook"]
+status = "verified-physical"
+text = "A native entry hook at 0x602b8844 was installed and retired with four-core cache coherence, restoring the original 'mov ip,sp'; the retry-safe CPU barrier and kernel thread membership checks were physically verified."
+evidence = ["E0192", "E0197", "E0198", "E0203", "E0205"]
+
+[[claim]]
+id = "C06"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "The first physical composite enumeration in PC Remote (054C:0CAA) appeared as 'USB Composite Device' and returned cleanly to Mass Storage."
+evidence = ["E0207"]
+
+[[claim]]
+id = "C07"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "Parent recognition did not prove child startup: a 90-second test showed the composite parent with Code 10 and no MI_00/MI_01 children; the original SET_CONFIGURATION hit an endpoint-number conflict."
+evidence = ["E0208", "E0209", "E0210"]
+
+[[claim]]
+id = "C08"
+entities = ["proc.teardown"]
+status = "verified-physical"
+text = "The original unconfigure ends in a no-op gadget ioctl and the module's direct pullup was the teardown suspect; an unconfigure-first session enumerates both children and returns to MSC cleanly, repeated 3/3."
+evidence = ["E0250", "E0251", "E0252", "E0254"]
+
+[[claim]]
+id = "C09"
+entities = ["usb.ptp-pcremote"]
+status = "verified-physical"
+text = "Live-view start disconnects the composite device: the trigger is host WPD activity, not LCD live view; the stillimage gadget is recreated through a gadgetcore ioctl (setup_disconnect / usb_gcw_stop / start)."
+evidence = ["E0277", "E0279", "E0280", "E0284", "E0287"]
+
+[[claim]]
+id = "C10"
+entities = ["usb.ptp-pcremote"]
+status = "verified-offline"
+text = "The live-view request is posted to an OSAL queue; InfraRemoteUsb registers its queue with the PTP control library, the callback OsalSyncRcvMsgCbUsb forwards to the async FSM, live view is dispatcher event 17 and its gate is MrpwDeviceManager::s_LiveViewStatus set from message param 0x1300."
+evidence = ["E0260", "E0263", "E0265", "E0268", "E0269", "E0270"]
+
+[[claim]]
+id = "C11"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "The opt-in e0288 live-view-consistency module keeps the device enumerated through live view with clean teardown, but the WPD API list stays empty after reconnect."
+evidence = ["E0288", "E0289", "E0293", "E0294"]
+
+[[claim]]
+id = "C12"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "A host-bindable composite was achieved with idProduct 0x0322: Windows binds PTP (MI_00) and UVC (MI_01); earlier composites were enumeration-only (REG_BUF/ENABLE -95) and not host-bindable."
+evidence = ["E0344", "E0345", "E0347"]
+
+[[claim]]
+id = "C13"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "The Track B transport module enumerates, but DirectShow cannot connect the UVC pins ('Could not RenderStream to connect pins'); offline, the failure was first ranked at START endpoint selection."
+evidence = ["E0350", "E0351"]
+
+[[claim]]
+id = "C14"
+entities = ["proc.teardown"]
+status = "verified-physical"
+text = "Run A: unconfigure-first soft-disconnect returns the camera to Mass Storage without a battery pull (teardown and daemon lifecycle only, no UVC frame)."
+evidence = ["E0352", "E0353"]
+
+[[claim]]
+id = "C15"
+entities = ["module.uvc-shared"]
+status = "verified-offline"
+text = "The DWC3/gadgetcore soft-connect ABI and the native per-speed descriptor-tree ABI were decoded."
+evidence = ["E0407:b1"]
+
+[[claim]]
+id = "C16"
+entities = ["ref.zve10-uvc"]
+status = "verified-offline"
+text = "The declared ZV-E10 -> a6400 UVC enablement manifest and overlay plan are fail-closed and data-only (blocked)."
+evidence = ["E0321", "E0322"]
+
+[[claim]]
+id = "R01"
+entities = ["module.uvc-shared"]
+status = "retracted"
+text = "The E0207 composite enumeration proved child startup; only a driver installation window remained."
+evidence = ["E0207"]
+superseded_by = "C07"
+note = "E0207 carries a 'Subsequent finding E0208' note withdrawing the installation-window explanation."
+
+[[claim]]
+id = "R02"
+entities = ["usb.ptp-pcremote"]
+status = "retracted"
+text = "F9: LCD live view starts and triggers the child disconnect."
+evidence = ["E0283"]
+superseded_by = "C09"
+note = "Corrected by E0284: no LCD live view; the trigger is host WPD activity."
+
+[[claim]]
+id = "C17"
+entities = ["module.uvc-shared", "usb.ptp-pcremote"]
+status = "verified-offline"
+text = "Gadget infrastructure and PTP gates were mapped with a live-view test plan; a bulk IN bridge was implemented while physical transport stayed unresolved; shared UVC video and PC Remote control have a coexistence boundary; PC Remote channels follow the original PTP contract."
+evidence = ["E0133", "E0142", "E0152", "E0153"]
+
+[[claim]]
+id = "C18"
+entities = ["module.uvc-shared"]
+status = "verified-offline"
+text = "Native UVC+PTP descriptors reuse the original Sony serializer; a request adapter serves endpoint 0x82; the original setup pointer passes through the bridge; native EP0 configuration replies, full HS identity with owned string memory, a unified native EP0 and the original PC Remote full-speed profile were built."
+evidence = ["E0154", "E0155", "E0156", "E0157", "E0158", "E0159"]
+
+[[claim]]
+id = "C19"
+entities = ["module.uvc-shared"]
+status = "verified-offline"
+text = "Native descriptor copies are owned during installation and restoration; the shared session, registration and control path, a guarded native USB backend with the real EP0 branch, and module build/lifetime guards were checked offline."
+evidence = ["E0160", "E0161", "E0162", "E0163", "E0164"]
+
+[[claim]]
+id = "C20"
+entities = ["usb.ptp-pcremote"]
+status = "verified-offline"
+text = "The original USB active flag is not a full-transaction lock; the USB message queue has a separate direct stop; the public USB table carries the application stop call; completion queue overlap, the main loop and final notification, the OSAL user callback dispatcher and callback unregistration (wait, interrupt, self-call, kernel acknowledgment) were traced."
+evidence = ["E0165", "E0166", "E0167", "E0168", "E0169", "E0170", "E0171", "E0172"]
+
+[[claim]]
+id = "C21"
+entities = ["tool.native-hook"]
+status = "verified-physical"
+text = "The MOD atomic mode-change guard wraps the original ioctl; an already loaded VFS call and a read-only USB owner inventory were proved; the physical USB owner and service state were verified, owner CPU threads stopped and resumed within bounds, the real pullup path hardened, and the shared module's physical init/exit lifecycle verified with native reservation kept across the session."
+evidence = ["E0174", "E0175", "E0176", "E0177", "E0178", "E0179", "E0180", "E0181", "E0182"]
+
+[[claim]]
+id = "C22"
+entities = ["tool.native-hook"]
+status = "verified-physical"
+text = "Original ptrace ownership is inactive; the CPU barrier was refreshed with fresh owners, its kernel stop sites and stop reasons observed physically, module-native stop diagnostics added, and kernel-owned stop snapshots keep a synchronous scope; the integrated private-route lifetime cycle ran on the camera."
+evidence = ["E0183", "E0193", "E0194", "E0195", "E0196", "E0199", "E0200"]
+
+[[claim]]
+id = "C23"
+entities = ["tool.native-hook", "proc.teardown"]
+status = "verified-offline"
+text = "Original DWC pullup wait and teardown order, the event worker's busy bit, gadget setup interface dispatch, request retirement, EP0 disable with closed admission and the public EP0 queue lock were traced; route publication has a code-lifetime policy and HELD recovery after partial caller resume; the native entry bridge covers cached VFS targets with SMP completion ordering, caller drain and descriptor-patch flush."
+evidence = ["E0184", "E0185", "E0186", "E0187", "E0188", "E0189", "E0190", "E0191", "E0201", "E0202", "E0204"]
+
+[[claim]]
+id = "C24"
+entities = ["proc.teardown"]
+status = "verified-physical"
+text = "Configured-session teardown and stage diagnostics, the OBS video-open/enumeration control boundary, the original interface STOP order, PTP STOP through synchronous read completion, the event producer and DWC dequeue, and endpoint command polling with STOP timeouts were established; runner retirement requires STOP and idle receipts."
+evidence = ["E0211", "E0212", "E0213", "E0214", "E0215", "E0216", "E0217", "E0218"]
+
+[[claim]]
+id = "C25"
+entities = ["module.uvc-shared"]
+status = "verified-offline"
+text = "Offline UVC frame-metadata (JPEG SOF) validation, a descriptor and endpoint-admission audit, a producer admission contract and submission state machine, and an opt-in producer admission ioctl linked into the shared candidate were completed."
+evidence = ["E0239", "E0240", "E0241", "E0242", "E0243"]
+
+[[claim]]
+id = "C26"
+entities = ["proc.teardown", "module.uvc-shared"]
+status = "verified-physical"
+text = "P4: offline readiness with a stop-attested runner and receipt policy; e0212 loads and unloads cleanly in Mass Storage; after P4b a Windows trace showed the descriptor request failing; an offline descriptor diff compared original PC Remote with the composite candidate."
+evidence = ["E0246", "E0247", "E0249", "E0258"]
+
+[[claim]]
+id = "C27"
+entities = ["usb.ptp-pcremote"]
+status = "verified-physical"
+text = "The PTP live-view frame validator and WPD probe were prepared; a repeat F5b had clean teardown but no live-view frame inside the composite session; F7 had LCD live view active but no PTP frame and a stuck teardown."
+evidence = ["E0253", "E0257", "E0271"]
+
+[[claim]]
+id = "C28"
+entities = ["usb.ptp-pcremote"]
+status = "verified-offline"
+text = "The app-side map and static roots for the live-view queue were found; libInfraRemote imports the generic PTP callback registration; the InfraRemoteUsb queue lifecycle has sync registration and a destructor drain; the app dispatcher issues the live-view GetObject itself as one of several remote-command handlers."
+evidence = ["E0261", "E0262", "E0264", "E0266", "E0267"]
+
+[[claim]]
+id = "C29"
+entities = ["usb.ptp-pcremote", "proc.teardown"]
+status = "verified-physical"
+text = "F8: the probe lifecycle was closed and the PC Remote GetObject path used; live-view handle 0xFFFFC002 translates to 0xFFFFC001 with a data flag; teardown failures correlate with host enumeration loss, now recorded as a session gate; F8-5 tore down cleanly but lost host enumeration and the probe never connected."
+evidence = ["E0272", "E0273", "E0274", "E0275", "E0276"]
+
+[[claim]]
+id = "C30"
+entities = ["usb.ptp-pcremote"]
+status = "verified-physical"
+text = "F9: the live-view/PTP start path through the gadget framework was mapped and USB transitions captured read-only; WPD enumeration alone and WPD open/close alone do not trigger live view; the probe records the GetObject response; the WPD COM object shuts down at live-view start and the probe reconnects within a short timing window."
+evidence = ["E0278", "E0281", "E0282", "E0285", "E0286", "E0290", "E0291", "E0292"]
+
+[[claim]]
+id = "C31"
+entities = ["module.uvc-shared", "proc.teardown"]
+status = "verified-physical"
+text = "Snapshot timing was fixed (every 10 attempts with the working PnP classifier); enumeration stayed stable but the reconnect budget was short and teardown stuck again."
+evidence = ["E0295", "E0296"]
+
+[[claim]]
+id = "C32"
+entities = ["module.uvc-shared"]
+status = "verified-offline"
+text = "Firmware evidence covers the USB PTP descriptor while UVC remained unresolved; a progress summary recorded PTP live-view real frames, UVC transport and composite enumeration; the long-term UVC+PTP composite transport roadmap was set."
+evidence = ["E0315", "E0339", "E0346"]
+
+[[claim]]
+id = "C33"
+entities = ["module.uvc-shared"]
+status = "verified-physical"
+text = "A feed runner with an inherited-fd feeder enumerates the composite children, but the UVC host open fails and Windows loses MSC afterwards; INIT is mode dependent and the feed runner falls back."
+evidence = ["E0341", "E0342"]
+
+[[claim]]
+id = "C34"
+entities = ["usb.liveview-source", "module.uvc-shared"]
+status = "verified-offline"
+text = "The UVC monitor architecture was set with a live read-only MSC snapshot, a safe DMA probe and a reference client."
+evidence = ["E0348"]
+
+[[frontier]]
+id = "F01"
+title = "Physical EP0 status stage (continued in the usb-ep0 area)"
+state = "done"
+entities = ["module.uvc-shared"]
+evidence = ["E0350", "E0354"]
+next = "Superseded by the usb-ep0 area: Run B2..B25 and the E0476 pre-arm candidate."
+
+[[hazard]]
+id = "H01"
+title = "USB mode switch while a UVC overlay is active"
+effect = "Switching to PC Remote during an active UVC overlay rebooted the camera."
+rule = "Stop and retire the session before any USB mode change."
+evidence = ["E0340"]
+
+[[hazard]]
+id = "H02"
+title = "Teardown without unconfigure-first"
+effect = "Device stayed 'unknown' in MSC after Track B sessions; battery pull needed and /tmp_bt receipts lost."
+rule = "Use the unconfigure-first soft-disconnect (E0352/E0353) and copy receipts off before recovery."
+evidence = ["E0248", "E0255", "E0350", "E0352"]
+
+[[hazard]]
+id = "H03"
+title = "Hooking live im.elf code"
+effect = "A hook without stop scope and four-core cache sync risks crashing PID 149."
+rule = "Install hooks only inside a verified CPU barrier with four-core cache synchronization and restore the original instruction on retirement."
+evidence = ["E0192", "E0203", "E0205"]

@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="1200" viewBox="0 0 920 1200" role="img" aria-labelledby="title desc">
+<title id="title">Knowledge Map Coverage — 2026-11-24 | E9104</title>
+<desc id="desc">Knowledge-map coverage of firmware inventories, generated from docs/map/sources and docs/map/inventories.toml. It counts items the map describes, graded by the strongest current claim; this is not a firmware compatibility percentage.</desc>
+<rect width="920" height="1200" rx="16" fill="#0d1117" />
+<g>
+<text x="24" y="38" fill="#f0f6fc" font-size="21" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Knowledge Map Coverage</text>
+<text x="24" y="54" fill="#9da7b3" font-size="9" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">generated from docs/map · share of each firmware inventory that the knowledge map describes</text>
+<rect x="760.82" y="22" width="135.18" height="22" rx="11" fill="#161b22" stroke="#30363d" stroke-width="1" />
+<text x="887" y="38" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">2026-11-24 | E9104</text>
+<rect x="24" y="68" width="186.763" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
+<rect x="94.92" y="68" width="115.843" height="26" rx="5" fill="#8957e5" />
+<text x="33" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">map areas</text>
+<text x="103.92" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">15 · 86 entities</text>
+<rect x="218.763" y="68" width="181.354" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
+<rect x="272.043" y="68" width="128.074" height="26" rx="5" fill="#2ea043" />
+<text x="227.763" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">claims</text>
+<text x="281.043" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">294 · 46 retracted</text>
+<rect x="408.117" y="68" width="217.574" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
+<rect x="473.157" y="68" width="152.534" height="26" rx="5" fill="#1f6feb" />
+<text x="417.117" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">evidence</text>
+<text x="482.157" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">736 indexed · 247 deep</text>
+<rect x="633.691" y="68" width="89.3904" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
+<rect x="692.851" y="68" width="30.2304" height="26" rx="5" fill="#d29922" />
+<text x="642.691" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">hazards</text>
+<text x="701.851" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">26</text>
+<rect x="731.082" y="68" width="132.667" height="26" rx="5" fill="#21262d" stroke="#30363d" stroke-width="1" />
+<rect x="778.482" y="68" width="85.2672" height="26" rx="5" fill="#2ea043" />
+<text x="740.082" y="85" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">suite</text>
+<text x="787.482" y="85" fill="#ffffff" font-size="10.5" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">2,091 tests</text>
+<rect x="24" y="112" width="872" height="422" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" />
+<text x="40" y="134" fill="#f0f6fc" font-size="12" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Firmware Inventory Coverage</text>
+<text x="40" y="150" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">bar = share of the inventory described by mapped entities · green verified, blue decoded, amber open frontier</text>
+<text x="40" y="169" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Kernel functions (distinct vmlinux text symbols)</text>
+<text x="880" y="169" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">17 / 14,401 functions · 0.1%</text>
+<rect x="40" y="175" width="840" height="8" rx="4" fill="#21262d" />
+<rect x="40" y="175" width="2" height="8" rx="1" fill="#2ea043" />
+<text x="40" y="194" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: E0402</text>
+<text x="880" y="194" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">17 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="215" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">DWC3 USB controller driver functions</text>
+<text x="880" y="215" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">4 / 91 functions · 4.4%</text>
+<rect x="40" y="221" width="840" height="8" rx="4" fill="#21262d" />
+<rect x="40" y="221" width="36.9231" height="8" rx="4" fill="#2ea043" />
+<text x="40" y="240" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: E0402</text>
+<text x="880" y="240" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">4 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="261" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Loaded kernel modules</text>
+<text x="880" y="261" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">16 / 41 modules · 39.0%</text>
+<rect x="40" y="267" width="840" height="8" rx="4" fill="#21262d" />
+<rect x="40" y="267" width="327.805" height="8" rx="4" fill="#2ea043" />
+<text x="40" y="286" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: E0402</text>
+<text x="880" y="286" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">16 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="307" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Kernel drivers in the boot inventory</text>
+<text x="880" y="307" fill="#8b949e" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 / 37 drivers · 0%</text>
+<rect x="40" y="313" width="840" height="8" rx="4" fill="#21262d" />
+<text x="40" y="332" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: status:kernel_drivers</text>
+<text x="880" y="332" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="353" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Firmware ELF files (executables and libraries)</text>
+<text x="880" y="353" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">13 / 474 files · 2.7%</text>
+<rect x="40" y="359" width="840" height="8" rx="4" fill="#21262d" />
+<rect x="40" y="359" width="23.038" height="8" rx="4" fill="#2ea043" />
+<text x="40" y="378" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: E0001</text>
+<text x="880" y="378" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">13 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="399" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">im.elf static plugins</text>
+<text x="880" y="399" fill="#8b949e" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 / 198 plugins · 0%</text>
+<rect x="40" y="405" width="840" height="8" rx="4" fill="#21262d" />
+<text x="40" y="424" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: status:imdb_plugins</text>
+<text x="880" y="424" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="445" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Device nodes</text>
+<text x="880" y="445" fill="#8b949e" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 / 88 nodes · 0%</text>
+<rect x="40" y="451" width="840" height="8" rx="4" fill="#21262d" />
+<text x="40" y="470" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: status:devno_nodes</text>
+<text x="880" y="470" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 verified · 0 decoded · 0 frontier</text>
+<text x="40" y="491" fill="#c9d1d9" font-size="10.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Flash partitions</text>
+<text x="880" y="491" fill="#8b949e" font-size="9.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 / 30 partitions · 0%</text>
+<rect x="40" y="497" width="840" height="8" rx="4" fill="#21262d" />
+<text x="40" y="516" fill="#9da7b3" font-size="8" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">source: status:flash_parts</text>
+<text x="880" y="516" fill="#9da7b3" font-size="8" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0 verified · 0 decoded · 0 frontier</text>
+<rect x="24" y="552" width="426" height="564" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" />
+<rect x="470" y="552" width="426" height="564" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1" />
+<text x="40" y="574" fill="#f0f6fc" font-size="12" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Mapped Areas</text>
+<text x="40" y="590" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">deep-reviewed / records · current / retracted claims</text>
+<text x="486" y="574" fill="#f0f6fc" font-size="12" font-weight="700" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Open Frontier</text>
+<text x="486" y="590" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">open edges of the mapped areas</text>
+<text x="40" y="610" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">ILCE-6400A qualification and firmware acquisition</text>
+<text x="434" y="610" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/20 · 9/0</text>
+<text x="40" y="630" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Live hardware observations and peripheral contracts</text>
+<text x="434" y="630" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/15 · 9/1</text>
+<text x="40" y="650" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Imaging pipeline: color, RAW, RCRAW and recording paths</text>
+<text x="434" y="650" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/44 · 16/0</text>
+<text x="40" y="670" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">L2 full-system kernel boot (UnicornMachine)</text>
+<text x="434" y="670" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">88/88 · 47/10</text>
+<text x="40" y="690" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">L3 user space: original im.elf under InterpreterProbe</text>
+<text x="434" y="690" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/81 · 27/3</text>
+<text x="40" y="710" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Menu model and touch UI</text>
+<text x="434" y="710" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/55 · 14/0</text>
+<text x="40" y="730" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Mod Loader and firmware mods</text>
+<text x="434" y="730" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/16 · 15/0</text>
+<text x="40" y="750" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Native USB debugger, monitor and diagnostic storage</text>
+<text x="434" y="750" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/32 · 13/0</text>
+<text x="40" y="770" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">CXD90045 multi-device platform</text>
+<text x="434" y="770" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/20 · 13/1</text>
+<text x="40" y="790" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">QEMU sony-a6400 machine</text>
+<text x="434" y="790" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">60/73 · 22/4</text>
+<text x="40" y="810" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Storage, SD card and backup service</text>
+<text x="434" y="810" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/21 · 7/0</text>
+<text x="40" y="830" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">USB composite UVC/PTP on the physical camera (before EP0...</text>
+<text x="434" y="830" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/164 · 34/2</text>
+<text x="40" y="850" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">USB stack inside the emulators</text>
+<text x="434" y="850" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">44/44 · 14/2</text>
+<text x="40" y="870" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">USB / DWC3 EP0 control path (Track B UVC/PTP)</text>
+<text x="434" y="870" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">55/55 · 48/22</text>
+<text x="40" y="890" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Wi-Fi and remote control</text>
+<text x="434" y="890" fill="#8b949e" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">0/15 · 6/1</text>
+<text x="40" y="912" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Evidence records indexed by an area</text>
+<text x="434" y="912" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">736 / 736 · 100.0%</text>
+<rect x="40" y="918" width="394" height="6" rx="3" fill="#21262d" />
+<rect x="40" y="918" width="394" height="6" rx="3" fill="#1f6feb" />
+<text x="40" y="944" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Evidence records cited by curated claims</text>
+<text x="434" y="944" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">713 / 736 · 96.9%</text>
+<rect x="40" y="950" width="394" height="6" rx="3" fill="#21262d" />
+<rect x="40" y="950" width="381.688" height="6" rx="3" fill="#8957e5" />
+<text x="40" y="976" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Evidence records deep-reviewed (read in full)</text>
+<text x="434" y="976" fill="#f0f6fc" font-size="9" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="end">247 / 736 · 33.6%</text>
+<rect x="40" y="982" width="394" height="6" rx="3" fill="#21262d" />
+<rect x="40" y="982" width="132.226" height="6" rx="3" fill="#2ea043" />
+<text x="486" y="609" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Remaining ILCE-6400A flash boundary</text>
+<text x="486" y="623" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · a6400a-acquisition</text>
+<text x="486" y="645" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  From RCRAW enable to an actual RAW/high-bit-depth recording</text>
+<text x="486" y="659" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · imaging-pipeline</text>
+<text x="486" y="681" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F02  Android Vulkan SpektraFilm darkroom prototype in CinemaHUD</text>
+<text x="486" y="695" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">not-started · imaging-pipeline</text>
+<text x="486" y="717" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F03  Mobile fotufilm-engine Metal &amp; batched-Vulkan 36-exposure ARW2 rol...</text>
+<text x="486" y="731" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">not-started · imaging-pipeline</text>
+<text x="486" y="753" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  ObjMic replay and multi-core av-cam on UnicornMachine</text>
+<text x="486" y="767" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · l2-kernel-boot</text>
+<text x="486" y="789" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Advance DefRootView past the transparent root view</text>
+<text x="486" y="803" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · l3-userspace</text>
+<text x="486" y="825" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  36-exposure FilmRoll.mod counter and zero-scratch roll streaming</text>
+<text x="486" y="839" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">not-started · mods</text>
+<text x="486" y="861" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Universal target selection</text>
+<text x="486" y="875" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · platform-multidevice</text>
+<text x="486" y="897" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Stock playback, still capture and remaining controls in QEMU</text>
+<text x="486" y="911" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · qemu-a6400</text>
+<text x="486" y="933" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Zero-scratch read-only DCIM/100MSDCF USTAR streaming from /dev/mmca1</text>
+<text x="486" y="947" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">not-started · storage-sd-backup</text>
+<text x="486" y="969" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Stock USB startup inside the emulators</text>
+<text x="486" y="983" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · usb-emulated</text>
+<text x="486" y="1005" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Run B26: does the status pre-arm remove the 5 s stall?</text>
+<text x="486" y="1019" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">blocked-on-user-go · usb-ep0</text>
+<text x="486" y="1041" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F02  After EP0: sensor video into UVC streaming endpoint 0x82</text>
+<text x="486" y="1055" fill="#8b949e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">not-started · usb-ep0</text>
+<text x="486" y="1077" fill="#f0f6fc" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">F01  Send to Smartphone .ARW original availability and HTTP throughput</text>
+<text x="486" y="1091" fill="#f0883e" font-size="8.5" font-weight="400" font-family="Consolas, 'Courier New', monospace" text-anchor="start">open · wifi-and-remote</text>
+<rect x="24" y="1131" width="10" height="10" rx="2" fill="#2ea043" />
+<text x="40" y="1140" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">verified claim</text>
+<rect x="136.48" y="1131" width="10" height="10" rx="2" fill="#1f6feb" />
+<text x="152.48" y="1140" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">decoded / inference</text>
+<rect x="275.56" y="1131" width="10" height="10" rx="2" fill="#d29922" />
+<text x="291.56" y="1140" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">open frontier</text>
+<rect x="382.72" y="1131" width="10" height="10" rx="2" fill="#21262d" stroke="#30363d" stroke-width="1" />
+<text x="398.72" y="1140" fill="#c9d1d9" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">not yet mapped</text>
+<text x="24" y="1162" fill="#9da7b3" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">Counts what the knowledge map describes, not an overall firmware compatibility percentage.</text>
+<text x="24" y="1178" fill="#9da7b3" font-size="9.5" font-weight="400" font-family="Segoe UI, Arial, sans-serif" text-anchor="start">All 736 evidence records are indexed; claims summarise them and the records stay authoritative.</text>
+</g>
+</svg>

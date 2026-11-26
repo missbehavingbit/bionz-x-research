@@ -1,0 +1,15 @@
+[project]
+name = "a6400-lut-converter"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22"]
+
+[project.optional-dependencies]
+gui = ["Pillow>=9.0", "rawpy>=0.21"]
+
+[project.scripts]
+a6400-lut = "lut_cli.__main__:main"
+a6400-lut-gui = "lut_gui.app:main"
+
+[tool.setuptools]
+packages = ["lut_core", "lut_profiles", "lut_cli", "lut_gui"]

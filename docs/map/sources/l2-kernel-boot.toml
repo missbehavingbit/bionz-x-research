@@ -1,0 +1,514 @@
+# Knowledge-map source: L2 full-system kernel boot (UnicornMachine).
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "l2-kernel-boot"
+title = "L2 full-system kernel boot (UnicornMachine)"
+scope = """
+Booting the original CXD90045 Linux 3.0.27 updater and main kernels under UnicornMachine: EXBL/ATAGS/kemco, timer/GIC/UART, MMU and exception delivery, Thumb user continuation, nflasha3 main-firmware boot and QEMU-oracle peripherals."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+# E0413-E0430 were read in full; E0431-E0677 were reviewed from their full short-answer
+# (or result) sections plus evidence tables.
+deep_reviewed = ["E0413-E0445", "E0418:b-userspace", "E0446:pabt", "E0447-E0452", "E0453:user", "E0454", "E0455", "E0456:thumb",
+  "E0457", "E0459-E0464", "E0466", "E0467", "E0469", "E0470", "E0472-E0475", "E0491-E0504", "E0510",
+  "E0533:native", "E0545-E0548", "E0558-E0560", "E0562", "E0653", "E0656", "E0676", "E0677"]
+records = [
+  "E0413-E0445",
+  "E0446:pabt",
+  "E0447-E0452",
+  "E0453:user",
+  "E0454",
+  "E0455",
+  "E0456:thumb",
+  "E0457",
+  "E0459-E0464",
+  "E0466",
+  "E0467",
+  "E0469",
+  "E0470",
+  "E0472-E0475",
+  "E0491-E0504",
+  "E0510",
+  "E0533:native",
+  "E0545-E0548",
+  "E0558-E0560",
+  "E0562",
+  "E0653",
+  "E0656",
+  "E0676",
+  "E0677",
+]
+
+[[entity]]
+id = "tool.unicorn-machine"
+kind = "tool"
+name = "UnicornMachine (L2 full-system executor)"
+summary = "Full-system Unicorn machine booting original CXD90045 Linux 3.0.27 kernels with explicit peripheral models; single-core Cortex-A9 execution."
+
+[[entity]]
+id = "boot.contract"
+kind = "process"
+name = "Boot contract: EXBL, machine ID, ATAGS and kemco override"
+aliases = ["0x00000DA9", "ARM-CXD900X0", "kemco", "0x00103000", "DGU5"]
+inventory = ["kernel.text:setup_arch"]
+summary = "Raw kernel at PA 0x00108000 / VA 0x60108000, machine ID 0xDA9, initrd at 0x00700000, boot params at 0x00103000; setup_arch requires a 'kemco' override payload; nflashaB0 holds an EXBL container loading DGU5."
+
+[[entity]]
+id = "soc.irq-timer-uart"
+kind = "device"
+name = "GIC, timer, PL011 UART and CRCDC clock"
+aliases = ["0xF8001000", "0xF2403000", "0xF2000000", "ttyAM0", "0xF2A31000"]
+summary = "GICv1 distributor 0xF8001000 / CPU interface 0xF8000100, timer 0xF2403000 (IRQ 153, 100 Hz), PL011 UART0 ttyAM0 at 0xF2000000, CRCDC clock 0xF2A31000."
+
+[[entity]]
+id = "mmu.exceptions"
+kind = "process"
+name = "MMU, virtual TLB and ARMv7 exception delivery"
+aliases = ["UC_TLB_VIRTUAL", "UC_HOOK_TLB_FILL", "DFAR", "IFAR"]
+inventory = ["kernel.text:do_page_fault", "kernel.text:handle_mm_fault", "kernel.text:__dabt_svc", "kernel.text:__pabt_svc", "kernel.text:cpu_v7_switch_mm", "kernel.text:vector_swi", "kernel.text:init_section_page_cgroup"]
+summary = "Deferred UC_TLB_VIRTUAL with a TLB-fill hook walking TTBR1/TTBR0, CP15 fault-register hooks, SWI/prefetch/data-abort re-dispatch and kuser helpers."
+
+[[entity]]
+id = "user.thumb-return"
+kind = "process"
+name = "User-mode return and Thumb continuation"
+aliases = ["ret_to_user", "ret_fast_syscall", "0x04031AF0", "0x0403D6B2"]
+inventory = ["kernel.text:ret_to_user", "kernel.text:ret_fast_syscall", "kernel.text:kernel_execve"]
+summary = "Returning to user space correctly: pt_regs frames, banked SP_usr/LR_usr, SPSR tail, Thumb state and the loader's first syscalls."
+
+[[entity]]
+id = "boot.nflasha3"
+kind = "process"
+name = "nflasha3 main-firmware boot"
+summary = "Captured main firmware booted through stock /sbin/init, 9 mounts, 39 kernel modules, LIRO entry_main, im.elf DMP_2D_Initialize : 0 and /bin/ash."
+
+[[claim]]
+id = "C01"
+entities = ["boot.contract"]
+status = "verified-offline"
+text = "nflasha1 holds a complete updater boot set (ARM zImage, cramfs initrd, kemco.txt with console=ttyAM0,115200n8, loadaddr.txt 0x00108000/0x00700000/0x00103000, p1chksum MD5s of the two images); nflasha3 holds the main set. The app requests an update by writing /setting/updater/mode* markers and running ud_send_lsi.elf / ud_reboot.elf; the updater consumes mode1/2/3/5/6. The loader-to-Linux boot mode is backup record 0x51000F (UPDATER 3, ADJUST 5, USB_CHARGE 6, BIS 0x0C), read by upm.ko and bootin.elf."
+evidence = ["E0413"]
+
+[[claim]]
+id = "C02"
+entities = ["boot.contract", "soc.irq-timer-uart"]
+status = "verified-offline"
+text = "Sony's setup_arch accepts a boot-parameter override at 0x60103000 only if it starts with 'kemco' (strncmp 5); it then parses from ptr+5, turns CR/LF into spaces and stops at '*'. Standard ATAGS or raw cmdline text there are rejected ('invalid cmdline override') and the built-in kemco CONFIG_CMDLINE (init=/sbin/init) is used. With the kemco form, init=/bin/ash is parsed and attempted."
+evidence = ["E0424", "E0425"]
+
+[[claim]]
+id = "C03"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "Guest data aborts, __ex_table fixups, prefetch aborts, SP banking, CP15 IFSR/IFAR hooks and SVC-mode abort stubs were implemented step by step until real USER-mode execution ran."
+evidence = ["E0419", "E0420", "E0429", "E0430", "E0431", "E0433", "E0435"]
+
+[[claim]]
+id = "C04"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "Two different translation problems blocked ld.so: the repeated 0x04031AF0 fault was a stale DFAR/DFSR on the user data-abort path (fixed, page installed), and the following 0x0402F666 loop persisted with a valid PTE because the guest's TLBIALL/TTBR0 maintenance does not flush Unicorn's SoftMMU. UC_TLB_VIRTUAL with a UC_HOOK_TLB_FILL page-table walker, a live-TTBR1 kernel walk and activation deferred to the first real user return resolve translation."
+evidence = ["E0441", "E0443", "E0445", "E0446:pabt", "E0448", "E0449", "E0452", "E0457"]
+
+[[claim]]
+id = "C05"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "The PC=0 resume was a restore-path issue in ret_to_user; SPSR-tail capture gave the first true Thumb USR entry at 0x0402E790; generation-tagged pt_regs eliminated stale replays and ld-2.11.2.so executes deep into relocation."
+evidence = ["E0459", "E0461", "E0463", "E0491", "E0492"]
+
+[[claim]]
+id = "C06"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "Fixing the true user register bank, the ret_fast_syscall restore and the enforced USR|Thumb return let the first loader SVCs (brk) and the second syscall execute."
+evidence = ["E0494", "E0498", "E0500", "E0503", "E0504"]
+
+[[claim]]
+id = "C07"
+entities = ["tool.unicorn-machine", "boot.contract"]
+status = "verified-offline"
+text = "The offline nflasha1 updater kernel boots to an interactive BusyBox v1.13.4 /bin/ash on ttyAM0 and runs uname -a and ls -la / (800M instructions, 11,420 serial bytes, no unmapped access). It needed amba2.console=1 with PL011 IRQ 150 delivery, kuser-page hooks and COW decode at 0xFFFF0FCC, a SoftMMU flush on switch_mm, and per-frame SP_usr restore so a sys_clone child keeps its own stack. This run still used the manual-restore machinery later removed by E0533."
+evidence = ["E0510"]
+
+[[claim]]
+id = "C08"
+entities = ["user.thumb-return", "mmu.exceptions"]
+status = "verified-offline"
+text = "The real cause of the 'ARM decoding' symptom was host diagnostics: entry code hooks walked user page tables through a nested emu_start of an ARM MRC helper, interrupting the Thumb entry (whose first two instructions are 4-byte Thumb-2 loads, so 4-byte PC steps prove nothing). With hook-safe CP-register access and no nested emu_start, two fresh nflasha1 replays run ld.so, enter BusyBox at 0x0000C438 (USR/Thumb) and complete ash builtin roundtrips with 0 manual Thumb recoveries and identical UART bytes."
+evidence = ["E0533:native"]
+
+[[claim]]
+id = "C09"
+entities = ["tool.unicorn-machine"]
+status = "verified-offline"
+text = "Unicorn and the patched QEMU sony-a6400 board match in the ret_to_user window except CPSR.A (QEMU sets it on kernel entry and IRQ entry) and F; non-secure A/F handling reproduces the exception return. Unicorn runs as Cortex-A9 (MIDR 0x410FC090) and QEMU as Cortex-A5 (0x410FC051), so adjacent proc_info slots are chosen; the first user Thumb entry address differs between runs (historical 0x0402E790, later 0x0400C790 / 0x040C2790); the Thumb loader prefix matches while the VFP capability word differs."
+evidence = ["E0545", "E0547", "E0548", "E0558", "E0559", "E0560", "E0562"]
+
+[[claim]]
+id = "C10"
+entities = ["tool.unicorn-machine"]
+status = "verified-offline"
+text = "The updater child/COW continuation works after making the handle_mm_fault return hook passive; with --vfp-d16-mvfr0 the kernel advertises AT_HWCAP 0x0000E0D7, matching QEMU."
+evidence = ["E0653"]
+
+[[claim]]
+id = "C11"
+entities = ["boot.nflasha3", "tool.unicorn-machine"]
+status = "verified-offline"
+text = "Captured nflasha3 main firmware boots under UnicornMachine through stock /sbin/init, 9 mounts, 39 .ko modules, LIRO entry_main, im.elf DMP_2D_Initialize : 0 and /bin/ash past 2.8B instructions under --mmio stop."
+evidence = ["E0656"]
+
+[[claim]]
+id = "C12"
+entities = ["tool.unicorn-machine", "soc.irq-timer-uart"]
+status = "verified-offline"
+text = "Opt-in --qemu-peripherals add the QEMU SYSV/VPH/evsel frame clock (SYSV 0xF3402000 IRQ 98 every 33,367 us, VPH 60 Hz vsync IRQ 101/102, evsel ext-vd IRQ 83/84) and QEMU-oracle SIO channel-3 start/done (IRQ 204), GPIO port-1 input 0x32 and ADC done with released-key results 0x3FF. These models are unit-tested; no captured nflasha3 replay was run with them, and the E0656 input set is not in this workspace."
+evidence = ["E0676", "E0677"]
+
+[[claim]]
+id = "C13"
+entities = ["tool.unicorn-machine"]
+status = "verified-offline"
+text = "No ld.so.preload, ld.so.conf, init.d or rcS ships in the live or packaged initrd or in /usr; preload paths are debug modes gated by /setting/mode/dmode and /setting/mode/preload. im.elf's environment has no LD_PRELOAD or LD_LIBRARY_PATH. Runtime /etc is a writable vfat mount of /dev/nflasha10, where /etc/ld.so.preload lists only the two project-installed diagnostics. The init mount table and order were recovered."
+evidence = ["E0418:b-userspace"]
+
+[[claim]]
+id = "R01"
+entities = ["user.thumb-return"]
+status = "retracted"
+text = "Unicorn's translation stays in ARM state at the ld.so entry despite CPSR.T=1 (PC steps 0x790 -> 0x794 -> 0x798), so fixed-address prologue execution, a manual Thumb stepper and forced-Thumb UC_ERR_INSN_INVALID recovery are required."
+evidence = ["E0464", "E0466", "E0467", "E0469", "E0470", "E0472", "E0473"]
+superseded_by = "C08"
+note = "E0533 shows the entry is Thumb (two four-byte Thumb-2 loads then a two-byte mov) and removes those workarounds."
+
+[[claim]]
+id = "C14"
+entities = ["soc.irq-timer-uart", "boot.contract"]
+status = "verified-offline"
+text = "A PL011 alias with bidirectional UART and the PID-1 panic root cause moved the updater boot on to /sbin/init diagnosis."
+evidence = ["E0422"]
+
+[[claim]]
+id = "C15"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "PID-1 user entry: /bin/busybox and cramfs symlinks decode, kernel_execve errno is captured, the -EFAULT site is demand paging vs __ex_table in padzero, and the first user-mode CPSR appears."
+evidence = ["E0426", "E0427", "E0428"]
+
+[[claim]]
+id = "C16"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "do_PrefetchAbort tracing, banked '^' hook verification, the first oops after ld-2.11.2.so, SVC-mode abort delivery, abort accounting and SWI dispatch around 0x04031AF0 were worked through."
+evidence = ["E0432", "E0434", "E0436"]
+
+[[claim]]
+id = "C17"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "do_page_fault pt_regs frames, kernel-VA translation, TLB flush on ret_to_user, INTR abort re-dispatch, the SWI Thumb offset, the two kernel stacks, live SVC-stack delivery, data- vs prefetch-abort classification and an unconditional (PC, decoded VA) fault guard narrowed the 0x04031AF0 loop to a page/translation blocker."
+evidence = ["E0437", "E0438", "E0439", "E0440", "E0442", "E0444"]
+
+[[claim]]
+id = "C18"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "Unicorn's UC_TLB_VIRTUAL API was found and an SCTLR toggle rejected; the __rt_mutex_init(NULL) write comes from init_section_page_cgroup+0x11c with one anomalous NULL call among valid heap pointers."
+evidence = ["E0447", "E0450", "E0451"]
+
+[[claim]]
+id = "C19"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "User TTBR0 is primed from current->mm->pgd at cpu_v7_switch_mm (with a live-SP mm/active_mm fallback); ARM and Thumb-2 kernel-text scans for TTBR0 writes found the first-userspace refresh point."
+evidence = ["E0453:user", "E0454", "E0455", "E0456:thumb"]
+
+[[claim]]
+id = "C20"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "pt_regs capture at ret_to_user had a base misalignment; the ret_to_user tail was disassembled and a Thumb-aware restore helper added; T=1 lock, slice-boundary resume, TB-eviction warm-up and a general Thumb stepper were tried, with the regressing variants reverted."
+evidence = ["E0460", "E0462", "E0464", "E0466", "E0467", "E0470"]
+
+[[claim]]
+id = "C21"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "_dl_start's VA 0x28 store was fixed (SVC-bank SP + partial stepping); the 0x0403D6B2 VA-0 read was SP_usr corrupted to a vector-page value; r8 was 0 because the recovery replay wrote [sp,#0x20] in the wrong bank."
+evidence = ["E0474", "E0475", "E0493"]
+
+[[claim]]
+id = "C22"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "After brk, user code re-entered in SVC/ARM mode because ret_fast_syscall was never reached and ret_to_user frames were kernel frames; vector_swi builds its own pt_regs; the post-brk resume skipped the thunk pop at 0x0403EB20."
+evidence = ["E0495", "E0496", "E0497", "E0499"]
+
+[[claim]]
+id = "C23"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "0x0402F666 faults are TB/translation staleness, not a bad PTE or bad code; in-hook and deferred TB eviction had no effect or regressed and were reverted."
+evidence = ["E0501", "E0502"]
+
+[[claim]]
+id = "C24"
+entities = ["tool.unicorn-machine"]
+status = "verified-offline"
+text = "A later return-window probe restores the stopped QEMU VM, and the blocker probe reads kernel-entry CPSR and the user instruction."
+evidence = ["E0546", "E0547"]
+
+[[claim]]
+id = "C25"
+entities = ["boot.contract"]
+status = "verified-offline"
+text = "The updater cramfs /sbin/init loads its modules, mounts /setting, starts UdtrMain.sh and then loops a password-less /bin/ash --login on the console unless /root/IAMLDUDWRT exists (it does not in the preserved image). viewUnified2.so has DT_NEEDED CautionConfig.so, so a truncated CautionConfig.so stops the unified UI at link time."
+evidence = ["E0413"]
+
+[[claim]]
+id = "C26"
+entities = ["boot.contract"]
+status = "verified-physical"
+text = "In normal boot nflashaB0, nflashaB1, nflasha1 and nflasha3 are readable with O_RDONLY (not locked after boot); read-only dumps were streamed through the debugger and re-hashed on the host. nflashaB0 starts with EXBL and carries loader code; nflashaB1 is all zero (zeroed vs zero-backed is unknown); nflasha1 matches the E0306 dump byte for byte."
+evidence = ["E0414"]
+
+[[claim]]
+id = "C27"
+entities = ["boot.contract"]
+status = "verified-offline"
+text = "nflashaB0 is the first-stage loader: one 0x200-byte EXBL container (seven 0x40-byte records, six used, load = 0xFE040000 + start*512, entry 0xFE047000 reset vector) holding a Sony DGU5 loader V85.00.03 with LPDDR3 init, FAT access, the 0x0051000F boot-mode literal, a backslash \\updater\\mode path and Backup.bin load strings. In Unicorn it programs UART0, clocks and the timer but never touches the 0x00103000 parameter block in the traced prefix."
+evidence = ["E0415", "E0416"]
+
+[[claim]]
+id = "R02"
+entities = ["boot.contract"]
+status = "retracted"
+text = "The first-stage loader is not preserved anywhere, and no updater-mode path exists outside /setting."
+evidence = ["E0413"]
+superseded_by = "C27"
+
+[[claim]]
+id = "R03"
+entities = ["boot.contract"]
+status = "retracted"
+text = "nflashaB0 holds a second EXBL record at offset 0xCDE0."
+evidence = ["E0414"]
+superseded_by = "C27"
+note = "E0415: 0xCDE0 lies inside loader segment 0 (an EXBL literal in its string data), not a second container."
+
+[[claim]]
+id = "C28"
+entities = ["boot.contract", "boot.nflasha3"]
+status = "verified-offline"
+text = "The live nflasha3 kernel, initrd and av-cam.bin differ from the update package (live Sony CE Linux 8.2.6.0, 2021; package 8.2.5.7, 2017); the other ten files are identical. The live dump is the authoritative input. Kernel layout: PA 0x00108000, PAGE_OFFSET 0x60000000, _stext 0x60108160, _etext 0x6048D024, linux_banner 0x603C8028, 24,600 symbols."
+evidence = ["E0415"]
+
+[[claim]]
+id = "C29"
+entities = ["boot.contract", "soc.irq-timer-uart"]
+status = "verified-offline"
+text = "Machine ID 0x0DA9 (ARM-CXD900X0) was recovered from both kernels' machine_desc. With a reconstructed 884-byte ATAG list at 0x00103000 (core, two memory banks, cmdline) and r0=0, r1=0x0DA9, r2=0x00103000, the updater kernel runs head.S, enables the MMU and reaches calibrate_delay, which waits for a timer interrupt. GIC distributor 0xF8001000, CPU interface 0xF8000100 and timer 0xF2403000 were recovered from the init code."
+evidence = ["E0416"]
+
+[[claim]]
+id = "C30"
+entities = ["soc.irq-timer-uart"]
+status = "verified-offline"
+text = "The CXD timer uses IRQ 153 (setup_irq 0x99) with gic_init(0, 29, 0xF8001000, 0xF8000100); timer base 0xF2403000: control +0x00, divider +0x04 (write 1 acknowledges), period +0x08 (0x2710 = 100 Hz on 1 MHz), free-running counter +0x10C. A GIC model with GICD_TYPER = 1024 lines delivered 368 timer IRQs, so calibrate_delay completes from real jiffies and the kernel reaches PCI, initrd probe and hwtimer init."
+evidence = ["E0417"]
+
+[[claim]]
+id = "C31"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "Unicorn 2.1.4 executes LDREX/STREX correctly on mapped memory; the stop after the timer model was a guest data abort at VA 0 (ldrex r2,[r5], r5=0 in cmpxchg_futex_value_locked+0x50), which Unicorn surfaced as UC_ERR_EXCEPTION. An opt-in exclusive-to-plain patch (1,990 LDREX, 1,990 STREX, 3,324 barriers) does not remove that stop; abort delivery is the real gap."
+evidence = ["E0418:cxd90045"]
+
+[[claim]]
+id = "R04"
+entities = ["mmu.exceptions"]
+status = "refuted"
+text = "Unicorn 2.1.4's ARM target cannot execute ARMv7 exclusive instructions (LDREX/STREX)."
+evidence = ["E0417"]
+superseded_by = "C31"
+
+[[hazard]]
+id = "H01"
+title = "Booting the updater set on hardware"
+effect = "The updater init starts UdtrMain.sh, the update engine, immediately; the original CautionConfig incident came from an in-place truncation of /usr."
+rule = "Treat updater boot as a firmware operation: emulate it, never trigger it on a camera without explicit scope; any recovery copy must use cp, sync, size/SHA verification and never truncate in place."
+evidence = ["E0413"]
+
+[[claim]]
+id = "C32"
+entities = ["boot.contract", "user.thumb-return"]
+status = "open"
+text = "Contradiction to resolve: E0413 lists /sbin/init (a shell script) among the updater cramfs entries, while the E0422/E0425 cramfs decodes of nflasha1 boot/initrd.img find no /sbin/init or /bin/sh, and the default boot panics with 'Failed to execute /sbin/init ... No init found'. Later boots use init=/bin/ash."
+evidence = ["E0413", "E0422", "E0425"]
+
+[[claim]]
+id = "C33"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "futex_init deliberately probes cmpxchg_futex_value_locked(NULL); its __ex_table entry (insn 0x6015BDCC -> fixup 0x60364BD4) was found among 46,277 parsed pairs. Delivering kernel faults with a table entry directly to the fixup (5 fixups) lets boot pass futex_init to console registration, brd/loop/smsc911x, VFP init and the cramfs ramdisk load. The Sony 'VFP is not D16 type' BUG at 0x6041FFD8 is skipped by a labelled bne->b patch at PA 0x41FFD8."
+evidence = ["E0419", "E0420"]
+
+[[claim]]
+id = "C34"
+entities = ["tool.unicorn-machine", "boot.contract"]
+status = "verified-offline"
+text = "The kernel's klog buffer (klog.addr=0x034A0000, 128 KiB) holds the real boot log. It shows console [klog0] as the only console (so nothing went to the PL011), a CRCDC timeout at 0xF2A31000, dwc3 probe -110, the cramfs root mounted read-only and then 'Failed to execute /sbin/init ... Kernel panic - not syncing: No init found' followed by Sony's exception monitor. UART0..2 resources are 0xF2000000/0xF2001000/0xF2002000."
+evidence = ["E0421", "E0422"]
+
+[[claim]]
+id = "R05"
+entities = ["user.thumb-return"]
+status = "retracted"
+text = "The updater kernel reached first userspace: /sbin/init ran /bin/sh as PID 1, which then took a NULL-vector user exception."
+evidence = ["E0421"]
+superseded_by = "C34"
+note = "E0422: the PID-1 dump belongs to the init task panicking with 'No init found'; no user-mode instruction ran."
+
+[[claim]]
+id = "C35"
+entities = ["soc.irq-timer-uart"]
+status = "verified-offline"
+text = "Two models unlocked the serial console: the CRCDC clock block (write 1 to 0xF2A31000+0x30, poll bit 0 clear) removes the timeout, and the PL011 PrimeCell ID registers (PeriphID 0x00141011, PCellID 0xB105F00D at +0xFE0..0xFFC) let amba_device_register succeed. Then 'uart0: ttyAM0 at MMIO 0xf2000000 (irq = 150)' and console [ttyAM0] enabled; 52,976 bytes were captured and injected RX bytes drive Sony's exception monitor, whose shell is compiled out (EM_DEBUG)."
+evidence = ["E0423", "E0424"]
+
+[[claim]]
+id = "R06"
+entities = ["soc.irq-timer-uart"]
+status = "retracted"
+text = "The kernel's PL011 console uses a different physical base or an unobserved alias, which is why no UART writes appear at 0xF2000000."
+evidence = ["E0420", "E0421"]
+superseded_by = "C35"
+
+[[claim]]
+id = "C36"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "In the updater cramfs /bin/ash is a 7-byte symlink to busybox; busybox (233,448 B) is a dynamic ARM EABI5 ELF with Thumb entry 0xC439 and PT_INTERP //lib/ld-linux.so.3, which resolves to a valid ld-2.11.2.so. kernel_execve returned -EFAULT for every existing binary and -ENOENT for the missing defaults, and no user-mode instruction ran."
+evidence = ["E0425", "E0426", "E0427"]
+
+[[claim]]
+id = "C37"
+entities = ["mmu.exceptions", "user.thumb-return"]
+status = "verified-offline"
+text = "The -EFAULT came from two emulator bugs: the __ex_table fixup was applied before delivering the data abort, which skipped demand paging for the exec BSS (padzero / __clear_user_std at VA 0x48ac6), and DFSR was written with the fault address instead of the FSR. With both fixed, exec reaches user mode (CPSR USR) at 0x0402e790, an unmapped ld.so text page."
+evidence = ["E0428"]
+
+[[claim]]
+id = "C38"
+entities = ["mmu.exceptions", "user.thumb-return"]
+status = "verified-offline"
+text = "Prefetch-abort delivery (IFAR/IFSR via CP15, vector 0xFFFF000C), routing every USR-mode fault to the kernel, and an emulated vector stub that writes the {r0, pc, spsr} frame to a scratch page before entering __pabt_usr/__dabt_usr isolate SP_abt from SP_svc. The 0x0402e790 prefetch abort is delivered, but resuming it still ended in the exception monitor at this point."
+evidence = ["E0429", "E0430"]
+
+[[claim]]
+id = "C39"
+entities = ["mmu.exceptions", "user.thumb-return"]
+status = "verified-offline"
+text = "Unicorn banks SP per mode (SP_svc and SP_usr survive mode switches). The real blocker was the kernel's CP15 reads: v7_early_pabort / v7_early_abort read IFAR/IFSR/DFSR/DFAR as 0. Hooking those MRC sites (0x60119B60/64 and 0x60119B44/48) to inject the delivered fault registers made user code run: user-mode entries from 0x0402E790 (USR + Thumb) inside ld-2.11.2.so, with 106 demand-paging prefetch aborts."
+evidence = ["E0431", "E0432", "E0433"]
+
+[[claim]]
+id = "R07"
+entities = ["mmu.exceptions"]
+status = "refuted"
+text = "Unicorn shares R13/R14 across modes, so user SP/LR must be emulated by hand on every exception."
+evidence = ["E0429", "E0430", "E0431"]
+superseded_by = "C39"
+
+[[claim]]
+id = "C40"
+entities = ["mmu.exceptions", "tool.unicorn-machine"]
+status = "verified-offline"
+text = "Kernel VAs (0x60000000+) were written through Unicorn's physical mem_read/mem_write without translation, corrupting pt_regs; translating them fixed ARM_sp. The secondary crash at do_page_fault+0x34 was a NULL thread_info->task on a stale captured SVC stack (0x7DC0C000 instead of 0x7DC0E000); using the live banked SP_svc and refreshing it at ret_to_user gives a valid task (0x7E36DBE0). A same-fault guard (8 repeats) cut diagnostic runs to about 16 s."
+evidence = ["E0437", "E0439", "E0440", "E0441"]
+
+[[claim]]
+id = "R08"
+entities = ["mmu.exceptions"]
+status = "refuted"
+text = "Kernel-mode data aborts through the hardware ABT vector build bad pt_regs, which causes the bad-pgd oops at 0x04031af0."
+evidence = ["E0434"]
+superseded_by = "C40"
+note = "E0435 implemented the SVC vector-stub path and the oops was unchanged."
+
+[[claim]]
+id = "C41"
+entities = ["user.thumb-return", "mmu.exceptions"]
+status = "verified-offline"
+text = "0x04031AF0 is the Thumb load ldr r3,[r1,r0] (live bytes match ld.so offset 0x3AF0) with effective address 0x0404DF48 in ld.so's second PT_LOAD. Unicorn reports this guest translation fault as a bare UC_ERR_EXCEPTION with no unmapped-access hook, so the machine now walks TTBR0 -> L1 -> L2, decodes the instruction with capstone and delivers a data abort for the computed address (read/write by mnemonic). Unicorn also couples CPSR.T to the PC's low bit, so PC writes must keep the Thumb LSB."
+evidence = ["E0436", "E0442", "E0443", "E0444", "E0445"]
+
+[[claim]]
+id = "R09"
+entities = ["user.thumb-return"]
+status = "refuted"
+text = "The 0x04031AF0 fault is a user instruction-prefetch fault on a new page."
+evidence = ["E0437"]
+superseded_by = "C41"
+
+[[claim]]
+id = "R10"
+entities = ["mmu.exceptions"]
+status = "refuted"
+text = "The page behind the 0x04031AF0 loop is already installed; the repeats come from mismatched kernel stacks or stale instruction-fetch translation."
+evidence = ["E0439", "E0441"]
+superseded_by = "C04"
+note = "E0445: the PTE for 0x0404D000 was missing because stale last_dfar/last_dfsr made the kernel handle the wrong page."
+
+[[claim]]
+id = "C42"
+entities = ["mmu.exceptions"]
+status = "verified-offline"
+text = "With a valid, executable PTE for 0x0402F000 the fetch at 0x0402F666 still repeated after 19 TTBR0-rewrite + TLBIALL + DSB + ISB flushes, so this Unicorn build does not honour guest TLB maintenance; toggling SCTLR to force a QEMU flush broke boot early. Unicorn 2.1.4's UC_TLB_VIRTUAL + UC_HOOK_TLB_FILL, with a hook that only reads physical memory and walks the live tables, removed the loop (1,195 fills, 0 misses)."
+evidence = ["E0446:pabt", "E0447", "E0448"]
+
+[[claim]]
+id = "C43"
+entities = ["mmu.exceptions", "tool.unicorn-machine"]
+status = "verified-offline"
+text = "TTBR1 reads live as 0x00104000 (swapper_pg_dir) and the vmalloc/fixmap walk was fixed. Running the whole boot under the virtual TLB then hit __rt_mutex_init(NULL) from a separate init_section_page_cgroup invocation (647 normal iterations carry valid heap pointers), so the virtual TLB is now switched on only at the first user return; the early boot stays on UC_TLB_CPU."
+evidence = ["E0449", "E0450", "E0451", "E0452"]
+
+[[claim]]
+id = "C44"
+entities = ["mmu.exceptions", "user.thumb-return"]
+status = "verified-offline"
+text = "At deferred activation both TTBR0 and TTBR1 read 0x00104000. cpu_v7_switch_mm (0x6011A26C) is missing from the machine's decoded kallsyms and was never executed, and none of the four ARM TTBR0-write sites ran (no Thumb-2 form exists). Gating activation on a real user return (stacked user PC below 0x60000000 and a valid current->mm->pgd) captures activation pgd 0x1F144000 and user TTBR0 0x1DC1C000; ld.so is entered, and the next blocker was a resume at PC 0."
+evidence = ["E0453:user", "E0454", "E0455", "E0456:thumb", "E0457"]
+
+[[claim]]
+id = "C45"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "The user pt_regs frame sits at SP (thread_info + 0x1FB0) and already holds the correct user PC (0x0402E790, CPSR 0x70) before ret_to_user, so abort delivery does not zero it. The ret_to_user tail ends in movs pc, lr at 0x6010DF64 (0x6010DF34 is a bl), with SPSR set at 0x6010DF50; a manual restore at that tail gave the first user-mode entry through the deferred virtual TLB."
+evidence = ["E0459", "E0460", "E0461", "E0462", "E0463"]
+
+[[claim]]
+id = "C46"
+entities = ["user.thumb-return"]
+status = "verified-offline"
+text = "On the manual-restore path: the initial user stack (argc 1, argv, envp, auxv) built by create_elf_tables is correct; a stale-frame replay with zeroed SP_usr was removed by generation-tagged pt_regs; UC_HOOK_INTR reports the PC after svc, so the return address must be probed (0x0403EB16, not 0x0403EB18) through the guest page tables; vector_swi and ret_fast_syscall were handled so successive brk syscalls execute."
+evidence = ["E0491", "E0492", "E0493", "E0494", "E0495", "E0496", "E0497", "E0498", "E0499", "E0500", "E0501", "E0502", "E0503"]
+
+[[claim]]
+id = "C47"
+entities = ["user.thumb-return", "mmu.exceptions"]
+status = "verified-offline"
+text = "0x0402F666 is the Thumb-2 literal load ldr.w r4,[pc,#0xbec] (data at 0x04030254); the fault decoder lacked PC-relative bases, so it was misclassified as a prefetch abort. Also: the fast-syscall frame capture clobbered the syscall return r0 (brk(0) ran twice); ld.so switches to ARM-mode helpers and __sigsetjmp's vstmia needs FPEXC.EN; kernel uaccess helpers such as __strncpy_from_user must demand-page user VAs. With these, ld.so issues uname, mmap2, access, open and stat64."
+evidence = ["E0504"]
+
+[[frontier]]
+id = "F01"
+title = "ObjMic replay and multi-core av-cam on UnicornMachine"
+state = "open"
+entities = ["boot.nflasha3", "tool.unicorn-machine"]
+evidence = ["E0656", "E0676", "E0677"]
+next = "Replay captured nflasha3 and check whether av-cam passes the ObjMic wait; CPUs 1-3 are still offline and no Unicorn GUI frame is claimed."

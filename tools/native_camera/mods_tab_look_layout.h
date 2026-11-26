@@ -1,0 +1,20 @@
+#ifndef MODS_TAB_LOOK_LAYOUT_H
+#define MODS_TAB_LOOK_LAYOUT_H
+
+#if defined(MLV2_TARGET_ILCE6400A) || defined(TARGET_ILCE6400A)
+#define ML_ANCHOR_ADDR  0x13abfc40u
+#define MTL_HOOK_ADDR   0x067a862eu
+#else
+#define ML_ANCHOR_ADDR  0x1615ec40u
+#define MTL_HOOK_ADDR   0x064b54b6u
+#endif
+#define ML_ANCHOR_MAGIC 0x444f4d53u
+#define ML_STATE_BYTES  8192u
+#define MTL_STATES      3u
+#define MTL_CACHE_OFF   (ML_STATE_BYTES - MTL_STATES * 4u)
+#define MTL_CODE_ADDR   0x11434398u
+#define MTL_CODE_CAP    3176u
+#define MTL_MARKER      0x344c544du
+#define MTL_BUILTIN_MARKER 0x424c544du
+
+#endif

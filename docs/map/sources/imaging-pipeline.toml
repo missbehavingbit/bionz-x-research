@@ -1,0 +1,222 @@
+# Knowledge-map source: Imaging pipeline: color, RAW, RCRAW and recording paths.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "imaging-pipeline"
+title = "Imaging pipeline: color, RAW, RCRAW and recording paths"
+scope = """
+av-cam CC 3D LUT and gamma, the Arrivederci/ARRI color work, debayer/PSF/detail stages, RAW develop, IMX284, Open Gate and high-bit-depth paths, AIF DMA, the RCRAW probes, and the candidate mobile GPU 36-exposure ARW roll pipelines (SpektraFilm and fotufilm-engine)."""
+evidence_span = "see record index"
+reviewed = "2026-11-24"
+records = [
+  "E0505",
+  "E0555",
+  "E0556",
+  "E0578",
+  "E0599-E0610",
+  "E0612:live",
+  "E0620-E0635",
+  "0678-dcv-psf-table-layout-and-arrivederci-v5-offset-defect.md",
+  "0679-still-dcv-psf-layout-calibration-and-mod.md",
+  "0680-still-high-iso-nr-crispening-and-paired-jpg.md",
+  "0682-still-jpeg-film-look-domain-and-recipe-recalibration.md",
+  "0683-arri-shoulder-and-fujifilm-simulations.md",
+  "0686-photo-movie-modes-and-dual-variant-presets.md",
+  "0687-photo-movie-fixes.md",
+  "E0688",
+  "E0689",
+]
+
+[[entity]]
+id = "img.cc-lut"
+kind = "process"
+name = "av-cam CC 3D LUT, color matrix and EC gamma"
+aliases = ["CC:", "EC_Gamma", "5x9x9 YCbCr", "CC+8"]
+summary = "av-cam's CC: 3D LUT (5x9x9 YCbCr), 3x3 Q10 color matrix and EC_Gamma (96 x uint16) applied before 8-bit output."
+
+[[entity]]
+id = "mod.arrivederci"
+kind = "module"
+name = "Arrivederci color mod"
+summary = "RAM-only color mod using a matrix fitted to the official ARRI Classic LUT; CC+8 is refilled every frame."
+
+[[entity]]
+id = "img.detail-psf"
+kind = "process"
+name = "Debayer, dcv_psf / spica and detail stages"
+aliases = ["dcv_psf", "spica", "PP_Detail", "SigItpBayer", "Stage_Raw"]
+summary = "av-cam debayering, PSF/tap tables, SigItpBayer/MovItp/PP_Detail, the CamCore stage map, still RAW develop selectors and IMX284 readout/binning."
+
+[[entity]]
+id = "img.recording-paths"
+kind = "process"
+name = "Open Gate, high-bit-depth and RAW video paths"
+aliases = ["Open Gate 3:2", "ZIMA_AVC", "AIF", "SET_RAW_EXTERNAL_OUTPUT"]
+summary = "Feasibility of 3:2 Open Gate, 4K/6K low-fps, 10-bit and RAW/YCC paths, the AIF DMA channel map and the 8-bit ZIMA_AVC ceiling."
+
+[[entity]]
+id = "img.rcraw"
+kind = "process"
+name = "RCRAW block (0xF3031xxx) and its probes"
+aliases = ["RCRAW_EN", "0xF30317C8", "RCRAW_SET 0x63B2D560"]
+summary = "RCRAW line/block calculation, quantization selector, global enable gate and AIF0/1 W1/W2 registers, probed in Unicorn, QEMU and on the camera."
+
+[[entity]]
+id = "app.android-spektrafilm"
+kind = "host"
+name = "CinemaHUD Android SpektraFilm engine (candidate)"
+aliases = ["SpektraFilm", "CinemaHUD Android", "ARW2 GPU", "film roll"]
+related = ["img.cc-lut", "img.detail-psf"]
+summary = "Two-tier Android film simulation architecture: live-view 3D .cube preview in android/cinemahud/shaders/monitor.frag plus a candidate 3-pass NDK Vulkan compute engine for developing 36-exposure 24 MP ARW 2.3 rolls via SpektraFilm's spectral-spatial model."
+
+[[entity]]
+id = "app.mobile-fotufilm"
+kind = "host"
+name = "Mobile fotufilm-engine GPU darkroom (candidate)"
+aliases = ["fotufilm-engine", "fotufilm", "FotufilmHalide", "FilmTileMetalBuilder"]
+related = ["img.cc-lut", "img.detail-psf", "app.android-spektrafilm"]
+summary = "Apache-2.0 Swift/C++/Halide film simulation architecture (DhaliwalX/fotufilm-engine) for developing 36-exposure 24 MP BIONZ X ARW 2.3 rolls on iOS Metal and Android Vulkan GPUs."
+
+[[claim]]
+id = "C01"
+entities = ["img.cc-lut"]
+status = "verified-offline"
+text = "av-cam.bin applies a CC: 3D LUT (5x9x9 YCbCr), a 3x3 Q10 color matrix and EC_Gamma (96 x uint16) before the 8-bit stage."
+evidence = ["E0505"]
+
+[[claim]]
+id = "C02"
+entities = ["mod.arrivederci", "img.cc-lut"]
+status = "verified-physical"
+text = "Arrivederci applies without a Color Mode round trip because CC+8 is refilled every frame; it uses a matrix fitted to the official ARRI Classic LUT, and an A/B recording test (C0029 on vs C0030 off) verified it live."
+evidence = ["E0555", "E0556", "E0610"]
+
+[[claim]]
+id = "C03"
+entities = ["img.detail-psf"]
+status = "verified-offline"
+text = "Debayering, PSF/tap tables, IMX284 readout/binning, still RAW develop selectors, SigItpBayer/MovItp/PP_Detail and the CamCore develop/JPEG stages were mapped in av-cam.bin and compared with the ARRI Image SDK pipeline."
+evidence = ["E0599", "E0600:av-cam", "E0600:arri", "E0601:av-cam", "E0602:av-cam", "E0602:sabin", "E0603"]
+
+[[claim]]
+id = "C04"
+entities = ["img.detail-psf"]
+status = "verified-physical"
+text = "Live read-only checks of dcv_psf and spica state in MSC and 4K movie mode support a static proof of dynamic 4K dcv_psf reload and a systemic dcv_psf / PP_Detail contract."
+evidence = ["E0604", "E0605", "E0606", "E0608", "E0609"]
+
+[[claim]]
+id = "C05"
+entities = ["img.detail-psf"]
+status = "verified-offline"
+text = "An offline 2x2 super-pixel binning prototype ran on a real ARW file."
+evidence = ["E0601:arw"]
+
+[[claim]]
+id = "C06"
+entities = ["img.recording-paths"]
+status = "verified-offline"
+text = "Open Gate 3:2 recording, 4K/6K low-fps paths and 10-bit / 11-14-bit RAW/YCC video paths were mapped statically and in Unicorn; sabin ZIMA_AVC encoders cap at 8-bit 4:2:0."
+evidence = ["E0578", "E0620", "E0621", "E0627"]
+
+[[claim]]
+id = "C07"
+entities = ["img.recording-paths", "img.rcraw"]
+status = "verified-offline"
+text = "The AIF DMA channel table and the SET_RAW_EXTERNAL_OUTPUT gate were mapped; AIF0/1 W1/W2 semantics and the RCRAW DDR path decoded; RCRAW line/block calculation verified in Unicorn."
+evidence = ["E0622", "E0623", "E0624"]
+
+[[claim]]
+id = "C08"
+entities = ["img.rcraw"]
+status = "verified-offline"
+text = "RCRAW_W2_Probe and RCRAW_Enable_Test SMOD v2 builds were verified in Unicorn and QEMU, including ON/OFF/reload cycles and the AIF0 W1/W2 baseline; CALC callers, the quantization selector and the global enable gate are mapped."
+evidence = ["E0625", "E0626", "E0628", "E0629", "E0630", "E0631"]
+
+[[claim]]
+id = "C09"
+entities = ["img.rcraw"]
+status = "verified-physical"
+text = "On a real ILCE-6400, a read-only MSC baseline, a RAM-only Mod Loader v2 + RCRAW_Enable_Test run and a post-recording check show RCRAW_EN = 1 persisting across recording."
+evidence = ["E0632", "E0633", "E0634"]
+
+[[claim]]
+id = "C10"
+entities = ["img.rcraw"]
+status = "verified-offline"
+text = "RCRAW_SET (0x63B2D560) and 0x63767ACC map to the 160..640 FOPD sub-path, with hardware G1/G2 readback."
+evidence = ["E0635"]
+
+[[claim]]
+id = "C11"
+entities = ["img.cc-lut"]
+status = "verified-physical"
+text = "A live 4K S-Log3 read-only check captured the CC: RefAdr buffers."
+evidence = ["E0612:live"]
+
+[[claim]]
+id = "C12"
+entities = ["app.android-spektrafilm", "img.detail-psf"]
+status = "verified-offline"
+text = "Upstream SpektraFilm (3bb2c2d) executes no runtime ODE or PDE solvers, reducing photochemical development to 81-band (380-780 nm) spectral contractions, 1D/2D/3D LUTs, 3-sublayer Poisson-Binomial grain draws and Gaussian/exponential convolutions; Sony ARW 2.3 cRAW (Compression=32767) stores independent 128-bit (16-byte) even/odd row blocks, and CinemaHUD Android already supports 2..65 3D .cube live-view LUT preview in shaders/monitor.frag."
+evidence = ["E0601:arw", "E0688"]
+
+[[claim]]
+id = "C13"
+entities = ["app.android-spektrafilm"]
+status = "inference"
+text = "Replacing desktop spektrafilm-rs's 8-10 full-frame f32 buffers and 162 per-pixel pow loops with a 3-pass NDK Vulkan compute pipeline (GPU uvec4 ARW2 unpack + 64x32 RCD demosaic, RGBA16F mip-pyramid scatter/halation/DIR convolutions, and a once-per-roll 65^3 + 49^3 3D LUT pair) fits a 36-exposure 24 MP roll inside ~323 MB full-frame (~114 MB 4-strip) peak memory on Adreno, Mali and Xclipse GPUs."
+evidence = ["E0688"]
+
+[[claim]]
+id = "C14"
+entities = ["app.mobile-fotufilm", "img.detail-psf"]
+status = "verified-offline"
+text = "DhaliwalX/fotufilm-engine (87a3f46af0, v1.14, Apache-2.0 code + CC BY-SA 4.0 47 stocks) runs no iterative chemical reaction-diffusion PDE solver; it implements closed-form C1 Hermite curves, competitive Hill DIR coupler release with a 3x3 [14, 8, 3] um gap-transmission matrix and decimated Gaussian diffusion, Nelson two-Gaussian screened adjacency, 13.5 MB 17-level Jarvis (exp(-r/1.45 um)) crystal dye-cloud summed-area grain tiles, optional 13-level polarized optical LayeredTransport, and a bundled Sony_ILCE-6400 dual-illuminant 3x3 profile delta (requiring spectralProfileID aliases for ILCE-6100, ILCE-6600, ZV-E10, ILCE-7C, and ILCE-7RM4A)."
+evidence = ["E0601:arw", "E0689"]
+
+[[claim]]
+id = "C15"
+entities = ["app.mobile-fotufilm"]
+status = "verified-offline"
+text = "In fotufilm-engine@87a3f46af0 with halide/Halide@58868f0c, iOS Metal develops 24 MP in 0.95 s on iPhone 16 Pro using 60 x 0.4 MP tiles (maximumTilePixels = 512,000, 5.37x faster than 2 MP tiles due to per-stage VM page faults) while leaving FOTUFILM_AOT_WINDOWED_HOST pooling, command-buffer coalescing, and fused GPUShared schedules disabled (0) on iOS; Android Vulkan (FotufilmHalideLinux.cpp; FotufilmHalideAndroidGPU.cpp is unlinkable dead code) issues ~47 separate vkQueueSubmit + vkQueueWaitIdle drains per tile, dereferences raw VkBuffer handles as MemoryRegion* in halide_vulkan_wrap_vk_buffer, omits runtime HL_VK_ALLOC_CONFIG='0:1:0:0:256' Mali uniform padding, defaults to 4.0 MP tiles without halation_fields, falls back to CPU for LibRaw AHD, grain-tile synthesis and LayeredTransport, and rebuilds 13.5 MB grain SAT + 3x33^3 LUT caches whenever per-shot EXIF shutterSeconds shifts reciprocity."
+evidence = ["E0689"]
+
+[[claim]]
+id = "C16"
+entities = ["app.mobile-fotufilm", "img.cc-lut"]
+status = "inference"
+text = "Combining a GPU ARW 2.3 16-byte block unpack + shared-memory RCD demosaic + fused 3x3 matrix kernel, uniform reciprocity log-exposure offsets (preserving 100% roll cache residency), 256 MB pooled Metal / single-VkCommandBuffer batched Vulkan 0.5 MP fused tiles, and selective Float16 exposure/halation/grain storage (keeping LogExposure, Curves, FilmDensity and FilmTiles SATs in Float32) bounds a 36-exposure 24 MP roll within ~198-342 MB dirty memory (~18-38 s projected flagship wall time), while lut_bridge.fit_cube_to_isp fits a 33^3 stock .cube onto BIONZ X's 5x9x9 RefAdr[0] LUT for EVF framing."
+evidence = ["E0505", "E0689"]
+
+[[frontier]]
+id = "F01"
+title = "From RCRAW enable to an actual RAW/high-bit-depth recording"
+state = "open"
+entities = ["img.rcraw", "img.recording-paths"]
+evidence = ["E0634", "E0635", "E0621"]
+next = "RCRAW_EN persists, but no RAW or >8-bit recording is produced yet; the external-output gate and AIF write paths remain to be qualified on hardware."
+
+[[frontier]]
+id = "F02"
+title = "Android Vulkan SpektraFilm darkroom prototype in CinemaHUD"
+state = "not-started"
+entities = ["app.android-spektrafilm"]
+evidence = ["E0688"]
+next = "Implement a clean-room NDK Vulkan / Rust compute prototype in android/cinemahud/ (without GPL-3.0 code, loading CC BY-SA 4.0 stock profiles with attribution), validate CIEDE2000 < 0.3 in deterministic lut_mode against gray-ramp/ColorChecker baselines, and benchmark 36-frame ARW2 batch latency and AThermal_getThermalHeadroom pacing on the Xiaomi 14 (Adreno 750)."
+
+[[frontier]]
+id = "F03"
+title = "Mobile fotufilm-engine Metal & batched-Vulkan 36-exposure ARW2 roll prototype"
+state = "not-started"
+entities = ["app.mobile-fotufilm"]
+evidence = ["E0688", "E0689"]
+next = "Prototype halide-vulkan-command-batching.patch (single-VkCommandBuffer barrier batching + external MemoryRegion AHardwareBuffer wrapping + HL_VK_ALLOC_CONFIG='64:4:0:0:256'), unlock iOS Metal buffer pooling + exact_stages tile fusion, add GPU ARW 2.3 unpack + RCD demosaic and uniform reciprocity offsets, verify RMSE <= 1e-4 / CIEDE2000 < 0.3 via fotufilm-parity, and benchmark 36 x 24 MP ARW rolls on iOS Metal and Adreno 750 / Mali Vulkan."
+
+[[hazard]]
+id = "H01"
+title = "Color matrix RAM patches persist"
+effect = "The a6400 color matrix table at 0x6444a044 is saved to /setting/Backup.* on power-off, so RAM patches become persistent."
+rule = "Restore original matrix values before power-off unless a persistent change is intended and authorized."
+evidence = ["E0555"]

@@ -1,0 +1,178 @@
+# Knowledge-map source: CXD90045 multi-device platform.
+# See docs/map/README.md for the schema. Claims cite evidence records; the record
+# index on the generated page is extracted from the files themselves.
+
+[meta]
+area = "platform-multidevice"
+title = "CXD90045 multi-device platform"
+scope = """
+Thirteen official updaters, nine kernels, command tables, IPC and call graphs, update-chain integrity, firmware signatures, additional bodies (ILCE-7RM4A) and the project checkpoint inventory."""
+evidence_span = "see record index"
+reviewed = "2026-11-22"
+records = [
+  "E0110",
+  "E0477-E0490",
+  "E0570",
+  "E0645",
+  "E0646",
+  "0678-ilce-7rm4a-usb-pids-are-bk4-preset-units.md",
+  "E0663",
+  "E0666",
+  "cross_model/aes-key-blocks.tsv",
+  "cross_model/command-delta.tsv",
+  "cross_model/ipc-*",
+  "cross_model/patch-*",
+  "cross_model/platform.tsv",
+  "cross_model/prediction-scores.tsv",
+  "cross_model/uvc-modules.tsv",
+  "manifests/*",
+]
+
+[[entity]]
+id = "platform.bodies"
+kind = "process"
+name = "CXD90045 bodies and kernels"
+aliases = ["13 updaters", "9 kernels", "TargetProfile"]
+summary = "Thirteen official updaters, one SoC family, nine kernels; the TargetProfile registry in src/a6400/targets/ holds ilce_6400, ilce_6400a, zv_e10, ilce_6100, ilce_6600, ilce_7c, ilce_7m3, ilce_7rm4a."
+
+[[entity]]
+id = "platform.command-table"
+kind = "process"
+name = "Command tables and the 0x413b Movie Eye AF value"
+summary = "Per-body command tables (285 records on the a6400, 286 on the a6600 with 0x413b added, 337 on ZV-E10/a7C) and a predictive command-id rule."
+
+[[entity]]
+id = "platform.ipc-graph"
+kind = "process"
+name = "libObj IPC edges and call graph"
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libObj.so"]
+summary = "Direct IPC call sites (osal_snd_msg, osal_snd_sync_msg, osal_rcv_msg_tmo, ioctl) and the attributed call graph of libObj.so."
+
+[[entity]]
+id = "platform.update-chain"
+kind = "process"
+name = "Update chain integrity and firmware signature"
+aliases = ["sauu", "FDAT", "VerificationKey.pem", "libupdatertalk"]
+inventory = ["firmware.elf:nflasha15_unpacked/lib/libupdatertalk.so"]
+summary = "Packaged-file integrity (CRC32, MD5), the libupdatertalk AES (key = first 16 bytes of sha256(''), ECB) and the camera-side sauu RSA-2048/SHA-256 FDAT signature check."
+
+[[entity]]
+id = "platform.ilce7rm4a"
+kind = "usb-identity"
+name = "ILCE-7RM4A (a7R IVA) reference body"
+aliases = ["054C:0D9D"]
+summary = "Second physically identified reference body: Mass Storage 054C:0D9D, native GetModelInfo on firmware 1.13."
+
+[[claim]]
+id = "C01"
+entities = ["platform.bodies"]
+status = "verified-offline"
+text = "Thirteen official updaters map to nine kernels; ILCE-6400 and ILCE-6600 share one kernel source (all 14,401 function symbols at the same address), ZV-E10 and ILCE-7C are one build; ten bodies gained evidence-backed kernel symbols offline."
+evidence = ["E0477", "E0480", "doc:cross_model/platform.tsv"]
+
+[[claim]]
+id = "C02"
+entities = ["platform.command-table"]
+status = "verified-offline"
+text = "The 0x413b (Movie Eye AF) value is stored and never read on every body that has it."
+evidence = ["E0478"]
+
+[[claim]]
+id = "C03"
+entities = ["platform.command-table"]
+status = "verified-offline"
+text = "A command-id rule fitted on four bodies predicts held-out bodies (recall 0.997 ILCE-6600, 0.885 ILCE-7M3, 0.973 ILCE-9M2); no rule exists for USB IDs or device nodes."
+evidence = ["E0485", "doc:cross_model/prediction-scores.tsv"]
+
+[[claim]]
+id = "C04"
+entities = ["platform.bodies"]
+status = "verified-offline"
+text = "The UVC delta between bodies is a module-package delta, not a kernel-capability delta."
+evidence = ["E0479", "doc:cross_model/uvc-modules.tsv"]
+
+[[claim]]
+id = "C05"
+entities = ["platform.bodies"]
+status = "verified-offline"
+text = "Published firmware changelogs give a target for every binary diff; three declared stubs (ILCE-6100A, ILCE-6600, ILCE-7M3) gained sourced values, and ILCE-7RM4A gained a sourced reference profile."
+evidence = ["E0481", "E0482", "E0570", "doc:cross_model/patch-notes.json"]
+
+[[claim]]
+id = "C06"
+entities = ["platform.ipc-graph"]
+status = "verified-offline"
+text = "libObj.so has 763 direct IPC call sites (osal_snd_msg 187, osal_snd_sync_msg 406, osal_rcv_msg_tmo 114, ioctl 56), 544 with a constant argument, and 538,081 direct calls of which 2,785 are named at both ends."
+evidence = ["E0663", "doc:cross_model/ipc-edges-a6400-e0663.tsv"]
+
+[[claim]]
+id = "C07"
+entities = ["platform.ipc-graph"]
+status = "verified-offline"
+text = "ObjDisplay_Create/Destroy/RegisterCommand/UnregisterCommand have zero direct callers and appear once each as data (stored function pointers); ObjDisplay_Start does not exist. No packaged body registers a framebuffer node; the display is dmpgles2."
+evidence = ["E0484", "E0488"]
+
+[[claim]]
+id = "C08"
+entities = ["platform.bodies"]
+status = "verified-offline"
+text = "Six mount points are writable at runtime and three flash partitions are frozen."
+evidence = ["E0486"]
+
+[[claim]]
+id = "C09"
+entities = ["platform.update-chain"]
+status = "verified-offline"
+text = "Packaged files are not protected by a per-model cipher: 484 ELF objects are readable, integrity is CRC32 and MD5, and the only AES (libupdatertalk) uses the first 16 bytes of sha256('') in ECB on all thirteen bodies."
+evidence = ["E0489", "doc:cross_model/aes-key-blocks.tsv"]
+
+[[claim]]
+id = "C10"
+entities = ["platform.update-chain"]
+status = "verified-physical"
+text = "A stock camera rejects custom firmware: sauu verifies an RSA-2048/SHA-256 signature over the FDAT ciphertext with /etc/VerificationKey.pem; with that branch neutralised (one write to nflasha1:/boot/initrd.img from outside the update path) the camera accepted an unsigned FDAT and completed the update. The stock initrd was restored."
+evidence = ["E0666"]
+
+[[claim]]
+id = "C11"
+entities = ["platform.bodies"]
+status = "verified-offline"
+text = "The platform model states its boundary: everything is offline from packaged images, and facts that need a camera stay unknown."
+evidence = ["E0490"]
+
+[[claim]]
+id = "C12"
+entities = ["platform.ilce7rm4a"]
+status = "verified-physical"
+text = "The ILCE-7RM4A GetModelInfo extcmd chain is byte-identical to the a6400A; physically, firmware 1.13 enumerates as Mass Storage 054C:0D9D and answers native GetModelInfo."
+evidence = ["E0645", "E0646"]
+
+[[claim]]
+id = "C13"
+entities = ["platform.bodies"]
+status = "verified-offline"
+text = "A research checkpoint and publication audit inventoried local evidence at E0110."
+evidence = ["E0110", "doc:manifests/0110-local-evidence-inventory.json"]
+
+[[claim]]
+id = "R01"
+entities = ["platform.ipc-graph"]
+status = "retracted"
+text = "libObj.so has 29 IPC call sites, 17 with a constant argument, and the earlier E0484 call-graph figures."
+evidence = ["E0483"]
+superseded_by = "C06"
+note = "E0663: the 29 'IPC call sites' were calls to other imports, mislabelled by a fixed-stride PLT map."
+
+[[frontier]]
+id = "F01"
+title = "Universal target selection"
+state = "open"
+entities = ["platform.bodies"]
+evidence = ["E0477", "E0509", "E0646"]
+next = "Wire TargetProfile directly into UnicornMachine and InterpreterProbe so the same tools select any registered body."
+
+[[drift]]
+doc = "docs/PLATFORM_MODEL.md"
+section = "4. The update chain: what is checked, and what is not"
+observed = "Says whether a modified image is accepted is unknown and that none of the updater tree's files verifies a signature."
+current = "E0666 (physical) finds the camera-side sauu RSA-2048/SHA-256 FDAT signature check and a verified bypass procedure; section 4 should cite it."

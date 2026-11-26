@@ -1,0 +1,16 @@
+[package]
+name = "bionz-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bionz_isp"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bionz-core = { path = "../bionz-core" }
+bionz-fit = { path = "../bionz-fit" }
+bionz-preset = { path = "../bionz-preset" }
+pyo3 = "0.30"
