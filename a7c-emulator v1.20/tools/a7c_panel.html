@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<title>A7C-panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --body: #1d1e20; --body2: #26282b; --edge: #3a3d42; --btn: #2f3236; --btnhi: #3d4146;
+    --txt: #d8dadd; --dim: #8b9097; --accent: #e8792b; --rec: #d23b3b; --ok: #5bb974;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #121314; color: var(--txt);
+    font: 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 18px auto; padding: 0 14px; }
+  .camera { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px;
+    background: linear-gradient(180deg, var(--body2), var(--body)); border: 1px solid var(--edge);
+    border-radius: 22px; padding: 22px; box-shadow: 0 10px 40px #0008; }
+  .lcdwrap { position: relative; background: #000; border-radius: 10px; border: 6px solid #0c0c0d;
+    box-shadow: inset 0 0 0 1px #333; aspect-ratio: 4 / 3; overflow: hidden; }
+  #lcd { width: 100%; height: 100%; object-fit: contain; display: block; image-rendering: auto; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; color: var(--dim); text-align: center; padding: 20px; }
+  #overlay b { color: var(--txt); font-size: 17px; font-weight: 600; }
+  .controls { display: flex; flex-direction: column; gap: 16px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+    margin-bottom: 6px; }
+  button { font: inherit; color: var(--txt); background: var(--btn); border: 1px solid var(--edge);
+    border-radius: 9px; padding: 8px 12px; cursor: pointer; user-select: none; touch-action: none;
+    transition: background .08s, transform .08s; }
+  button:hover { background: var(--btnhi); }
+  button.held, button:active { background: var(--accent); color: #111; border-color: var(--accent);
+    transform: translateY(1px); }
+  button.small { padding: 5px 9px; font-size: 13px; }
+  .key { display: inline-block; font-size: 10px; color: var(--dim); margin-left: 4px; }
+  button.held .key, button:active .key { color: #222; }
+  .dial { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .dial button { padding: 6px 0; font-size: 13px; }
+  .dial button.on { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
+  .ev { display: flex; align-items: center; gap: 8px; }
+  #evval { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .shutter { display: flex; gap: 8px; }
+  .shutter button { flex: 1; border-radius: 22px; }
+  #movie { color: var(--rec); font-weight: 700; }
+  #movie.held { color: #111; }
+  /* control wheel */
+  .wheel { position: relative; width: 190px; height: 190px; margin: 4px auto; border-radius: 50%;
+    background: radial-gradient(circle, #2a2d31 0 34%, #1a1b1d 35% 36%, #2b2e32 37% 100%);
+    border: 1px solid var(--edge); }
+  .wheel button { position: absolute; width: 50px; height: 40px; padding: 0; border-radius: 8px;
+    background: transparent; border-color: transparent; font-size: 16px; }
+  .wheel button:hover { background: #ffffff14; }
+  .wheel button.held, .wheel button:active { background: var(--accent); }
+  .w-up { left: 70px; top: 6px; } .w-down { left: 70px; bottom: 6px; }
+  .w-left { left: 4px; top: 75px; } .w-right { right: 4px; top: 75px; }
+  .wheel .w-ok { left: 55px; top: 55px; width: 80px; height: 80px; border-radius: 50%;
+    background: var(--btn); border-color: var(--edge); font-size: 13px; }
+  .wheelrot { display: flex; justify-content: space-between; margin-top: 4px; }
+  .bar { margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    color: var(--dim); font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #666; display: inline-block; }
+  .dot.running { background: var(--ok); } .dot.paused { background: var(--accent); }
+  #console { flex: 1 1 300px; font: 12px ui-monospace, Consolas, monospace; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; color: #9aa0a6; }
+  #msg { color: var(--accent); }
+  details { margin-top: 12px; color: var(--dim); font-size: 13px; }
+  details table { border-collapse: collapse; margin-top: 6px; }
+  details td { padding: 2px 14px 2px 0; }
+  kbd { font: 12px ui-monospace, Consolas, monospace; background: #2a2c30; border: 1px solid #3a3d42;
+    border-radius: 4px; padding: 0 5px; color: var(--txt); }
+  @media (max-width: 860px) { .camera { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="camera">
+    <div>
+      <div class="lcdwrap">
+        <img id="lcd" alt="Kamerans skärm">
+        <div id="overlay"><b>Kameran startar…</b><span id="ovtext">Ansluter till emulatorn</span></div>
+      </div>
+      <div class="bar">
+        <span class="dot" id="dot"></span><span id="state">–</span>
+        <span id="uptime"></span>
+        <span id="console"></span>
+      </div>
+      <div class="bar">
+        <button class="small" id="pause">Pausa</button>
+        <button class="small" id="restart">Starta om</button>
+        <button class="small" id="shot">Spara skärmbild</button>
+        <span id="msg"></span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div>
+        <div class="label">Lägesratt</div>
+        <div class="dial" id="dial"></div>
+      </div>
+
+      <div class="row" style="justify-content: space-between">
+        <div>
+          <div class="label">Exponeringskomp.</div>
+          <div class="ev">
+            <button class="small" data-tap="minus">−<span class="key">-</span></button>
+            <span id="evval">0</span>
+            <button class="small" data-tap="equal">+<span class="key">=</span></button>
+          </div>
+        </div>
+        <div class="row">
+          <button data-hold="c">C1<span class="key">C</span></button>
+          <button data-hold="a">AEL<span class="key">A</span></button>
+        </div>
+      </div>
+
+      <div>
+        <div class="label">Avtryckare</div>
+        <div class="shutter">
+          <button data-hold="h">Halvtryck<span class="key">H</span></button>
+          <button data-hold="spc">Helt tryck<span class="key">Mellanslag</span></button>
+          <button data-hold="r" id="movie">● REC<span class="key">R</span></button>
+        </div>
+      </div>
+
+      <div class="row" style="justify-content: space-between">
+        <button data-hold="m">MENU<span class="key">M</span></button>
+        <button data-hold="f">Fn<span class="key">F</span></button>
+        <button data-hold="p">▶<span class="key">P</span></button>
+        <button data-hold="delete">🗑<span class="key">Del</span></button>
+      </div>
+
+      <div>
+        <div class="label">Kontrollhjul</div>
+        <div class="wheel">
+          <button class="w-up" data-hold="up" title="Upp / DISP">▲</button>
+          <button class="w-left" data-hold="left" title="Vänster">◀</button>
+          <button class="w-ok" data-hold="ret" title="Mitt (Enter)">OK</button>
+          <button class="w-right" data-hold="right" title="Höger">▶</button>
+          <button class="w-down" data-hold="down" title="Ned">▼</button>
+        </div>
+        <div class="wheelrot">
+          <button class="small" data-tap="bracket_left">↺ Vrid<span class="key">[</span></button>
+          <button class="small" data-tap="bracket_right">Vrid ↻<span class="key">]</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <details>
+    <summary>Tangentbord och tips</summary>
+    <table>
+      <tr><td><kbd>Pilar</kbd> <kbd>Enter</kbd></td><td>kontrollhjulet</td></tr>
+      <tr><td><kbd>M</kbd> <kbd>F</kbd> <kbd>P</kbd> <kbd>Del</kbd></td><td>MENU, Fn, uppspelning, radera</td></tr>
+      <tr><td><kbd>H</kbd> / <kbd>Mellanslag</kbd></td><td>avtryckare halvt / helt</td></tr>
+      <tr><td><kbd>R</kbd> <kbd>C</kbd> <kbd>A</kbd></td><td>film, C1, AEL</td></tr>
+      <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>vrid kontrollhjulet</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>0</kbd></td><td>lägesratt: AUTO P A S M MR1 MR2 MR3 film S&amp;Q</td></tr>
+      <tr><td><kbd>-</kbd> <kbd>=</kbd></td><td>exponeringskompensation</td></tr>
+    </table>
+    <p>Ett klick är ett kort tryck; håll musknappen nere för ett långt tryck. Emulatorn kan
+      vara långsam, så vänta tills skärmen har ändrats innan nästa tryck.<span id="minhold" hidden></span></p>
+  </details>
+</main>
+
+<script>
+"use strict";
+const DIAL = [["AUTO","1"],["P","2"],["A","3"],["S","4"],["M","5"],
+              ["MR1","6"],["MR2","7"],["MR3","8"],["Film","9"],["S&Q","0"]];
+const KEYMAP = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right",
+  Enter:"ret", m:"m", f:"f", p:"p", Delete:"delete", h:"h", " ":"spc", r:"r", c:"c", a:"a",
+  "[":"bracket_left", "]":"bracket_right", "-":"minus", "=":"equal", "+":"equal" };
+const TAP = new Set(["bracket_left","bracket_right","minus","equal","1","2","3","4","5","6","7","8","9","0"]);
+const $ = id => document.getElementById(id);
+let ev = 0, dialKey = "2";
+
+function post(path) {
+  return fetch(path, { method: "POST", headers: { "X-A7C-Panel": "1" } })
+    .then(r => r.json()).catch(() => ({ error: "ingen kontakt med panelen" }));
+}
+function flash(text) { $("msg").textContent = text; setTimeout(() => { if ($("msg").textContent === text) $("msg").textContent = ""; }, 4000); }
+
+function buttonsFor(key) { return document.querySelectorAll(`[data-hold="${key}"],[data-tap="${key}"]`); }
+function press(key) {
+  if (TAP.has(key)) { tap(key); return; }
+  buttonsFor(key).forEach(b => b.classList.add("held"));
+  post("/key/down/" + key);
+}
+function release(key) {
+  if (TAP.has(key)) return;
+  buttonsFor(key).forEach(b => b.classList.remove("held"));
+  post("/key/up/" + key);
+}
+function tap(key) {
+  post("/key/tap/" + key);
+  if (key === "equal") setEv(ev + 1);
+  if (key === "minus") setEv(ev - 1);
+  if (/^[0-9]$/.test(key)) setDial(key);
+  buttonsFor(key).forEach(b => { b.classList.add("held"); setTimeout(() => b.classList.remove("held"), 150); });
+}
+function setEv(v) { ev = Math.max(-9, Math.min(9, v)); $("evval").textContent = (ev > 0 ? "+" : "") + (ev / 3).toFixed(1).replace(".", ",").replace(",0", ""); }
+function setDial(k) {
+  dialKey = k;
+  document.querySelectorAll("#dial button").forEach(b => b.classList.toggle("on", b.dataset.tap === k));
+}
+
+// dial buttons
+for (const [name, k] of DIAL) {
+  const b = document.createElement("button");
+  b.dataset.tap = k; b.textContent = name; b.title = "Tangent " + k;
+  $("dial").appendChild(b);
+}
+setDial(dialKey);
+
+// pointer handling: held keys follow the mouse/finger, tapped keys fire once
+document.querySelectorAll("[data-hold]").forEach(b => {
+  const k = b.dataset.hold;
+  let down = false;
+  b.addEventListener("pointerdown", e => { e.preventDefault(); b.setPointerCapture(e.pointerId); down = true; press(k); });
+  const up = () => { if (down) { down = false; release(k); } };
+  b.addEventListener("pointerup", up);
+  b.addEventListener("pointercancel", up);
+  b.addEventListener("lostpointercapture", up);
+});
+document.querySelectorAll("[data-tap]").forEach(b =>
+  b.addEventListener("click", () => tap(b.dataset.tap)));
+
+// keyboard
+const kbDown = new Set();
+function keyName(e) {
+  if (/^[0-9]$/.test(e.key)) return e.key;
+  return KEYMAP[e.key] || KEYMAP[e.key.toLowerCase()];
+}
+addEventListener("keydown", e => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const k = keyName(e); if (!k) return;
+  e.preventDefault();
+  if (e.repeat || kbDown.has(k)) return;
+  kbDown.add(k); press(k);
+});
+addEventListener("keyup", e => {
+  const k = keyName(e); if (!k || !kbDown.has(k)) return;
+  kbDown.delete(k); release(k);
+});
+addEventListener("blur", () => { kbDown.forEach(release); kbDown.clear(); });
+
+// toolbar
+$("pause").onclick = async () => {
+  const paused = $("pause").dataset.paused === "1";
+  const r = await post(paused ? "/emu/resume" : "/emu/pause");
+  if (r.error) flash(r.error);
+};
+$("restart").onclick = async () => {
+  if (!confirm("Starta om emulatorn? Det tar några minuter innan skärmen syns igen.")) return;
+  await post("/emu/restart"); setEv(0); setDial("2"); flash("Startar om…");
+};
+$("shot").onclick = async () => {
+  const r = await post("/emu/screenshot"); flash(r.saved ? "Sparad: " + r.saved : (r.error || "fel"));
+};
+
+// screen
+let lastUrl = null, everVisible = false;
+async function frame() {
+  try {
+    const r = await fetch("/lcd.png", { cache: "no-store" });
+    if (r.ok) {
+      const blank = r.headers.get("X-A7C-Lcd") === "blank";
+      const url = URL.createObjectURL(await r.blob());
+      $("lcd").src = url;
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = url;
+      if (!blank) everVisible = true;
+      $("overlay").style.display = blank && !everVisible ? "flex" : "none";
+    } else {
+      $("overlay").style.display = "flex";
+    }
+  } catch (e) { $("overlay").style.display = "flex"; }
+  setTimeout(frame, 300);
+}
+frame();
+
+// status
+async function status() {
+  try {
+    const s = await (await fetch("/status", { cache: "no-store" })).json();
+    const st = s.running ? s.state : "stoppad";
+    $("state").textContent = { running: "körs", paused: "pausad" }[st] || st;
+    $("dot").className = "dot " + (s.state || "");
+    const m = Math.floor(s.uptime / 60), sec = String(s.uptime % 60).padStart(2, "0");
+    $("uptime").textContent = s.running ? `${m}:${sec}` : "";
+    $("console").textContent = s.console || "";
+    $("console").title = s.console || "";
+    $("pause").textContent = s.state === "paused" ? "Fortsätt" : "Pausa";
+    $("pause").dataset.paused = s.state === "paused" ? "1" : "0";
+    $("minhold").textContent = (s.min_hold / 1000).toString().replace(".", ",");
+    if (!everVisible) {
+      $("ovtext").textContent = s.running
+        ? `Start pågår (${m}:${sec}). Skärmen brukar visas efter 7–8 minuter.`
+        : "Emulatorn körs inte.";
+      if (s.running && s.uptime > 0) $("overlay").querySelector("b").textContent = "Kameran startar…";
+    }
+    if (!s.running) { everVisible = false; }
+  } catch (e) {
+    $("state").textContent = "ingen kontakt med panelen";
+    $("dot").className = "dot";
+  }
+  setTimeout(status, 1000);
+}
+status();
+</script>
+</body>
+</html>

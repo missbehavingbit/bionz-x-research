@@ -1,0 +1,68 @@
+*** ADC KeyConfig ***
+ID: 0-1  port: c-0    0/ 5b 10[ms] 1[jif] H2 key:7095-1  ext:0000
+ID: 0-1  port: c-0  1b8/257 10[ms] 1[jif] H2 key: 1f8-1  ext:0000
+ID: 0-1  port: f-0    0/ 5b 10[ms] 1[jif] H2 key: 1ac-1  ext:0000
+ID: 0-1  port: f-0   5c/111 10[ms] 1[jif] H2 key:   3-1  ext:0000
+ID: 0-1  port: f-0  112/1b7 10[ms] 1[jif] H2 key:  15-1  ext:0000
+ID: 0-1  port: f-0  1b8/257 10[ms] 1[jif] H2 key:  30-1  ext:0000
+ID: 0-1  port: f-0  258/304 10[ms] 1[jif] H2 key: 1af-1  ext:0000
+ID: 0-1  port:10-0    0/ 5b 10[ms] 1[jif] H4 key:7025-3  adc ref:0110
+ID: 0-1  port:10-0   5c/111 10[ms] 1[jif] H4 key:7025-1  adc ref:0110
+ID: 0-1  port:10-0  112/1b7 10[ms] 1[jif] H4 key:7025-14  adc ref:0110
+ID: 0-1  port:10-0  1b8/257 10[ms] 1[jif] H4 key:7025-13  adc ref:0110
+ID: 0-1  port:10-0  258/304 10[ms] 1[jif] H4 key:7025-7  adc ref:0110
+ID: 0-1  port:11-0    0/ 5b 10[ms] 1[jif] H4 key:7025-15  adc ref:0110
+ID: 0-1  port:11-0   5c/111 10[ms] 1[jif] H4 key:7025-a  adc ref:0110
+ID: 0-1  port:11-0  112/1b7 10[ms] 1[jif] H4 key:7025-6  adc ref:0110
+ID: 0-1  port:11-0  1b8/257 10[ms] 1[jif] H4 key:7025-4  adc ref:0110
+ID: 0-1  port:11-0  258/304 10[ms] 1[jif] H4 key:7025-5  adc ref:0110
+ID: 0-1  port:12-0    0/ 3a 10[ms] 1[jif] H4 key:70d2-9  adc ref:011a
+ID: 0-1  port:12-0   3b/ ae 10[ms] 1[jif] H4 key:70d2-8  adc ref:011a
+ID: 0-1  port:12-0   af/121 10[ms] 1[jif] H4 key:70d2-7  adc ref:011a
+ID: 0-1  port:12-0  122/193 10[ms] 1[jif] H4 key:70d2-6  adc ref:011a
+ID: 0-1  port:12-0  194/204 10[ms] 1[jif] H4 key:70d2-5  adc ref:011a
+ID: 0-1  port:12-0  205/274 10[ms] 1[jif] H4 key:70d2-4  adc ref:011a
+ID: 0-1  port:12-0  275/2e4 10[ms] 1[jif] H4 key:70d2-3  adc ref:011a
+ID: 0-1  port:12-0  2e5/355 10[ms] 1[jif] H4 key:70d2-2  adc ref:011a
+ID: 0-1  port:12-0  356/3c5 10[ms] 1[jif] H4 key:70d2-1  adc ref:011a
+ID: 0-1  port:12-0  3c6/3ff 10[ms] 1[jif] H4 key:70d2-0  adc ref:011a
+ID: 0-1  port:13-0    0/ 3a 10[ms] 1[jif] H4 key:70d3-8009  adc ref:0124
+ID: 0-1  port:13-0   3b/ ae 10[ms] 1[jif] H4 key:70d3-8008  adc ref:0124
+ID: 0-1  port:13-0   af/121 10[ms] 1[jif] H4 key:70d3-8007  adc ref:0124
+ID: 0-1  port:13-0  122/193 10[ms] 1[jif] H4 key:70d3-8006  adc ref:0124
+ID: 0-1  port:13-0  194/204 10[ms] 1[jif] H4 key:70d3-8005  adc ref:0124
+ID: 0-1  port:13-0  205/274 10[ms] 1[jif] H4 key:70d3-8004  adc ref:0124
+ID: 0-1  port:13-0  275/2e4 10[ms] 1[jif] H4 key:70d3-8003  adc ref:0124
+ID: 0-1  port:13-0  2e5/355 10[ms] 1[jif] H4 key:70d3-8002  adc ref:0124
+ID: 0-1  port:13-0  356/3c5 10[ms] 1[jif] H4 key:70d3-8001  adc ref:0124
+ID: 0-1  port:13-0  3c6/3ff 10[ms] 1[jif] H4 key:70d3-0  adc ref:0124
+*** GPIO KeyConfig ***
+ID: 0-2  port: 0-7    0/  0 10[ms] 1[jif] L60 key:70ff-8  gpio ref:0207
+ID: 0-2  port: 0-7    0/  0 10[ms] 1[jif] L15 key:7101-1  ext:0000
+ID: 0-2  port: 0-10   0/  0 10[ms] 1[jif] L2 key: 1f0-1  ext:0000
+ID: 0-2  port: 2-18   0/  0 10[ms] 1[jif] L60 key:70ff-1  gpio ref:0207
+ID: 0-2  port: 2-18   0/  0 10[ms] 1[jif] L15 key:7103-1  ext:0000
+ID: 0-2  port: 2-19   0/  0 10[ms] 1[jif] L60 key:70ff-4  gpio ref:0207
+ID: 0-2  port: 2-19   0/  0 10[ms] 1[jif] L1 key:7104-1  ext:0000
+ID: 0-2  port: 2-23   0/  0 10[ms] 1[jif] L60 key:70ff-2  gpio ref:0207
+ID: 0-2  port: 2-23   0/  0 10[ms] 1[jif] L15 key:7102-1  ext:0000
+ID: 0-2  port: 5-4    0/  0 10[ms] 1[jif] L4 key:  4b-1  ext:0000
+ID: 0-2  port: 5-4    0/  0 10[ms] 1[jif] H4 key:  4c-1  ext:0000
+ID: 0-2  port: 9-16   0/  0 10[ms] 1[jif] H4 key:  47-1  ext:0000
+ID: 0-2  port: 9-16   0/  0 10[ms] 1[jif] L4 key:  4d-1  ext:0000
+*** FRONT(CA) KeyConfig ***
+ID: 0-4  port:6000-0    0/  0 10[ms] 1[jif] L1 key:   2-1  ext:0000
+ID: 0-4  port:6000-1    0/  0 10[ms] 1[jif] H1 key: 1f7-1  ext:0000
+ID: 0-4  port:6000-2    0/  0 10[ms] 1[jif] H1 key: 1ab-1  ext:0000
+ID: 0-4  port:6000-5    0/  0 10[ms] 1[jif] H1 key:70d5-1  ext:0000
+ID: 0-4  port:6000-9    0/  0 10[ms] 1[jif] L1 key:7094-1  ext:0000
+ID: 0-4  port:6000-10   0/  0 10[ms] 1[jif] L1 key:70f2-1  ext:0000
+*** VGRIP KeyConfig ***
+ID: 0-7  port:a000-0    0/  0 10[ms] 1[jif] L1 key:70c2-1  ext:0000
+ID: 0-7  port:a000-5    0/  0 10[ms] 1[jif] L1 key:70ed-1  ext:0000
+ID: 0-7  port:a000-6    0/  0 10[ms] 1[jif] L1 key:70dd-1  ext:0000
+ID: 0-7  port:a000-8    0/  0 10[ms] 1[jif] L3 key:70f9-1000  gpio ref:0707
+ID: 0-7  port:a000-9    0/  0 10[ms] 1[jif] L3 key:70f9-100  gpio ref:0707
+ID: 0-7  port:a000-10   0/  0 10[ms] 1[jif] L3 key:70f9-200  gpio ref:0707
+ID: 0-7  port:a000-11   0/  0 10[ms] 1[jif] L3 key:70f9-400  gpio ref:0707
+ID: 0-7  port:a000-12   0/  0 10[ms] 1[jif] L3 key:70f9-800  gpio ref:0707
