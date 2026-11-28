@@ -144,15 +144,21 @@ class Emulator:
                    A7C_SERIAL="chardev:con")
         if self.args.card and self.args.card != "none":
             env["A7C_SD_IMAGE"] = self.args.card
-        hostwin = OUT / "hostwin.bin"
-        helper = HERE / "tools" / "hostwin_get"
-        if helper.is_file():
-            with open(hostwin, "wb") as f:
-                f.truncate(16 << 20)
-            env["HOSTWIN"] = str(hostwin)
         for kv in self.args.env:
             k, _, v = kv.partition("=")
             env[k] = v
+        hostwin = None
+        if not self.args.no_loader and env.get("A7C_HOSTWIN", "auto") != "0":
+            # shared 16 MiB window at PA 0x50000000: mods and the loader reach the
+            # guest in a second instead of minutes over the serial console
+            hostwin = Path(env.get("A7C_HOSTWIN") if env.get("A7C_HOSTWIN", "auto") != "auto"
+                           else OUT / "hostwin.bin")
+            if not hostwin.exists() or hostwin.stat().st_size != 16 << 20:
+                with open(hostwin, "wb") as f:
+                    f.truncate(16 << 20)
+            env["A7C_HOSTWIN"] = str(hostwin.resolve())
+        elif env.get("A7C_HOSTWIN", "auto") in ("auto", "0"):
+            env.pop("A7C_HOSTWIN", None)
         self.proc = subprocess.Popen(
             ["bash", str(HERE / "run.sh"),
              "-chardev", f"socket,id=con,path={self.console_sock},server=on,wait=off,logfile={self.log}",
@@ -167,9 +173,8 @@ class Emulator:
             self.console = moddev.Console(self.console_sock, log=None, process=self.proc)
             self.dev = moddev.ModDev(
                 self.console, loader=loader, mods=self.mods,
-                nudge=lambda: self.key("tap", "m"),
-                hostwin_file=hostwin if helper.is_file() else None,
-                hostwin_helper=helper if helper.is_file() else None)
+                nudge=lambda: self.key("tap", "m"), hostwin=hostwin,
+                hostwin_helper=HERE / "tools" / "hostwin_get")
             threading.Thread(target=self.dev.run, daemon=True).start()
         else:
             self.dev = None

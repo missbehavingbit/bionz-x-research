@@ -68,6 +68,12 @@ struct EvselState {
     uint32_t late_us;
     uint32_t late_pending;
     QEMUTimer *late;
+    /* late-src2 / late-us2 (bionz-x-research, 2026-11): a second delayed
+     * source, e.g. the CAMOUT_V phase (source 23).  0 = off. */
+    uint32_t late_src2;
+    uint32_t late_us2;
+    uint32_t late_pending2;
+    QEMUTimer *late2;
     Cmp cmp[NCMP];
     qemu_irq irq_a, irq_b;
 };
@@ -99,15 +105,19 @@ static void ev_frame(EvselState *s)
                 en &= ~(1u << k);
             }
         }
-        uint32_t late = 0;
-        if (s->late_src) {
-            for (int k = 0; k < 8; k++) {
-                if ((en & (1u << k)) && R(0x40 + 4 * k) == s->late_src) {
-                    late |= 1u << k;
-                }
+        uint32_t late = 0, late2 = 0;
+        for (int k = 0; k < 8; k++) {
+            if (!(en & (1u << k))) {
+                continue;
+            }
+            uint32_t src = R(0x40 + 4 * k);
+            if (s->late_src && src == s->late_src) {
+                late |= 1u << k;
+            } else if (s->late_src2 && src == s->late_src2) {
+                late2 |= 1u << k;
             }
         }
-        en &= ~late;
+        en &= ~(late | late2);
         for (int k = 0; k < 8; k++) {
             if (en & (1u << k)) {
                 R(0x20 + 4 * k) = c;
@@ -120,6 +130,30 @@ static void ev_frame(EvselState *s)
             timer_mod(s->late, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                       (int64_t)s->late_us * SCALE_US);
         }
+        if (late2) {
+            s->late_pending2 |= late2;
+            timer_mod(s->late2, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                      (int64_t)s->late_us2 * SCALE_US);
+        }
+    }
+}
+
+static void ev_late2(void *opaque)
+{
+    EvselState *s = opaque;
+    uint32_t m = 0, c = ev_counter();
+
+    for (int k = 0; k < 8; k++) {
+        if ((s->late_pending2 & (1u << k)) && (R(0x10) & (1u << k)) &&
+            R(0x40 + 4 * k) == s->late_src2) {
+            m |= 1u << k;
+            R(0x20 + 4 * k) = c;
+        }
+    }
+    s->late_pending2 = 0;
+    if (m && (R(0xEC) & 1)) {
+        s->sta |= m;
+        ev_update(s);
     }
 }
 
@@ -238,6 +272,8 @@ static void ev_reset(DeviceState *dev)
     s->sta = s->stb = 0;
     s->late_pending = 0;
     timer_del(s->late);
+    s->late_pending2 = 0;
+    timer_del(s->late2);
     for (int k = 0; k < NCMP; k++) {
         timer_del(s->cmp[k].t);
     }
@@ -257,6 +293,7 @@ static void ev_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq_b);
     s->vd = timer_new_ns(QEMU_CLOCK_VIRTUAL, ev_vd, s);
     s->late = timer_new_ns(QEMU_CLOCK_VIRTUAL, ev_late, s);
+    s->late2 = timer_new_ns(QEMU_CLOCK_VIRTUAL, ev_late2, s);
     qdev_init_gpio_in(DEVICE(obj), ev_vd_in, 1);
     for (int k = 0; k < NCMP; k++) {
         s->cmp[k] = (Cmp){ s, k,
@@ -269,6 +306,8 @@ static const Property ev_props[] = {
     DEFINE_PROP_BOOL("ext-vd", EvselState, ext_vd, false),
     DEFINE_PROP_UINT32("late-src", EvselState, late_src, 0),
     DEFINE_PROP_UINT32("late-us", EvselState, late_us, 0),
+    DEFINE_PROP_UINT32("late-src2", EvselState, late_src2, 0),
+    DEFINE_PROP_UINT32("late-us2", EvselState, late_us2, 0),
     DEFINE_PROP_UINT64("sources", EvselState, sources, UINT64_MAX),
     DEFINE_PROP_UINT32("start-ms", EvselState, start_ms, 0),
 };

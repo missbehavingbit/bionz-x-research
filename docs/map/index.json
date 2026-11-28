@@ -40,7 +40,7 @@
     "mods": {
       "title": "Mod Loader and firmware mods",
       "doc": "docs/map/mods.md",
-      "reviewed": "2026-11-24",
+      "reviewed": "2026-11-28",
       "evidence_span": "see record index"
     },
     "native-debugger": {
@@ -792,7 +792,8 @@
         "C08",
         "C09",
         "C10",
-        "C16"
+        "C16",
+        "C17"
       ],
       "inactive_claims": []
     },
@@ -851,6 +852,21 @@
         "C13",
         "C14",
         "C15"
+      ],
+      "inactive_claims": []
+    },
+    "mod.focus-bracket-a7c": {
+      "area": "mods",
+      "name": "FocusBracket.mod (ILCE-7C)",
+      "kind": "module",
+      "address": null,
+      "aliases": [
+        "FocusBracket.mod",
+        "focus bracketing"
+      ],
+      "anchor": "mods.md#mod-focus-bracket-a7c",
+      "active_claims": [
+        "C18"
       ],
       "inactive_claims": []
     },
@@ -10023,6 +10039,22 @@
         "status": "verified-offline"
       }
     ],
+    "E9202": [
+      {
+        "area": "mods",
+        "kind": "claim",
+        "id": "C17",
+        "file": "9202-ilce-7c-menu-after-liveview-and-focus-bracket.md",
+        "status": "verified-offline"
+      },
+      {
+        "area": "mods",
+        "kind": "claim",
+        "id": "C18",
+        "file": "9202-ilce-7c-menu-after-liveview-and-focus-bracket.md",
+        "status": "open"
+      }
+    ],
     "README": [
       {
         "area": "mods",
@@ -12319,6 +12351,9 @@
       "mods"
     ],
     "9201-ilce-7c-qemu-and-mlv2-port.md": [
+      "mods"
+    ],
+    "9202-ilce-7c-menu-after-liveview-and-focus-bracket.md": [
       "mods"
     ],
     "cross_model/a6400-scalarwebapi-2026-11-20-transcript.jsonl": [

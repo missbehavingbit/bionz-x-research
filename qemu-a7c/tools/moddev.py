@@ -19,14 +19,12 @@ import os
 import queue
 import re
 import socket
-import struct
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 GUEST_GUARD, GUEST_REQ = "/tmp_bt/mlv2_guard", "/tmp_bt/mlv2.req"
-HOSTWIN_HELPER = "/tmp_bt/hostwin_get"
 RELOAD_REQ, RELOAD_RESULT = "/tmp_bt/mlv2/reload", "/tmp_bt/mlv2/reload.result"
 MOD_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,40}\.mod$")
 RAW_CHUNK = 3584        # bytes per raw transfer step: below the guest 4 KiB terminal buffer
@@ -170,11 +168,12 @@ class ModDev:
     loader: Path
     mods: list[Path]
     nudge: callable = None
-    hostwin_file: Path | None = None
-    hostwin_helper: Path | None = None
-    hostwin_ready: bool = False
     raw: bool = None
     gunzip: bool = None
+    hostwin: Path = None            # host side of the machine's hostwin window (or None)
+    hostwin_helper: Path = None     # tools/hostwin_get (guest ARM binary)
+    hostwin_ready: bool = False
+    hostwin_seq: int = 0
     status: dict = field(default_factory=lambda: {"state": "waiting for the guest shell", "events": []})
     seen: dict = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -290,26 +289,53 @@ class ModDev:
                 self.sh(line, 30)
         return how
 
+    HOSTWIN_GET = "/tmp_bt/hostwin_get"
+
+    def hostwin_ok(self) -> bool:
+        """Push the hostwin_get helper once (small, over serial) and test the window."""
+        if self.hostwin_ready or not self.hostwin or not self.hostwin_helper:
+            return self.hostwin_ready
+        try:
+            helper = self.hostwin_helper.read_bytes()
+            for line in push_commands(self.HOSTWIN_GET, helper):     # small: printf is robust
+                self.sh(line, 30)
+            self.sh(f"chmod 700 {self.HOSTWIN_GET}")
+            probe = b"hostwin probe\n"
+            self.hostwin_ready = self._hostwin_put("/tmp_bt/.hwprobe", probe)
+            self.sh("rm -f /tmp_bt/.hwprobe")
+        except (OSError, RuntimeError) as e:
+            self.event(f"hostwin unavailable ({e}); using the serial console")
+            self.hostwin = None
+        self.event(f"hostwin window {'ready: fast transfers' if self.hostwin_ready else 'not answering: serial transfers'}")
+        if not self.hostwin_ready:
+            self.hostwin = None
+        return self.hostwin_ready
+
+    def _hostwin_put(self, dst: str, data: bytes) -> bool:
+        import struct
+        if len(data) > (16 << 20) - 0x1000:
+            return False
+        self.hostwin_seq += 1
+        with open(self.hostwin, "r+b") as f:
+            f.seek(0)
+            f.write(struct.pack("<4I", 0, 0, 0, 0))     # invalid while the data changes
+            f.seek(0x1000)
+            f.write(data)
+            f.flush()
+            f.seek(0)
+            f.write(struct.pack("<4I", 0x4E495748, self.hostwin_seq, len(data), fnv1a_32(data)))
+            f.flush()
+            os.fsync(f.fileno())
+        out = self.sh(f"{self.HOSTWIN_GET} {dst}", 60)
+        return f"HWIN OK len={len(data):08x} fnv={fnv1a_32(data):08x}" in out
+
     def push(self, guest_path: str, data: bytes, verify_guard: bool = True):
-        if self.hostwin_ready and self.hostwin_file and self.hostwin_file.exists() and len(data) <= (16 << 20) - 4096:
-            t0 = time.monotonic()
-            with open(self.hostwin_file, "r+b") as f:
-                f.seek(4096)
-                f.write(data)
-                f.seek(0)
-                f.write(struct.pack("<4I", 0x4E495748, int(time.time()) & 0xFFFFFFFF,
-                                    len(data), fnv1a_32(data)))
-                f.flush()
-                os.fsync(f.fileno())
-            out = self.sh(f"{HOSTWIN_HELPER} {guest_path}", 60)
-            if "HWIN OK" in out:
-                self.event(f"pushed {guest_path} ({len(data)} B, {time.monotonic() - t0:.2f}s, hostwin, fnv ok)")
-                return
-            self.event(f"hostwin fallback for {guest_path}: {out.strip()[-120:]}")
         part = guest_path.rsplit("/", 1)
         tmp = f"{part[0]}/.{part[1]}.part"
         t0 = time.monotonic()
-        if len(data) > 16 * 1024 and self.gunzip_ok():
+        if self.hostwin_ok() and self._hostwin_put(tmp, data):
+            how = "hostwin"
+        elif len(data) > 16 * 1024 and self.gunzip_ok():
             gz = gzip.compress(data, 9)
             how = self._raw_or_printf(tmp + ".gz", gz) + "+gz"
             self.sh(f"busybox gunzip -c {tmp}.gz > {tmp}; rm -f {tmp}.gz", 120)
@@ -345,14 +371,19 @@ class ModDev:
 
     def install(self):
         self.status["state"] = "installing"
+        # Pushing files (and the guard) while live view starts (guest ~65-80 s) stalls the
+        # live-view pipeline and the OSD flips for good: black LCD, MENU draws nothing
+        # (seen 2026-11-27; a boot without pushes is fine).  Wait until live view has settled.
+        settle = float(os.environ.get("A7C_MOD_INSTALL_AFTER", "120"))
+        while True:
+            import re
+            m = re.search(r"(\d+\.\d+) \d+\.\d+", self.sh("cat /proc/uptime"))
+            t = float(m.group(1)) if m else 0.0
+            if t >= settle:
+                break
+            self.status["state"] = f"installing: waiting for live view to settle ({t:.0f}/{settle:.0f} s)"
+            time.sleep(15)
         self.sh("grep -q ' /tmp_bt ' /proc/mounts || mount -t tmpfs tmpfs /tmp_bt; mkdir -p /tmp_bt/mlv2 /tmp_bt/mods")
-        if self.hostwin_file and self.hostwin_helper and self.hostwin_helper.is_file():
-            helper_data = self.hostwin_helper.read_bytes()
-            for line in push_commands(HOSTWIN_HELPER, helper_data):
-                self.sh(line, 30)
-            self.sh(f"chmod 755 {HOSTWIN_HELPER}")
-            self.hostwin_ready = True
-            self.event(f"hostwin helper ready ({len(helper_data)} B)")
         self.push(GUEST_GUARD, (self.loader / "mlv2_guard_arm").read_bytes(), verify_guard=False)
         self.push(GUEST_REQ, (self.loader / "mlv2.req").read_bytes())
         self.push("/tmp_bt/mlv2/core.bin", (self.loader / "core.bin").read_bytes())

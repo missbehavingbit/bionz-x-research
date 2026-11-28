@@ -31,6 +31,8 @@
 #include "qemu/module.h"
 #include "qom/object.h"
 #include "system/runstate.h"
+#include "system/watchdog.h"
+#include "qemu/error-report.h"
 
 #define TYPE_CXD4115_TIMER "cxd4115-timer"
 OBJECT_DECLARE_SIMPLE_TYPE(CXD4115TimerState, CXD4115_TIMER)
@@ -111,10 +113,16 @@ static void chan_tick(void *opaque)
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     c->pending = true;
     if (c->s->wdt && (c->ctrl & (1u << 31))) {
-        qemu_log_mask(LOG_GUEST_ERROR, "cxd4115-wdt: watchdog expired, "
-                      "resetting system\n");
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        /*
+         * Always visible (not only under -d guest_errors): an expiry is a
+         * fidelity event that must not pass silently.  The action follows
+         * QEMU's -action watchdog= policy (default reset, also pause,
+         * shutdown, poweroff, debug, none, inject-nmi).
+         */
+        error_report("cxd4115-wdt: ch%d expired (ctrl=0x%08x cmp=0x%08x)",
+                     c->idx, c->ctrl, c->cmp);
         c->running = false;
+        watchdog_perform_action();
         return;
     }
     if ((c->ctrl & CTRL_RELOAD) && !(c->ctrl & CTRL_FREE)) {

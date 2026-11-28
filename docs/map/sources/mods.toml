@@ -8,12 +8,13 @@ title = "Mod Loader and firmware mods"
 scope = """
 Mod Loader v2 in QEMU and on cameras, command items, nested SMNU submenus, standalone SD auto-boot, the ILCE-6100 Picture Profile unlock and Mod Loader port, mod qualification, candidate 36-exposure film-roll tracking, and the external ZV-E10 adapted menu."""
 evidence_span = "see record index"
-reviewed = "2026-11-24"
+reviewed = "2026-11-28"
 records = [
   "E0575-E0577",
   "E0592",
   "E9101-E9104",
   "E9201",
+  "E9202",
   "0680-photonbin-6mp-and-mlv2-nested-submenus.md",
   "0681-ilce-6400a-standalone-sd-boot-and-exfat-reader.md",
   "E0688",
@@ -56,6 +57,14 @@ kind = "module"
 name = "WiFiSync"
 aliases = ["WiFiSync.mod", "5 GHz transfer", "wifisync"]
 summary = "RAM-only SMOD v2 mod that serves new .JPG/.ARW files over a 5 GHz AP with a read-only Sony Fsys backend; camera half verified offline, physical AP gate open."
+
+[[entity]]
+id = "mod.focus-bracket-a7c"
+kind = "module"
+name = "FocusBracket.mod (ILCE-7C)"
+aliases = ["FocusBracket.mod", "focus bracketing"]
+related = ["mod.loader-v2"]
+summary = "SMOD v2 Mods-tab focus bracketing for the ILCE-7C: Landscape/Macro/Custom presets, step width 1-10, 5-100 shots, libObj step-focus plus S2 shutter events, WriteStillComp save sync; built, not run."
 
 [[claim]]
 id = "C01"
@@ -168,6 +177,20 @@ entities = ["mod.loader-v2"]
 status = "verified-offline"
 text = "Mod Loader v2 was ported to the ILCE-7C (mlv2 --target a7c) and verified in the ILCE-7C QEMU emulator (qemu-a7c) with slot-B lens-reply and 16 MiB hostwin shared-memory transfer (MLV2_RESULT=0 changed=1)."
 evidence = ["E9201"]
+
+[[claim]]
+id = "C17"
+entities = ["mod.loader-v2"]
+status = "verified-offline"
+text = "In the ILCE-7C QEMU emulator MENU and Fn work after live-view start via the emulator-side A7C_CAKEY_POKE write of CAkey1 into six av-cam copies; av-cam stops fetching sub-micro slot A at live-view start (link word 0x6427E2CC 0x100->0x118) and the real trigger is unknown."
+evidence = ["E9202"]
+
+[[claim]]
+id = "C18"
+entities = ["mod.focus-bracket-a7c"]
+status = "open"
+text = "FocusBracket.mod for the ILCE-7C is built (SMNU items, libObj MSGID_SYNC_STEP_FOCUS_CMD 0x9c40 near/far, S2 events, WriteStillComp hook with corrected prologue replay) but has not run in QEMU or on a camera: still capture and the E-mount lens model are not emulated."
+evidence = ["E9202"]
 
 [[frontier]]
 id = "F01"

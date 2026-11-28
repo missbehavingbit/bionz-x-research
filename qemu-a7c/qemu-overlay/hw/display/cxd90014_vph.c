@@ -28,6 +28,16 @@
  *
  * Test images go through guest memory: -global cxd90014-aif.lv-source=...
  * fills the buffer at the resize output (hw/dma/cxd90014_aif.c).
+ *
+ * v2.1 (from bionz-x-research qemu-a6400, all opt-in, defaults unchanged):
+ *   arm-gate=on      compose a layer only in a frame the guest armed (AIF +0x00
+ *                    bit0 written since the last vsync), composed at vsync as the
+ *                    hardware scans out; without it the A7C model keeps the last
+ *                    drawn OSD (empty-run hold)
+ *   stage-sticky=on  +0x140 bits 28-31 write-1-to-set (panel input stage mode,
+ *                    0x30000000 = running) and the YUV layer follows that mode too
+ *   debug=on         [VPH] lines on stderr: ch51/ch53/ch54 programming, 0x144
+ *                    changes, arm counts per second of guest time
  */
 
 #include "qemu/osdep.h"
@@ -53,6 +63,11 @@ struct VphState {
     uint32_t vph[VPH_SIZE / 4];
     uint32_t sysv[0x1000 / 4];
     uint32_t frame;
+    uint32_t aif_started;           /* bit k: AIF channel k armed since the last vsync */
+    uint32_t osd_visible;           /* ch53 armed in the frame that just ended */
+    uint32_t line_visible;          /* ch54 armed in the frame that just ended */
+    uint32_t arms[8];               /* arm writes per channel (debug) */
+    bool arm_gate, stage_sticky, debug;
     QEMUTimer *tick, *lower, *vtick, *vlower;
     qemu_irq irq_sysv, irq_v101, irq_v102;
     qemu_irq vd_out;                /* -> evsel engine frame (source 29) */
@@ -64,6 +79,19 @@ struct VphState {
 };
 
 #define R(o) (s->vph[(o) / 4])
+
+/* +0x140 bits 28-29: panel input stage mode, 3 = running (bionz E0652; opt-in) */
+#define VPH_140_PANEL_MODE 0x30000000u
+#define VPH_140_STICKY     0xF0000000u
+
+static bool vph_panel_stage_running(VphState *s)
+{
+    return s->stage_sticky &&
+           (R(0x140) & VPH_140_PANEL_MODE) == VPH_140_PANEL_MODE;
+}
+
+static void vph_update(void *opaque);
+static void vph_debug_tick(VphState *s);
 
 /*
  * SYSV is the master V clock of the camera engine: one V per engine frame
@@ -114,6 +142,16 @@ static void vph_tick(void *opaque)
     for (int k = 0; k < 8; k++) {
         R(AIF(k)) &= ~1u;
     }
+    /* latch what the guest armed in the frame that just ended (bionz E0639) */
+    s->osd_visible = (s->aif_started >> 2) & 1u;
+    s->line_visible = (s->aif_started >> 3) & 1u;
+    if (s->arm_gate && s->con) {
+        vph_update(s);              /* scan out at vsync with this frame's arms */
+    }
+    s->aif_started = 0;
+    if (s->debug) {
+        vph_debug_tick(s);
+    }
     qemu_set_irq(s->irq_v101, 1);
     qemu_set_irq(s->irq_v102, 1);
     timer_mod(s->lower, now + 200 * SCALE_US);  /* no ack register: pulse */
@@ -130,7 +168,7 @@ static unsigned vph_opaque;         /* OSD pixels with alpha in the last compose
 
 static void vph_compose(VphState *s, uint32_t *dst, uint32_t W, uint32_t H,
                         bool yuv_on, int ky, int ko, unsigned bpp,
-                        bool osd_scale)
+                        bool osd_scale, bool osd_armed)
 {
     memset(dst, 0, (size_t)W * H * 4);
     vph_opaque = 0;
@@ -169,7 +207,7 @@ static void vph_compose(VphState *s, uint32_t *dst, uint32_t W, uint32_t H,
     if (!pitch) {
         pitch = lb;
     }
-    if (base && lb && lb <= 16384 && lines < 4096) {
+    if (osd_armed && base && lb && lb <= 16384 && lines < 4096) {
         g_autofree uint8_t *row = g_malloc(lb);
         uint32_t ow = lb / bpp;
         uint32_t oh = osd_scale ? H : MIN(lines, H);
@@ -228,7 +266,9 @@ static void vph_update(void *opaque)
          * E0572).  Show that OSD on console 0 so the window is not black.
          */
         vph_compose(s, tmp, W, H, R(0x184) & 1, 1, 3,
-                    (R(0x414) & 1) ? 4 : 2, true);
+                    (R(0x414) & 1) ? 4 : 2, true,
+                    !s->arm_gate || s->line_visible ||
+                    ((s->aif_started >> 3) & 1u));
     } else {
         /*
          * A7C (v1.12): +0x404 bit0 is set while the OSD is RGBA4444 (ch53,
@@ -239,7 +279,11 @@ static void vph_update(void *opaque)
         if (R(AIF(2) + 0x24) == W * 2) {
             bpp = 2;
         }
-        vph_compose(s, tmp, W, H, R(0x144) & 1, 0, 2, bpp, false);
+        bool yuv_on = (R(0x144) & 1) || vph_panel_stage_running(s);
+        bool armed = !s->arm_gate ||
+                     ((R(0x144) & 2) && (s->osd_visible ||
+                                         ((s->aif_started >> 2) & 1u)));
+        vph_compose(s, tmp, W, H, yuv_on, 0, 2, bpp, false, armed);
     }
     /*
      * The A7C programs the next OSD buffer into the AIF channel before the
@@ -248,7 +292,7 @@ static void vph_update(void *opaque)
      * frame over short empty runs (< 1 s); a screen that stays empty longer
      * is shown.
      */
-    if (vph_opaque || (R(0x144) & 1) || ++empty_run > 60) {
+    if (s->arm_gate || vph_opaque || ++empty_run > 60) {
         if (vph_opaque) {
             empty_run = 0;
         }
@@ -288,7 +332,9 @@ static void vph_hdmi_update(void *opaque)
         }
     } else {
         vph_compose(s, dst, W, H, R(0x184) & 1, 1, 3,
-                    (R(0x414) & 1) ? 4 : 2, true);
+                    (R(0x414) & 1) ? 4 : 2, true,
+                    !s->arm_gate || s->line_visible ||
+                    ((s->aif_started >> 3) & 1u));
     }
     dpy_gfx_update_full(s->hdmi_con);
 }
@@ -328,7 +374,50 @@ static uint64_t vph_read(void *opaque, hwaddr off, unsigned size)
 static void vph_write(void *opaque, hwaddr off, uint64_t v, unsigned size)
 {
     VphState *s = opaque;
+    if (off == 0x140 && s->stage_sticky) {
+        /* write-1-to-set mode field: a guest clear does not stop the stage */
+        R(0x140) = (R(0x140) & VPH_140_STICKY) | (uint32_t)v;
+        return;
+    }
+    if (off >= AIF(0) && off < AIF(8) && (off & 0x7f) == 0x00 && (v & 1u)) {
+        unsigned k = (unsigned)((off - AIF(0)) / 0x80);
+        s->aif_started |= 1u << k;
+        s->arms[k]++;
+    }
+    if (s->debug) {
+        static unsigned n144, nbase;
+        if (off == 0x144 && (uint32_t)v != R(0x144) && n144 < 64) {
+            n144++;
+            fprintf(stderr, "[VPH] t=%" PRId64 "ms 0x144 0x%08x -> 0x%08x\n",
+                    qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), R(0x144), (uint32_t)v);
+        }
+        if (off >= AIF(0) && off < AIF(4) && (off & 0x7f) == 0x20 &&
+            (uint32_t)v != R(off) && nbase < 400) {
+            nbase++;
+            fprintf(stderr, "[VPH] t=%" PRId64 "ms ch%u base 0x%08x -> 0x%08x "
+                    "lb=0x%x lines=%u ctrl=0x%x\n",
+                    qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL),
+                    51 + (unsigned)((off - AIF(0)) / 0x80), R(off), (uint32_t)v,
+                    R(off - 0x20 + 0x24), R(off - 0x20 + 0x2C) + 1,
+                    R(off - 0x20));
+        }
+    }
     R(off) = v;
+}
+
+/* once per second of guest time: arm counts and layer state */
+static void vph_debug_tick(VphState *s)
+{
+    static unsigned vt;
+    if (++vt % 60) {
+        return;
+    }
+    fprintf(stderr, "[VPH] t=%" PRId64 "ms arms/s ch51=%u ch52=%u ch53=%u "
+            "ch54=%u 0x140=0x%08x 0x144=0x%08x ch53=0x%08x ch54=0x%08x "
+            "sysv=%u\n", qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL),
+            s->arms[0], s->arms[1], s->arms[2], s->arms[3], R(0x140),
+            R(0x144), R(AIF(2) + 0x20), R(AIF(3) + 0x20), s->frame);
+    memset(s->arms, 0, sizeof(s->arms));
 }
 
 static uint64_t sysv_read(void *opaque, hwaddr off, unsigned size)
@@ -375,6 +464,9 @@ static void vph_reset(DeviceState *dev)
     memset(s->vph, 0, sizeof(s->vph));
     memset(s->sysv, 0, sizeof(s->sysv));
     s->frame = 0;
+    s->aif_started = 0;
+    s->osd_visible = 0;
+    s->line_visible = 0;
     timer_mod(s->tick, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               NANOSECONDS_PER_SECOND / 60);
     timer_mod(s->vtick, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
@@ -413,6 +505,9 @@ static void vph_init(Object *obj)
 
 static const Property vph_props[] = {
     DEFINE_PROP_BOOL("panel-fallback", VphState, panel_fallback, true),
+    DEFINE_PROP_BOOL("arm-gate", VphState, arm_gate, false),
+    DEFINE_PROP_BOOL("stage-sticky", VphState, stage_sticky, false),
+    DEFINE_PROP_BOOL("debug", VphState, debug, false),
 };
 
 static void vph_class_init(ObjectClass *klass, const void *data)

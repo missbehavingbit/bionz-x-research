@@ -84,7 +84,8 @@ if [ "${A7C_FULL:-1}" = "1" ]; then
     export A7C_SLOTC="${A7C_SLOTC:-1}" A7C_CARD_SLOT="${A7C_CARD_SLOT:-1}" \
            A7C_REAR_CONTROLS="${A7C_REAR_CONTROLS:-1}" A7C_GPIO_LIVE="${A7C_GPIO_LIVE:-1}" \
            A7C_SCREEN="${A7C_SCREEN:-vph}" A7C_DWC3="${A7C_DWC3:-1}" \
-           A7C_LIVEVIEW="${A7C_LIVEVIEW:-1}" A7C_LENS_REPLY="${A7C_LENS_REPLY:-1}"
+           A7C_LIVEVIEW="${A7C_LIVEVIEW:-1}" A7C_LENS_REPLY="${A7C_LENS_REPLY:-1}" \
+           A7C_CAKEY_POKE="${A7C_CAKEY_POKE:-1}"
     A7C_EVSEL_LATE_US="${A7C_EVSEL_LATE_US:-500}"
 fi
 
@@ -105,7 +106,6 @@ if [ -n "${A7C_HANDOFF_FILE:-}" ]; then
     MACHINE="$MACHINE,handoff=$HO_FILE"
 fi
 [ -n "${A7C_LIVEVIEW_SOURCE:-}" ] && MACHINE="$MACHINE,liveview-source=$A7C_LIVEVIEW_SOURCE"
-[ -n "${HOSTWIN:-}" ] && MACHINE="$MACHINE,hostwin=$HOSTWIN"
 [ "${A7C_USB_VBUS:-0}" = "1" ] && MACHINE="$MACHINE,usb-vbus-test=on,usb-cid-high=on"
 # A7C_MACHINE_OPTS=evsel=on,evsel-sources=0: extra machine options, appended to -M
 [ -n "${A7C_MACHINE_OPTS:-}" ] && MACHINE="$MACHINE,$A7C_MACHINE_OPTS"
@@ -116,6 +116,24 @@ fi
 # source 29 (frame start), as bionz-x-research qemu-a6400 EVSEL_LATE_US (E0557).
 [ -n "${A7C_EVSEL_LATE_US:-}" ] && EXTRA+=(-global cxd90014-evsel.late-src=30
                                          -global "cxd90014-evsel.late-us=$A7C_EVSEL_LATE_US")
+# A7C_EVSEL_LATE2_US=N [A7C_EVSEL_LATE2_SRC=23]: a second delayed timing source (bionz, opt-in)
+[ -n "${A7C_EVSEL_LATE2_US:-}" ] && EXTRA+=(-global "cxd90014-evsel.late-src2=${A7C_EVSEL_LATE2_SRC:-23}"
+                                          -global "cxd90014-evsel.late-us2=$A7C_EVSEL_LATE2_US")
+# v2.1 developer / safety options from bionz-x-research (all off by default):
+#   A7C_HOSTWIN=FILE   16 MiB shared file at PA 0x50000000 for fast file transfer (tools/hostwin_get)
+#   A7C_LOWMEM_ABORT=1 bus error for PA 0x000F8000-0x000F8FFF, as the a6400 camera (E0647)
+#   A7C_WATCHDOG=1     hardware watchdog at 0xF2402000 (expiry: QEMU -action watchdog=, default reset)
+#   A7C_I2C=1          I2C channel 0 handshake model at 0xF2401000
+[ -n "${A7C_HOSTWIN:-}" ] && MACHINE="$MACHINE,hostwin=$A7C_HOSTWIN"
+[ "${A7C_LOWMEM_ABORT:-0}" = "1" ] && MACHINE="$MACHINE,lowmem-abort=on"
+[ "${A7C_WATCHDOG:-0}" = "1" ] && MACHINE="$MACHINE,watchdog=on"
+[ "${A7C_I2C:-0}" = "1" ] && MACHINE="$MACHINE,i2c=on"
+#   A7C_VPH_DEBUG=1    [VPH] lines: OSD/YUV channel programming and arm counts per second
+#   A7C_VPH_ARM_GATE=1 show a VPH layer only in frames the camera armed (hardware rule, E0639)
+#   A7C_VPH_STAGE=1    VPH +0x140 panel-stage mode bits sticky (a6400 E0652)
+[ "${A7C_VPH_DEBUG:-0}" = "1" ] && EXTRA+=(-global cxd90014-vph.debug=on)
+[ "${A7C_VPH_ARM_GATE:-0}" = "1" ] && EXTRA+=(-global cxd90014-vph.arm-gate=on)
+[ "${A7C_VPH_STAGE:-0}" = "1" ] && EXTRA+=(-global cxd90014-vph.stage-sticky=on)
 
 # A7C_SD_IMAGE=file (v1.13, experimental): a memory card in the PCIe card reader (needs
 # A7C_CARD_SLOT=1). Not seen by the camera yet: it powers the reader off at ~3.4 s and does

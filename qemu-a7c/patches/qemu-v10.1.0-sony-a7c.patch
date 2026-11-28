@@ -135,6 +135,7 @@ index b1d8d8e..62f0d2a 100644
 +system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_adc.c'))
 +system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_sa.c'))
 +system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90014_p2s.c'))
++system_ss.add(when: 'CONFIG_SONY_A7C', if_true: files('cxd90045_i2c.c'))
 diff --git a/hw/misc/trace-events b/hw/misc/trace-events
 index e3f64c0..1821310 100644
 --- a/hw/misc/trace-events
@@ -224,6 +225,31 @@ index 8c29059..3ede93e 100644
          return sd_illegal;
      }
  
+@@ -1107,8 +1119,24 @@ static void sd_erase(SDState *sd)
+     sd->erase_start = INVALID_ADDRESS;
+     sd->erase_end = INVALID_ADDRESS;
+     sd->csd[14] |= 0x40;
+ 
++    if (!sdsc && sd->blk) {
++        /*
++         * sony-a7c: SDHC/SDXC erase in one zero-write.  The SCR above reports
++         * DATA_STAT_AFTER_ERASE = 0, so erased blocks read as zeroes; writing
++         * zeroes with MAY_UNMAP keeps a sparse image sparse.  The per-block
++         * 0xFF loop below took minutes for a 4 GB card (8.4 million writes)
++         * and filled the whole image file.
++         */
++        uint64_t len = erase_end + erase_len - erase_start;
++        if (blk_pwrite_zeroes(sd->blk, erase_start + sd_bootpart_offset(sd),
++                              len, BDRV_REQ_MAY_UNMAP) < 0) {
++            fprintf(stderr, "sd_erase: write error on host side\n");
++        }
++        return;
++    }
++
+     memset(sd->data, 0xff, erase_len);
+     for (erase_addr = erase_start; erase_addr <= erase_end;
+          erase_addr += erase_len) {
+         if (sdsc) {
 @@ -1854,7 +1866,7 @@ static sd_rsp_type_t sd_cmd_SEND_WRITE_PROT(SDState *sd, SDRequest req)
      uint64_t addr;
      uint32_t data;

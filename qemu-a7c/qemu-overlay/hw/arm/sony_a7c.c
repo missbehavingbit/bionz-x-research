@@ -654,6 +654,126 @@ static uint64_t cxd90045_sif_read(void *opaque, hwaddr off, unsigned size)
 static bool a7c_pl330_dma;
 static bool a7c_lens_reply;
 
+/*
+ * v2.1, from bionz-x-research qemu-a6400 (2026-11):
+ *
+ * hostwin (developer option, not hardware): a host file mapped as shared RAM
+ * at PA 0x50000000 (16 MiB, unused in the A7C map: RAM bank 0 ends at
+ * 0x40000000, bank 1 starts at 0x80000000).  The panel writes a file there
+ * and the guest helper tools/hostwin_get copies it out through /dev/mem, so
+ * mods and test files reach a running guest in seconds instead of minutes
+ * over the serial console.  The window does not exist on the camera.
+ *
+ * lowmem-abort (E0647, opt-in): CPU accesses to PA 0x000F8000-0x000F8FFF get
+ * a decode error, as the ILCE-6400 returned for a /dev/mem read of that page
+ * (it warm-rebooted the camera).  Measured on the a6400 only; for the A7C it
+ * is a safety net for mod testing, not verified hardware behaviour.
+ *
+ * watchdog (E0636, opt-in): one CXD4115 channel at 0xF2402000, the address of
+ * the A7C kernel's cxd900x0 wdt driver too (same literal in VMLINUX.BIN).
+ * Expiry follows QEMU's -action watchdog= (default reset).
+ *
+ * i2c (L0035/L0036, opt-in): channel 0 at 0xF2401000, only the i2c-sony
+ * driver's start/config handshake; the slave phase is not answered.
+ */
+#define A7C_HOSTWIN_PA          0x50000000ULL
+#define A7C_HOSTWIN_SIZE        0x01000000ULL
+#define A7C_LOWMEM_ABORT_BASE   0x000F8000ULL
+#define A7C_WDT_BASE            0xF2402000ULL
+static char *a7c_hostwin;
+static bool a7c_lowmem_abort;
+static bool a7c_watchdog;
+static bool a7c_i2c;
+
+static char *a7c_get_hostwin(Object *obj, Error **errp)
+{
+    return g_strdup(a7c_hostwin ? a7c_hostwin : "");
+}
+
+static void a7c_set_hostwin(Object *obj, const char *value, Error **errp)
+{
+    g_free(a7c_hostwin);
+    a7c_hostwin = g_strdup(value);
+}
+
+#define A7C_STARTUP_BOOL(name, var)                                         \
+    static bool a7c_get_##var(Object *obj, Error **errp) { return var; }    \
+    static void a7c_set_##var(Object *obj, bool on, Error **errp)           \
+    {                                                                       \
+        if (phase_check(PHASE_MACHINE_INITIALIZED)) {                       \
+            error_setg(errp, name " is a startup option");                  \
+            return;                                                         \
+        }                                                                   \
+        var = on;                                                           \
+    }
+A7C_STARTUP_BOOL("lowmem-abort", a7c_lowmem_abort)
+A7C_STARTUP_BOOL("watchdog", a7c_watchdog)
+A7C_STARTUP_BOOL("i2c", a7c_i2c)
+
+static MemTxResult a7c_lowmem_abort_read(void *opaque, hwaddr addr,
+                                         uint64_t *data, unsigned size,
+                                         MemTxAttrs attrs)
+{
+    qemu_log_mask(LOG_GUEST_ERROR, "a7c.lowmem-abort: read PA 0x%08" HWADDR_PRIx
+                  " size %u -> decode error (E0647)\n",
+                  (hwaddr)(A7C_LOWMEM_ABORT_BASE + addr), size);
+    *data = 0;
+    return MEMTX_DECODE_ERROR;
+}
+
+static MemTxResult a7c_lowmem_abort_write(void *opaque, hwaddr addr,
+                                          uint64_t data, unsigned size,
+                                          MemTxAttrs attrs)
+{
+    qemu_log_mask(LOG_GUEST_ERROR, "a7c.lowmem-abort: write PA 0x%08" HWADDR_PRIx
+                  " size %u -> decode error (E0647)\n",
+                  (hwaddr)(A7C_LOWMEM_ABORT_BASE + addr), size);
+    return MEMTX_DECODE_ERROR;
+}
+
+static const MemoryRegionOps a7c_lowmem_abort_ops = {
+    .read_with_attrs = a7c_lowmem_abort_read,
+    .write_with_attrs = a7c_lowmem_abort_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 8 },
+};
+
+static void a7c_create_dev_options(MemoryRegion *sysmem, ARMCPU **cpus,
+                                   unsigned ncpu)
+{
+    if (a7c_hostwin && *a7c_hostwin) {
+        MemoryRegion *win = g_new0(MemoryRegion, 1);
+        if (!memory_region_init_ram_from_file(win, NULL, "a7c.hostwin",
+                                              A7C_HOSTWIN_SIZE, 0, RAM_SHARED,
+                                              a7c_hostwin, 0, &error_fatal)) {
+            exit(1);
+        }
+        memory_region_add_subregion_overlap(sysmem, A7C_HOSTWIN_PA, win, 10);
+    }
+    if (a7c_lowmem_abort) {
+        MemoryRegion *mr = g_new(MemoryRegion, 1);
+        memory_region_init_io(mr, NULL, &a7c_lowmem_abort_ops, NULL,
+                              "a7c.lowmem-abort", 0x1000);
+        memory_region_add_subregion_overlap(sysmem, A7C_LOWMEM_ABORT_BASE, mr, 10);
+        create_unimplemented_device("a7c.unassigned", 0, 1ULL << 32);
+        for (unsigned c = 0; c < ncpu; c++) {
+            CPU(cpus[c])->ignore_memory_transaction_failures = false;
+        }
+    }
+    if (a7c_watchdog) {
+        DeviceState *wdt = qdev_new("cxd4115-timer");
+        qdev_prop_set_uint32(wdt, "num-channels", 1);
+        qdev_prop_set_bit(wdt, "watchdog", true);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(wdt), &error_fatal);
+        sysbus_mmio_map_overlap(SYS_BUS_DEVICE(wdt), 0, A7C_WDT_BASE, 10);
+    }
+    if (a7c_i2c) {
+        DeviceState *i2c = qdev_new("cxd90045-i2c");
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(i2c), &error_fatal);
+        sysbus_mmio_map_overlap(SYS_BUS_DEVICE(i2c), 0, 0xF2401000ULL, 10);
+    }
+}
+
 static bool a7c_get_pl330_dma(Object *obj, Error **errp)
 {
     return a7c_pl330_dma;
@@ -1780,6 +1900,8 @@ static void a7c_set_units(Object *obj, bool v, Error **errp)
 static struct {
     DeviceState *adc;               /* ADC unit 1 (0xF2407000) */
     uint16_t cakey;                 /* pressed CAkey1 bits */
+    uint16_t cakey_latch;           /* v1.21: presses not yet seen in 2 slot-A frames */
+    uint8_t cakey_left[16];         /* slot-A frames each latched bit still shows */
     QKeyCode adc_owner[2];          /* key holding ch0 / ch3 */
     bool on;
     uint16_t wheel[2];              /* TPU counters 0xF2404014 + 0x100 * ch */
@@ -2306,6 +2428,41 @@ static void a7c_rear_key_do(QKeyCode code, bool down)
     if (bit) {
         a7c_rear.cakey = down ? (a7c_rear.cakey | bit)
                                    : (a7c_rear.cakey & ~bit);
+        if (down) {
+            /*
+             * v1.21: CAkey1 (MENU, PLAY, ...) only reaches the camera in
+             * slot-A frames, which the CPU fetches at its own pace (seconds
+             * apart while the app is busy).  Latch each press until two
+             * slot-A frames have carried it, so a click is never lost.
+             */
+            for (int b = 0; b < 16; b++) {
+                if (bit & (1u << b)) {
+                    a7c_rear.cakey_latch |= 1u << b;
+                    a7c_rear.cakey_left[b] = 2;
+                }
+            }
+        }
+        if (getenv("A7C_CAKEY_POKE")) {
+            /*
+             * v2.1 (A7C_CAKEY_POKE=1): after live view starts the CPU stops
+             * fetching slot A (not understood yet), so MENU / PLAY never reach
+             * it.  Also write the key bytes into av-cam's slot-A RX buffer
+             * (PA 0x034433A4 + 28) and into its parsed copy (PA 0x04447B30,
+             * found by diffing memory with PLAY held), which input.ko reads
+             * through the front_key UIPC request.
+             */
+            static const hwaddr at[] = { 0x034433A4 + 28, 0x04447B30, 0x044E90C2,
+                                         0x0454B51B, 0x04613544, 0x04613674 };
+            for (int i = 0; i < ARRAY_SIZE(at); i++) {
+                uint8_t k[2];
+                address_space_read(&address_space_memory, at[i],
+                                   MEMTXATTRS_UNSPECIFIED, k, 2);
+                k[0] = (k[0] & ~0x06) | (a7c_rear.cakey & 0x06);
+                k[1] = (k[1] | 0x06) & ~(a7c_rear.cakey >> 8);
+                address_space_write(&address_space_memory, at[i],
+                                    MEMTXATTRS_UNSPECIFIED, k, 2);
+            }
+        }
         return;
     }
     for (size_t i = 0; i < ARRAY_SIZE(adc_keys); i++) {
@@ -2404,6 +2561,7 @@ static const QemuInputHandler a7c_rear_handler = {
 static void a7c_rear_reset(void *opaque)
 {
     a7c_rear.cakey = 0;
+    a7c_rear.cakey_latch = 0;
     a7c_rear.wheel[0] = a7c_rear.wheel[1] = 0;
     {
         a7c_rear_dial(a7c_dial_parse(getenv("A7C_MODE_DIAL")));
@@ -2441,8 +2599,25 @@ static void a7c_sm_slot_a(const uint8_t *tx, uint8_t *out)
          * pressed), bit 9 flash pop-up and bit 10 BT-LE power (low =
          * pressed).  Checked: MENU opens the camera's menu.
          */
-        out[28] |= a7c_rear.cakey & 0x06;
-        out[29] &= ~(a7c_rear.cakey >> 8);
+        uint16_t keys = a7c_rear.cakey | a7c_rear.cakey_latch;
+        out[28] |= keys & 0x06;
+        out[29] &= ~(keys >> 8);
+        for (int b = 0; b < 16; b++) {
+            if ((a7c_rear.cakey_latch & (1u << b)) && !--a7c_rear.cakey_left[b]) {
+                a7c_rear.cakey_latch &= ~(1u << b);
+            }
+        }
+        if (getenv("A7C_SLOTA_LOG")) {
+            static int64_t last;
+            static unsigned count;
+            int64_t now = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+            count++;
+            if (keys || now - last >= 5000) {
+                fprintf(stderr, "a7c slot-A #%u t=%" PRId64 " ms keys=%04x\n",
+                        count, now, keys);
+                last = now;
+            }
+        }
         out[6] = 2;                     /* clock valid */
         if (a7c_sm.rtc_ack > 0) {
             a7c_sm.rtc_ack--;
@@ -2485,6 +2660,12 @@ static uint8_t *a7c_sm_tlv(uint8_t *f, int id, int minlen)
  * with TX TLV 0x0A data[1] bit 6 (0x0D09 with bit 1); the micro confirms in
  * RX TLV 0x03 data[1] bit 6 (bit 0).  Acknowledged while requested.
  */
+static bool a7c_lens_reply_on(void)
+{
+    const char *e = getenv("A7C_LENS_REPLY");
+    return a7c_lens_reply || (e && *e == '1');
+}
+
 static void a7c_sm_slot_b(uint8_t *tx, uint8_t *out)
 {
     uint8_t *t;
@@ -2499,6 +2680,21 @@ static void a7c_sm_slot_b(uint8_t *tx, uint8_t *out)
             a7c_sm.poff_logged = true;
             info_report("sony-a7c: camera asked the sub-micro to power off "
                         "(TLV 0x0a data[1] = 0x%02x)", a7c_sm.poff_req);
+        }
+    }
+    /*
+     * v2.1: lens rail (bionz E0x: av-cam 0x6386ACDA requests it in TX TLV 0x0a
+     * data[1] bit 0, reads it back in RX TLV 0x03 data[3] bit 0).  This is a
+     * slot-B exchange; v2.0 applied it to slot A, where it never matched, so
+     * the captured "rail on" answered a "rail off" request.  When live view
+     * starts the CPU then keeps resending slot B and never fetches slot A
+     * again (MENU / PLAY lost after ~65 s).
+     */
+    if (tx[0] == 0x31 && a7c_lens_reply_on() &&
+        (t = a7c_sm_tlv(tx, 0x0a, 2)) != NULL) {
+        uint8_t *st = a7c_sm_tlv(out, 0x03, 4);
+        if (st) {
+            st[3] = (st[3] & ~1u) | (t[1] & 1u);
         }
     }
     a7c_sm_crc(out);
@@ -2711,7 +2907,7 @@ static const uint8_t *a7c_submicro_tlv(const uint8_t frame[128],
     return NULL;
 }
 
-static void a7c_submicro_lens_reply(const uint8_t tx[128], uint8_t reply[128])
+G_GNUC_UNUSED static void a7c_submicro_lens_reply(const uint8_t tx[128], uint8_t reply[128])
 {
     const uint8_t *request = a7c_submicro_tlv(tx, 0x0a, 2);
     const uint8_t *status = a7c_submicro_tlv(reply, 0x03, 4);
@@ -2729,20 +2925,203 @@ static void a7c_submicro_lens_reply(const uint8_t tx[128], uint8_t reply[128])
     a7c_sm_crc(reply);
 }
 
+/*
+ * v2.1: still-capture handshake with the sub-micro ("CAIF"), ported from
+ * bionz-x-research qemu-a6400 (E0715, "post-boot GPIO-driven Sub-Micro CAIF
+ * shutter frames").  Opt-in: A7C_STILL_CAPTURE=1.  [?] The A7C pins are
+ * assumed to match the a6400 (same CXD90045 board family):
+ *   CPU S2REQ        P7.15 falling  -> micro sends (3,0) CAP_START (20 B)
+ *   exposure ready   P5.29 / P5.30  -> two exposure pulses on P1.2 (IRQ 139),
+ *                                      then (3,3) START_END (10 B)
+ *   read start       P5.23 / P5.24  -> (3,5) CAP_DATA (1544 B), (3,12) EBC (14 B)
+ * A micro -> CPU message: request line P2.5 high + strobe pulse; the CPU
+ * reads an 8-byte header {0, cat, sub, 0, len lo, len hi, 0, 0}, then the
+ * payload (zeroes here), each chunk followed by a strobe pulse.
+ */
+typedef struct { uint8_t cat, sub; uint16_t len; } A7cCaifMsg;
+static struct {
+    bool on;
+    A7cCaifMsg q[16];
+    unsigned head, tail;
+    bool rx_active, hdr_sent;
+    uint16_t rem;
+    A7cCaifMsg cur;
+    int last_s2req, last_exp, last_read, exp_step;
+    QEMUTimer *strobe, *exp;
+} a7c_caif;
+
+static void a7c_caif_strobe_tick(void *opaque)
+{
+    qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_STROBE), 1);
+    qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_STROBE), 0);
+}
+
+static void a7c_caif_pulse(int64_t us)
+{
+    timer_mod(a7c_caif.strobe, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + us * SCALE_US);
+}
+
+static void a7c_caif_kick(void)
+{
+    if (a7c_caif.rx_active || a7c_caif.head == a7c_caif.tail) {
+        return;
+    }
+    a7c_caif.cur = a7c_caif.q[a7c_caif.head];
+    a7c_caif.head = (a7c_caif.head + 1) % ARRAY_SIZE(a7c_caif.q);
+    a7c_caif.rx_active = true;
+    a7c_caif.hdr_sent = false;
+    a7c_caif.rem = a7c_caif.cur.len;
+    if (getenv("A7C_CAIF_LOG")) {
+        fprintf(stderr, "a7c caif t=%" PRId64 "ms -> (%u,%u) %u B\n",
+                qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL), a7c_caif.cur.cat,
+                a7c_caif.cur.sub, a7c_caif.cur.len);
+    }
+    qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_REQUEST), 1);
+    a7c_caif_pulse(150);
+}
+
+static void a7c_caif_enqueue(uint8_t cat, uint8_t sub, uint16_t len)
+{
+    unsigned next = (a7c_caif.tail + 1) % ARRAY_SIZE(a7c_caif.q);
+    if (next == a7c_caif.head) {
+        return;
+    }
+    a7c_caif.q[a7c_caif.tail] = (A7cCaifMsg){ cat, sub, len };
+    a7c_caif.tail = next;
+    a7c_caif_kick();
+}
+
+static void a7c_caif_exp_tick(void *opaque)
+{
+    const int line = 1 * 32 + 2;                    /* P1.2, IRQ 139 */
+    if (a7c_caif.exp_step < 2) {
+        qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, line), 1);
+        qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, line), 0);
+        a7c_caif.exp_step++;
+        timer_mod(a7c_caif.exp, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SCALE_MS);
+    } else {
+        a7c_caif_enqueue(3, 3, 0x000A);             /* START_END */
+    }
+}
+
+static void a7c_caif_on_s2req(void *opaque, int n, int level)
+{
+    if (a7c_caif.last_s2req == 1 && level == 0) {
+        a7c_caif_enqueue(3, 0, 0x0014);             /* CAP_START */
+    }
+    a7c_caif.last_s2req = level;
+}
+
+static void a7c_caif_on_exp(void *opaque, int n, int level)
+{
+    if (a7c_caif.last_exp == 1 && level == 0) {
+        a7c_caif.exp_step = 0;
+        timer_mod(a7c_caif.exp, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 500 * SCALE_US);
+    }
+    a7c_caif.last_exp = level;
+}
+
+static void a7c_caif_on_read(void *opaque, int n, int level)
+{
+    if (a7c_caif.last_read == 1 && level == 0) {
+        a7c_caif_enqueue(3, 5, 0x0608);             /* CAP_DATA */
+        a7c_caif_enqueue(3, 12, 0x000E);            /* EBC */
+    }
+    a7c_caif.last_read = level;
+}
+
+/* true when the transfer belonged to a CAIF message */
+static bool a7c_caif_xfer(uint8_t *buf, int len)
+{
+    if (!a7c_caif.on || len <= 0 || buf[0] == 0x21 || buf[0] == 0x31 ||
+        buf[0] == 0x61) {
+        return false;
+    }
+    if (a7c_caif.rx_active) {
+        if (!a7c_caif.hdr_sent && len == 8) {
+            uint8_t hdr[8] = { 0, a7c_caif.cur.cat, a7c_caif.cur.sub, 0,
+                               a7c_caif.cur.len & 0xff, a7c_caif.cur.len >> 8, 0, 0 };
+            memcpy(buf, hdr, 8);
+            a7c_caif.hdr_sent = true;
+            a7c_caif_pulse(100);
+            return true;
+        }
+        if (a7c_caif.hdr_sent) {
+            uint16_t take = MIN((uint16_t)len, a7c_caif.rem);
+            memset(buf, 0, len);
+            a7c_caif.rem -= take;
+            if (a7c_caif.rem == 0) {
+                a7c_caif.rx_active = false;
+                qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_REQUEST), 0);
+                a7c_caif_pulse(100);
+                a7c_caif_kick();
+            } else {
+                a7c_caif_pulse(100);
+            }
+            return true;
+        }
+    }
+    if (len <= 128) {                               /* CPU -> micro command */
+        a7c_caif_pulse(100);
+    }
+    return false;
+}
+
+static void a7c_caif_init(DeviceState *gpio)
+{
+    a7c_caif.on = true;
+    a7c_caif.last_s2req = a7c_caif.last_exp = a7c_caif.last_read = 1;
+    a7c_caif.strobe = timer_new_ns(QEMU_CLOCK_VIRTUAL, a7c_caif_strobe_tick, NULL);
+    a7c_caif.exp = timer_new_ns(QEMU_CLOCK_VIRTUAL, a7c_caif_exp_tick, NULL);
+    qdev_connect_gpio_out_named(gpio, "out", 7 * 32 + 15,
+                                qemu_allocate_irq(a7c_caif_on_s2req, NULL, 0));
+    qdev_connect_gpio_out_named(gpio, "out", 5 * 32 + 29,
+                                qemu_allocate_irq(a7c_caif_on_exp, NULL, 0));
+    qdev_connect_gpio_out_named(gpio, "out", 5 * 32 + 30,
+                                qemu_allocate_irq(a7c_caif_on_exp, NULL, 1));
+    qdev_connect_gpio_out_named(gpio, "out", 5 * 32 + 23,
+                                qemu_allocate_irq(a7c_caif_on_read, NULL, 0));
+    qdev_connect_gpio_out_named(gpio, "out", 5 * 32 + 24,
+                                qemu_allocate_irq(a7c_caif_on_read, NULL, 1));
+}
+
 static void a7c_sm_xfer(void *opaque, int ch, uint8_t *buf, int len)
 {
     uint8_t out[256];
 
+    if (getenv("A7C_SM_XLOG")) {
+        static int64_t last;
+        static unsigned n[3];
+        int64_t now = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+        n[len < 128 ? 0 : len == 128 ? 1 : 2]++;
+        if (now - last >= 2000) {
+            fprintf(stderr, "a7c sm xfer t=%" PRId64 "ms hdr=%u a=%u ab=%u last len=%d "
+                    "%02x %02x %02x %02x %02x %02x %02x %02x\n", now, n[0], n[1], n[2],
+                    len, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+            last = now;
+            memset(n, 0, sizeof(n));
+        }
+    }
+    if (a7c_caif_xfer(buf, len)) {
+        return;
+    }
     if (len < 128) {
         memset(buf, 0, len);            /* 8-byte header phase: idle */
+        {
+            /* experiment: A7C_SM_HDR_HEX = header reply bytes */
+            const char *hx = getenv("A7C_SM_HDR_HEX");
+            for (int i = 0; hx && hx[0] && hx[1] && i < len; i++, hx += 2) {
+                unsigned v;
+                if (sscanf(hx, "%2x", &v) == 1) {
+                    buf[i] = v;
+                }
+            }
+        }
         return;
     }
     a7c_sm_txlog(buf);
     if (buf[0] == 0x31) {
         a7c_sm_slot_b(buf, out);
-        if (a7c_lens_reply || (getenv("A7C_LENS_REPLY") && *getenv("A7C_LENS_REPLY") == '1')) {
-            a7c_submicro_lens_reply(buf, out);
-        }
     } else if (buf[0] == 0x61 && getenv("A7C_SLOTC")) {
         /*
          * v1.9: the A7C also exchanges a third frame, CPU 0x61 / micro 0x60
@@ -2768,15 +3147,9 @@ static void a7c_sm_xfer(void *opaque, int ch, uint8_t *buf, int len)
     } else {
         a7c_sm_rtc_tx(buf);
         a7c_sm_slot_a(buf, out);
-        if (a7c_lens_reply || (getenv("A7C_LENS_REPLY") && *getenv("A7C_LENS_REPLY") == '1')) {
-            a7c_submicro_lens_reply(buf, out);
-        }
     }
     if (len > 128) {                    /* 256-byte exchange: A then B */
         a7c_sm_slot_b(buf + 128, out + 128);
-        if (a7c_lens_reply || (getenv("A7C_LENS_REPLY") && *getenv("A7C_LENS_REPLY") == '1')) {
-            a7c_submicro_lens_reply(buf + 128, out + 128);
-        }
     }
     memcpy(buf, out, MIN(len, 256));
 }
@@ -2796,15 +3169,43 @@ static void a7c_sm_tick(void *opaque)
         timer_mod(a7c_sm.tick, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SCALE_MS);
         return;
     }
-    qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_REQUEST), 0);
+    if (!a7c_caif.rx_active) {
+        qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_REQUEST), 0);
+    }
     a7c_sm.step ^= 1;
     qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, A7C_SM_STROBE), a7c_sm.step);
     timer_mod(a7c_sm.tick, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
               (a7c_sm.step ? SCALE_MS : 49 * SCALE_MS));
 }
 
+/*
+ * Experiment (v2.1, A7C_SM_EV16=<gpio>): a periodic pulse on another micro ->
+ * CPU event line (p0.9 = 9 or p1.2 = 34; IRQ 130 / 139 are set up as edge
+ * interrupts next to the strobe's 129).  A7C_SM_EV16_MS = period (16).
+ */
+static QEMUTimer *a7c_ev16_timer;
+static int a7c_ev16_pin = -1, a7c_ev16_step;
+
+static void a7c_ev16_tick(void *opaque)
+{
+    int ms = getenv("A7C_SM_EV16_MS") ? atoi(getenv("A7C_SM_EV16_MS")) : 16;
+
+    a7c_ev16_step ^= 1;
+    qemu_set_irq(qdev_get_gpio_in(a7c_sm.gpio, a7c_ev16_pin), a7c_ev16_step);
+    timer_mod(a7c_ev16_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              (a7c_ev16_step ? SCALE_MS : (MAX(ms, 2) - 1) * SCALE_MS));
+}
+
 static void a7c_sm_reset(void *opaque)
 {
+    if (getenv("A7C_SM_EV16") && a7c_sm.gpio) {
+        a7c_ev16_pin = atoi(getenv("A7C_SM_EV16"));
+        if (!a7c_ev16_timer) {
+            a7c_ev16_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, a7c_ev16_tick, NULL);
+        }
+        a7c_ev16_step = 0;
+        timer_mod(a7c_ev16_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 100 * SCALE_MS);
+    }
     a7c_sm.step = 0;
     a7c_ch0_upload_seen = false;
     a7c_ch0_seq = 0;
@@ -2852,6 +3253,9 @@ static void a7c_create_gpio_sio_submicro(qemu_irq *pic)
     }
 
     a7c_sm.gpio = gpio;
+    if (getenv("A7C_STILL_CAPTURE") && *getenv("A7C_STILL_CAPTURE") == '1') {
+        a7c_caif_init(gpio);
+    }
     if (a7c_submicro_file) {
         g_autofree uint8_t *f = NULL;
         gsize len;
@@ -3402,21 +3806,6 @@ static void a7c_create_fbview(MachineState *machine)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(fb), &error_fatal);
 }
 
-#define A7C_HOSTWIN_PA   0x50000000ULL
-#define A7C_HOSTWIN_SIZE 0x01000000ULL
-static char *a7c_hostwin;
-
-static char *a7c_get_hostwin(Object *obj, Error **errp)
-{
-    return g_strdup(a7c_hostwin);
-}
-
-static void a7c_set_hostwin(Object *obj, const char *v, Error **errp)
-{
-    g_free(a7c_hostwin);
-    a7c_hostwin = g_strdup(v);
-}
-
 static void sony_a7c_init(MachineState *machine)
 {
     MemoryRegion *sysmem = get_system_memory();
@@ -3433,16 +3822,6 @@ static void sony_a7c_init(MachineState *machine)
     ARMCPU *cpus[CXD90045_MAX_CPUS];
     DeviceState *timer;
     int i;
-
-    if (a7c_hostwin && *a7c_hostwin) {
-        MemoryRegion *win = g_new(MemoryRegion, 1);
-        if (!memory_region_init_ram_from_file(win, NULL, "a7c.hostwin",
-                                              A7C_HOSTWIN_SIZE, 0, RAM_SHARED,
-                                              a7c_hostwin, 0, &error_fatal)) {
-            exit(1);
-        }
-        memory_region_add_subregion_overlap(sysmem, A7C_HOSTWIN_PA, win, 10);
-    }
 
     for (unsigned c = 0; c < ncpu; c++) {
         Object *cpuobj = object_new(machine->cpu_type);
@@ -3671,6 +4050,7 @@ static void sony_a7c_init(MachineState *machine)
     a7c_create_regs(sysmem, "a7c.dfe_denali", A7C_DENALI_BASE, a7c_denali_read);
 
     a7c_create_catchall(sysmem);
+    a7c_create_dev_options(sysmem, cpus, ncpu);
     /*
      * A7C_DWC3=1: USB device controller at 0xF020C000, GIC 229 (same layout as
      * the a6400, E0528/E0590).  Without it the catch-all reads back the
@@ -3772,8 +4152,14 @@ static void sony_a7c_machine_init(MachineClass *mc)
     object_class_property_add_str(OBJECT_CLASS(mc), "hostwin",
                                   a7c_get_hostwin, a7c_set_hostwin);
     object_class_property_set_description(OBJECT_CLASS(mc), "hostwin",
-        "Developer option: host file mapped as shared RAM at PA 0x50000000 "
-        "(16 MiB) for fast file transfer into a running guest");
+        "developer option: host FILE mapped as shared RAM at PA 0x50000000 "
+        "(16 MiB) for fast file transfer into the guest (tools/hostwin_get)");
+    object_class_property_add_bool(OBJECT_CLASS(mc), "lowmem-abort",
+                                   a7c_get_a7c_lowmem_abort, a7c_set_a7c_lowmem_abort);
+    object_class_property_add_bool(OBJECT_CLASS(mc), "watchdog",
+                                   a7c_get_a7c_watchdog, a7c_set_a7c_watchdog);
+    object_class_property_add_bool(OBJECT_CLASS(mc), "i2c",
+                                   a7c_get_a7c_i2c, a7c_set_a7c_i2c);
 }
 
 DEFINE_MACHINE("sony-a7c", sony_a7c_machine_init)
