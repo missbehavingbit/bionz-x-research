@@ -16,6 +16,8 @@ if [[ "$TARGET" == "a6400" ]]; then
     TARGET="ilce_6400"
 elif [[ "$TARGET" == "ilce_6100" ]]; then
     TARGET="a6100"
+elif [[ "$TARGET" == "ilce_7c" ]]; then
+    TARGET="a7c"
 fi
 mkdir "$OUT"
 D=tools/native_camera/mlv2
@@ -33,6 +35,12 @@ if [[ "$TARGET" == "ilce_6400a" ]]; then
     RELOC_VIEW=0x12f56000u
 elif [[ "$TARGET" == "a6100" ]]; then
     target_defs=(-DMLV2_TARGET_A6100=1)
+    SHIM_LD="$D/shim.ld"
+    sed -e 's/0x05662800/0x05663800/' -e 's/0x05663000/0x05664000/' "$D/shim.ld" > "$OUT/shim-reloc.ld"
+    RELOC_SHIM=0x05663800u
+    RELOC_VIEW=0x155f6000u
+elif [[ "$TARGET" == "a7c" ]]; then
+    target_defs=(-DMLV2_TARGET_A7C=1)
     SHIM_LD="$D/shim.ld"
     sed -e 's/0x05662800/0x05663800/' -e 's/0x05663000/0x05664000/' "$D/shim.ld" > "$OUT/shim-reloc.ld"
     RELOC_SHIM=0x05663800u
@@ -78,7 +86,7 @@ python3 tools/native_camera/mlv2/package.py "$OUT" --target "$TARGET"
 
 # The joint debugger package invokes this separate worker in the background.
 # Only the matching archive can supply executable code to it.
-if [[ "${CI_SKIP_SYSROOT:-0}" != "1" && "$TARGET" != "a6100" ]]; then
+if [[ "${CI_SKIP_SYSROOT:-0}" != "1" && "$TARGET" != "a6100" && "$TARGET" != "a7c" ]]; then
     if [[ "$TARGET" == "ilce_6400" || -f "mods/ilce_6400a/MenuTouchFull.mod" ]]; then
         mkdir "$OUT/companion" "$OUT/card"
         "$CC" -DMLV2_BARE_ARM -nostdlib -static -O2 -ffreestanding -fno-builtin \

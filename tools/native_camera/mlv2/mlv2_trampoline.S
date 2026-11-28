@@ -19,6 +19,10 @@
 #define HOOK_SET_ROOT_OFF  0x5acc0c
 #define HOOK_REFRESH_OFF   0x5ad038
 #define HOOK_OPEN_ITEM_OFF 0x5ad5fc
+#elif defined(MLV2_TARGET_A7C)
+#define HOOK_SET_ROOT_OFF  0x7fa2e0
+#define HOOK_REFRESH_OFF   0x7fa718
+#define HOOK_OPEN_ITEM_OFF 0x7facdc
 #else
 #define HOOK_SET_ROOT_OFF  0x5ab654
 #define HOOK_REFRESH_OFF   0x5aba80

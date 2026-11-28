@@ -16,7 +16,7 @@ CORE_MAGIC, CORE_VERSION, CORE_MAX = 0x52434C4D, 2, 64 * 1024
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("out", type=Path)
-parser.add_argument("--target", choices=("ilce_6400", "ilce_6400a", "a6100", "ilce_6100"), default="ilce_6400")
+parser.add_argument("--target", choices=("ilce_6400", "ilce_6400a", "a6100", "ilce_6100", "a7c", "ilce_7c"), default="ilce_6400")
 args = parser.parse_args()
 out = args.out
 SHIM_ADDR = 0x05D76800 if args.target == "ilce_6400a" else 0x05662800
@@ -67,7 +67,7 @@ print(json.dumps(info, indent=2))
 # Guard request (ML2Q v1): v2 hook entries plus the hook entries of every known v1 build, so an
 # "upgrade" recognizes whichever v1 loader is resident. Triples come from the v1 install requests
 # (header words 5..7) and are re-checked against those files when they are present.
-if args.target in ("ilce_6400a", "a6100", "ilce_6100"):
+if args.target in ("ilce_6400a", "a6100", "ilce_6100", "a7c", "ilce_7c"):
     V1_BUILDS = {
         "none": ((0, 0, 0), None),
     }

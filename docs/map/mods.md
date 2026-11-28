@@ -4,7 +4,7 @@
 
 - **Scope:** Mod Loader v2 in QEMU and on cameras, command items, nested SMNU submenus, standalone SD auto-boot, the ILCE-6100 Picture Profile unlock and Mod Loader port, mod qualification, candidate 36-exposure film-roll tracking, and the external ZV-E10 adapted menu.
 - **Evidence span:** see record index; last reviewed 2026-11-24.
-- **Deep review:** 0 of 16 records read in full and checked claim by claim ([curation plan](CURATION_PLAN.md)); the rest are curated from titles, lead paragraphs and consolidated documents.
+- **Deep review:** 0 of 17 records read in full and checked claim by claim ([curation plan](CURATION_PLAN.md)); the rest are curated from titles, lead paragraphs and consolidated documents.
 - **Status legend:** PHYSICAL = observed on the camera/host; OFFLINE = disassembly, Unicorn or static proof; INFERENCE = argued from evidence, not observed directly; RETRACTED/REFUTED = do not rely on, kept to prevent re-derivation.
 
 The evidence records are authoritative; follow the links before acting on a claim.
@@ -38,6 +38,7 @@ Current knowledge:
 - **C08** `OFFLINE` Mod Loader v2 CTX_VERSION=3 supports FNV-verified SMNU nested submenus and hooks ImageBuilder::MakeRawInfoArea (libObj.so+0x00D7861C) in PhotonBin6MP.mod, verified in Unicorn and captured ILCE-6400A 1.01 QEMU. ([E0680](../evidence/0680-photonbin-6mp-and-mlv2-nested-submenus.md))
 - **C09** `OFFLINE` Standalone SD auto-boot (MLV2.TAR) reads FAT32 and exFAT directly from /dev/mmca1 (block 250:11) in 4 KiB chunks without mounting the card, verified in offline suites and captured ILCE-6400A 1.01 QEMU. ([E0681](../evidence/0681-ilce-6400a-standalone-sd-boot-and-exfat-reader.md))
 - **C10** `OFFLINE` Current camera helpers cannot package or stream 36 ARW exposures unmodified: card_read.c scans only root_cluster, caps archives at 4 MiB / 2,048 clusters and stages to /tmp_bt/mlv2/card.tar, while camera-daemon/src/wifi_stream.c is an MJPEG streamer that drops frames whenever SIOCOUTQ > 16,384 bytes. ([E0681](../evidence/0681-ilce-6400a-standalone-sd-boot-and-exfat-reader.md), [E0689](../evidence/0689-fotufilm-engine-mobile-gpu-film-roll-architecture.md))
+- **C16** `OFFLINE` Mod Loader v2 was ported to the ILCE-7C (mlv2 --target a7c) and verified in the ILCE-7C QEMU emulator (qemu-a7c) with slot-B lens-reply and 16 MiB hostwin shared-memory transfer (MLV2_RESULT=0 changed=1). ([E9201](../evidence/9201-ilce-7c-qemu-and-mlv2-port.md))
 
 ### <a id="mod-a6100-picture-profile"></a>ILCE-6100 Picture Profile unlock
 
@@ -88,7 +89,7 @@ Current knowledge:
 - **C14** `OFFLINE` Sony's read-only Fsys contract was re-verified by disassembly: Fsys_Open read is flag bit 0, Fsys_Stat returns a 64-bit size at offset 0, and the mod identity-checks size, first-4-KiB FNV and function prologues before any read. ([E0698](../evidence/0698-wifisync-camera-side-mod.md))
 - **C15** `OPEN` The 5 GHz SoftAP (bcmdhd + wpa_supplicant AP mode + dhcpd) and the on-camera Fsys reads have not been run on a physical camera; the Phase 1/2 gates remain open. ([E0698](../evidence/0698-wifisync-camera-side-mod.md))
 
-## Record index (23 files)
+## Record index (24 files)
 
 Extracted from the files themselves: title, first date, and up to two lines that mention a correction, retraction or supersession. Every file under `docs/evidence/` belongs to at least one area.
 
@@ -107,6 +108,7 @@ Extracted from the files themselves: title, first date, and up to two lines that
 | [E9102](../evidence/9102-a6100-picture-profile-camera-apply.md) | 2026-11-21 | Applying the Picture Profile redirect to a physical ILCE-6100 |  |  |
 | [E9103](../evidence/9103-a6100-mod-loader-port.md) | 2026-11-21 | Porting Mod Loader v2 to the ILCE-6100: first milestone |  |  |
 | [E9104](../evidence/9104-a6100-photonbin-6mp-port.md) | 2026-11-24 | Porting `PhotonBin 6MP` to `ILCE-6100` (FW `1.00`) and Hardware Verification |  |  |
+| [E9201](../evidence/9201-ilce-7c-qemu-and-mlv2-port.md) | 2026-11-26 | Sony ILCE-7C (a7C) QEMU board, hostwin transfers, and Mod Loader v2 port |  |  |
 | [README.md](../evidence/external-zve10-menu/README.md) | 2026-11-21 | External ZV-E10 QEMU adapted-menu receipt |  | \| Input \| UART commands injected native function events. Vertical wire labels required correction; after-draw state was awaited after consumption. This is not physical button/ADC/FRONT emulation. \| / This comparison does not supersede the upstream a6400 results in |
 | [acceptance-receipt.json](../evidence/external-zve10-menu/acceptance-receipt.json) |  | attachment |  |  |
 | [english-menu-page2.png](../evidence/external-zve10-menu/english-menu-page2.png) |  | attachment |  |  |

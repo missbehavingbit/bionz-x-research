@@ -101,7 +101,7 @@ typedef struct {
 
 #define CTX_BYTES ((sizeof(Ctx) + 0xfffu) & ~0xfffu)
 
-#if !defined(MLV2_TARGET_ILCE6400A) && !defined(MLV2_TARGET_A6100)
+#if !defined(MLV2_TARGET_ILCE6400A) && !defined(MLV2_TARGET_A6100) && !defined(MLV2_TARGET_A7C)
 /* ---- CTX_VERSION 2 layout (mlv2-layout-build-4 on ILCE-6400, for live upgrade) ---- */
 #define V2_MAX_MODS  12u
 #define V2_MAX_PAGES 2u
@@ -226,8 +226,8 @@ static int node_int_prop(Node *n, int32_t prop, int32_t *out) {
  * (a fresh v2 install, QEMU) those resources are empty and the tab has no icon, so the tab then
  * uses the sixth tab's icon instead. The hook is looked up at the live libObj.so base. */
 static int mtl_present(void) {
-#ifdef MLV2_TARGET_A6100
-    return 0;   /* a6100 has no v1 ModsTabLook hook; always use the sixth tab's icon */
+#if defined(MLV2_TARGET_A6100) || defined(MLV2_TARGET_A7C)
+    return 0;   /* a6100/a7c have no v1 ModsTabLook hook; always use the sixth tab's icon */
 #else
     if (!core_libobj_ok) return 0;
     return *(volatile uint32_t *)(MTL_HOOK_ADDR + 2u + core_libobj_bias) == 0xf000f8dfu;
@@ -806,6 +806,11 @@ static const char *state_text_top(const Mod *m) {
 #define REF_OP_NEW       (REF_LIBOBJ_BASE + 0x000fd974u)
 #define REF_EV_CTOR      (REF_LIBOBJ_BASE + 0x00840f7du)
 #define REF_EVMGR_PUSH   (REF_LIBOBJ_BASE + 0x00842529u)
+#elif defined(MLV2_TARGET_A7C)
+#define REF_EVMGR_DIRECT (REF_LIBOBJ_BASE + 0x1488ea0u)
+#define REF_OP_NEW       (REF_LIBOBJ_BASE + 0x001084d0u)
+#define REF_EV_CTOR      (REF_LIBOBJ_BASE + 0x00898b11u)
+#define REF_EVMGR_PUSH   (REF_LIBOBJ_BASE + 0x0089a0bdu)
 #else
 #define REF_EVMGR_SLOT   0x07089984u
 #define REF_OP_NEW       0x05e15974u
@@ -816,7 +821,7 @@ static const char *state_text_top(const Mod *m) {
 static int post_menu_key(void) {
     if (!core_libobj_ok) return 0;
     uint32_t b = core_libobj_bias;
-#ifdef MLV2_TARGET_A6100
+#if defined(MLV2_TARGET_A6100) || defined(MLV2_TARGET_A7C)
     uint32_t mgr = *(volatile uint32_t *)(REF_EVMGR_DIRECT + b);
 #else
     uint32_t slot = *(volatile uint32_t *)(REF_EVMGR_SLOT + b);
@@ -1144,7 +1149,7 @@ static void menu_switch_view(Ctx *c, uint32_t menu, int32_t new_sub_mod, uint32_
         c->pages[p].selected_idx = (p == pg) ? (int32_t)(rw + 1u) : 1;
     *(volatile uint32_t *)(menu + 0x1f4u) = pg + 1u;
     *(volatile uint32_t *)(menu + 0x1f8u) = rw;
-#ifdef MLV2_TARGET_A6100
+#if defined(MLV2_TARGET_A6100) || defined(MLV2_TARGET_A7C)
     refresh_rows(c, menu, 1);
 #else
     ((void (*)(uint32_t, uint32_t))VIEW(MLV2_MENU_REFRESH))(menu, 0u);
@@ -1271,7 +1276,7 @@ int core_init(ShimState *s) {
     core_slot = MLV2_REF_SHIM_ADDR + (layout ? s->testcmd_bias : 0u);
     Ctx *c = (Ctx *)s->ctx;
     if (c && (c->magic != CTX_MAGIC || c->version != CTX_VERSION)) {
-#if !defined(MLV2_TARGET_ILCE6400A) && !defined(MLV2_TARGET_A6100)
+#if !defined(MLV2_TARGET_ILCE6400A) && !defined(MLV2_TARGET_A6100) && !defined(MLV2_TARGET_A7C)
         if (c->magic == CTX_MAGIC && c->version == 2u) {
             V2Ctx *v2 = (V2Ctx *)c;
             if (v2->mod_count > V2_MAX_MODS) { ml_log("core_refuse", v2->version); return -1; }

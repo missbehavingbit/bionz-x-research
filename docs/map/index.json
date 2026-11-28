@@ -791,7 +791,8 @@
         "C11",
         "C08",
         "C09",
-        "C10"
+        "C10",
+        "C16"
       ],
       "inactive_claims": []
     },
@@ -10013,6 +10014,15 @@
         "status": "verified-physical"
       }
     ],
+    "E9201": [
+      {
+        "area": "mods",
+        "kind": "claim",
+        "id": "C16",
+        "file": "9201-ilce-7c-qemu-and-mlv2-port.md",
+        "status": "verified-offline"
+      }
+    ],
     "README": [
       {
         "area": "mods",
@@ -12306,6 +12316,9 @@
       "mods"
     ],
     "9104-a6100-photonbin-6mp-port.md": [
+      "mods"
+    ],
+    "9201-ilce-7c-qemu-and-mlv2-port.md": [
       "mods"
     ],
     "cross_model/a6400-scalarwebapi-2026-11-20-transcript.jsonl": [

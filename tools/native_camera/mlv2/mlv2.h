@@ -25,6 +25,13 @@
 #define MLV2_SET_MODE_OFF     0x1563c8u
 #define MLV2_V1_ANCHOR        (MLV2_REF_VIEW_BASE + 0xb7a658u)
 #define MLV2_REF_SHIM_ADDR    0x05662800u
+#elif defined(MLV2_TARGET_A7C)
+#define MLV2_REF_VIEW_BASE    0x155e6000u
+#define MLV2_REF_TESTCMD_BASE 0x05660000u
+#define MLV2_SET_TEXT_OFF     0x181c44u
+#define MLV2_SET_MODE_OFF     0x188b3cu
+#define MLV2_V1_ANCHOR        (MLV2_REF_VIEW_BASE + 0xd9e550u)
+#define MLV2_REF_SHIM_ADDR    0x05662800u
 #else
 #define MLV2_REF_VIEW_BASE    0x155e6000u
 #define MLV2_REF_TESTCMD_BASE 0x05660000u
@@ -39,7 +46,7 @@
 #endif
 #define MLV2_SET_TEXT         (MLV2_VIEW_BASE + MLV2_SET_TEXT_OFF + 1u)
 #define MLV2_SET_MODE         (MLV2_VIEW_BASE + MLV2_SET_MODE_OFF + 1u)
-#ifndef MLV2_TARGET_A6100
+#if !defined(MLV2_TARGET_A6100) && !defined(MLV2_TARGET_A7C)
 #define MLV2_MENU_REFRESH     (MLV2_VIEW_BASE + MLV2_MENU_REFRESH_OFF + 1u)
 #endif
 #define MLV2_V1_MAGIC         0x444f4d53u   /* "SMOD" */

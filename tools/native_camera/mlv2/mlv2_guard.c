@@ -61,6 +61,14 @@
 #define RECT_TBL2_SLOT6       (REF_VIEW_BASE + 0x803a04u)
 #define RECT_TBL1_SLOT6_FW200 (REF_VIEW_BASE + 0x803984u)
 #define RECT_TBL2_SLOT6_FW200 (REF_VIEW_BASE + 0x803a04u)
+#elif defined(MLV2_TARGET_A7C)
+#define HOOK_SET_ROOT         (REF_VIEW_BASE + 0x7fa2e0u)
+#define HOOK_REFRESH          (REF_VIEW_BASE + 0x7fa718u)
+#define HOOK_OPEN_ITEM        (REF_VIEW_BASE + 0x7facdcu)
+#define RECT_TBL1_SLOT6       (REF_VIEW_BASE + 0x9ff308u)
+#define RECT_TBL2_SLOT6       (REF_VIEW_BASE + 0x9ff388u)
+#define RECT_TBL1_SLOT6_FW200 (REF_VIEW_BASE + 0x9ff308u)
+#define RECT_TBL2_SLOT6_FW200 (REF_VIEW_BASE + 0x9ff388u)
 #else
 #define HOOK_SET_ROOT         0x15b91654u
 #define HOOK_REFRESH          0x15b91a80u

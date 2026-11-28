@@ -219,22 +219,22 @@ class StatusSnapshot:
 
 STATUS_SNAPSHOT = StatusSnapshot(
     schema_version=1,
-    as_of="2026-11-24",
+    as_of="2026-11-26",
     latest=EvidenceRef(
-        evidence_id="E9104",
-        path="docs/evidence/9104-a6100-photonbin-6mp-port.md",
-        date="2026-11-24",
-        title="PhotonBin 6MP ported to ILCE-6100 1.00 and verified on physical hardware",
+        evidence_id="E9201",
+        path="docs/evidence/9201-ilce-7c-qemu-and-mlv2-port.md",
+        date="2026-11-26",
+        title="ILCE-7C QEMU emulator bring-up and Mod Loader v2 (mlv2) port",
         demonstrated=(
-            "Ported PhotonBin 6MP to ILCE-6100 1.00, fixed MakeRawInfoArea IFD-relative out-of-line offsets, "
-            "4 KiB DMM extent alignment, and Call 2 stack RawInfoArea re-application, and verified 6 MP 16-bit "
-            "uncompressed .ARW capture (_DSC5765.ARW), Force HCG (_DSC5769.ARW vs _DSC5770.ARW), and SMNU v4 core.bin SD boot."
+            "Ported Mod Loader v2 (mlv2 --target a7c) with verified viewUnified2.so, libObj.so, and "
+            "libtestcmd.so offsets, added qemu-a7c slot-B lens-reply and 16 MiB hostwin shared-memory "
+            "transfer (2.67 s push for 594,960 B mlv2_guard), and verified mlv2 check/install in live QEMU."
         ),
         boundary=(
-            "Verified on physical ILCE-6100 1.00 via RAM-only Mod Loader v2 + SD card MLV2.TAR (requires SMNU v4 "
-            "core.bin and matching SHA-256 in /setting/mlv2_sd_boot.sh)."
+            "Verified offline against extracted ILCE-7C firmware binaries and in live ILCE-7C QEMU; "
+            "requires user-supplied ILCE-7C flash dump and physical hardware testing remains open."
         ),
-        tier="PHYSICAL HARDWARE + UNICORN",
+        tier="QEMU EMULATOR + BINARY LAYOUT",
     ),
     headline="ILCE-6400A SD boot & 10 mods | ILCE-6100 MLCR & Film Sims | L3 OSD surface",
     cards=(

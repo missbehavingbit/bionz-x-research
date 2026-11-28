@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A7C Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --body: #1d1e20; --body2: #26282b; --edge: #3a3d42; --btn: #2f3236; --btnhi: #3d4146;
+    --txt: #d8dadd; --dim: #8b9097; --accent: #e8792b; --rec: #d23b3b; --ok: #5bb974;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #121314; color: var(--txt);
+    font: 14px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 18px auto; padding: 0 14px; }
+  .camera { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 22px;
+    background: linear-gradient(180deg, var(--body2), var(--body)); border: 1px solid var(--edge);
+    border-radius: 22px; padding: 22px; box-shadow: 0 10px 40px #0008; }
+  .lcdwrap { position: relative; background: #000; border-radius: 10px; border: 6px solid #0c0c0d;
+    box-shadow: inset 0 0 0 1px #333; aspect-ratio: 4 / 3; overflow: hidden; }
+  #lcd { width: 100%; height: 100%; object-fit: contain; display: block; image-rendering: auto; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; color: var(--dim); text-align: center; padding: 20px; }
+  #overlay b { color: var(--txt); font-size: 17px; font-weight: 600; }
+  .controls { display: flex; flex-direction: column; gap: 16px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+    margin-bottom: 6px; }
+  button { font: inherit; color: var(--txt); background: var(--btn); border: 1px solid var(--edge);
+    border-radius: 9px; padding: 8px 12px; cursor: pointer; user-select: none; touch-action: none;
+    transition: background .08s, transform .08s; }
+  button:hover { background: var(--btnhi); }
+  button.held, button:active { background: var(--accent); color: #111; border-color: var(--accent);
+    transform: translateY(1px); }
+  button.small { padding: 5px 9px; font-size: 13px; }
+  .key { display: inline-block; font-size: 10px; color: var(--dim); margin-left: 4px; }
+  button.held .key, button:active .key { color: #222; }
+  .dial { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .dial button { padding: 6px 0; font-size: 13px; }
+  .dial button.on { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
+  .ev { display: flex; align-items: center; gap: 8px; }
+  #evval { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .shutter { display: flex; gap: 8px; }
+  .shutter button { flex: 1; border-radius: 22px; }
+  #movie { color: var(--rec); font-weight: 700; }
+  #movie.held { color: #111; }
+  /* control wheel */
+  .wheel { position: relative; width: 190px; height: 190px; margin: 4px auto; border-radius: 50%;
+    background: radial-gradient(circle, #2a2d31 0 34%, #1a1b1d 35% 36%, #2b2e32 37% 100%);
+    border: 1px solid var(--edge); }
+  .wheel button { position: absolute; width: 50px; height: 40px; padding: 0; border-radius: 8px;
+    background: transparent; border-color: transparent; font-size: 16px; }
+  .wheel button:hover { background: #ffffff14; }
+  .wheel button.held, .wheel button:active { background: var(--accent); }
+  .w-up { left: 70px; top: 6px; } .w-down { left: 70px; bottom: 6px; }
+  .w-left { left: 4px; top: 75px; } .w-right { right: 4px; top: 75px; }
+  .wheel .w-ok { left: 55px; top: 55px; width: 80px; height: 80px; border-radius: 50%;
+    background: var(--btn); border-color: var(--edge); font-size: 13px; }
+  .wheelrot { display: flex; justify-content: space-between; margin-top: 4px; }
+  .bar { margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    color: var(--dim); font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #666; display: inline-block; }
+  .dot.running { background: var(--ok); } .dot.paused { background: var(--accent); }
+  #console { flex: 1 1 300px; font: 12px ui-monospace, Consolas, monospace; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; color: #9aa0a6; }
+  #msg { color: var(--accent); }
+  details { margin-top: 12px; color: var(--dim); font-size: 13px; }
+  details table { border-collapse: collapse; margin-top: 6px; }
+  details td { padding: 2px 14px 2px 0; }
+  kbd { font: 12px ui-monospace, Consolas, monospace; background: #2a2c30; border: 1px solid #3a3d42;
+    border-radius: 4px; padding: 0 5px; color: var(--txt); }
+  .modcard { margin-top: 14px; background: var(--body); border: 1px solid var(--edge); border-radius: 14px; padding: 14px 18px; }
+  .modhead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+  .modhead h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  #moddev-state { color: var(--accent); font-weight: 500; }
+  .watchbar { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+  .watchbar input { flex: 1; background: #141517; color: var(--txt); border: 1px solid var(--edge); border-radius: 8px; padding: 6px 10px; font: 12px ui-monospace, Consolas, monospace; }
+  .modtbl { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  .modtbl th, .modtbl td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #2b2d31; }
+  .modtbl th { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .modtbl td.empty { color: var(--dim); font-style: italic; }
+  #moddev-events { margin: 6px 0 0; padding-left: 20px; font: 12px/1.4 ui-monospace, Consolas, monospace; color: #9aa0a6; max-height: 150px; overflow: auto; }
+  #loader-log { margin: 6px 0 0; padding: 8px 10px; background: #141517; border: 1px solid #2b2d31; border-radius: 8px; font: 12px/1.4 ui-monospace, Consolas, monospace; color: #b9bec5; max-height: 180px; overflow: auto; white-space: pre-wrap; }
+  body.drop { outline: 3px dashed var(--accent); outline-offset: -6px; }
+  @media (max-width: 860px) { .camera { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="camera">
+    <div>
+      <div class="lcdwrap">
+        <img id="lcd" alt="Camera display">
+        <div id="overlay"><b>Camera booting…</b><span id="ovtext">Connecting to emulator</span></div>
+      </div>
+      <div class="bar">
+        <span class="dot" id="dot"></span><span id="state">–</span>
+        <span id="uptime"></span>
+        <span id="console"></span>
+      </div>
+      <div class="bar">
+        <button class="small" id="pause">Pause</button>
+        <button class="small" id="restart">Restart</button>
+        <button class="small" id="shot">Save screenshot</button>
+        <span id="msg"></span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div>
+        <div class="label">Mode Dial</div>
+        <div class="dial" id="dial"></div>
+      </div>
+
+      <div class="row" style="justify-content: space-between">
+        <div>
+          <div class="label">Exposure Comp.</div>
+          <div class="ev">
+            <button class="small" data-tap="minus">−<span class="key">-</span></button>
+            <span id="evval">0</span>
+            <button class="small" data-tap="equal">+<span class="key">=</span></button>
+          </div>
+        </div>
+        <div class="row">
+          <button data-hold="c">C1<span class="key">C</span></button>
+          <button data-hold="a">AEL<span class="key">A</span></button>
+        </div>
+      </div>
+
+      <div>
+        <div class="label">Shutter</div>
+        <div class="shutter">
+          <button data-hold="h">Half press<span class="key">H</span></button>
+          <button data-hold="spc">Full press<span class="key">Space</span></button>
+          <button data-hold="r" id="movie">● REC<span class="key">R</span></button>
+        </div>
+      </div>
+
+      <div class="row" style="justify-content: space-between">
+        <button data-hold="m">MENU<span class="key">M</span></button>
+        <button data-hold="f">Fn<span class="key">F</span></button>
+        <button data-hold="p">▶<span class="key">P</span></button>
+        <button data-hold="delete">🗑<span class="key">Del</span></button>
+      </div>
+
+      <div>
+        <div class="label">Control Wheel</div>
+        <div class="wheel">
+          <button class="w-up" data-hold="up" title="Up / DISP">▲</button>
+          <button class="w-left" data-hold="left" title="Left">◀</button>
+          <button class="w-ok" data-hold="ret" title="Center (Enter)">OK</button>
+          <button class="w-right" data-hold="right" title="Right">▶</button>
+          <button class="w-down" data-hold="down" title="Down">▼</button>
+        </div>
+        <div class="wheelrot">
+          <button class="small" data-tap="bracket_left">↺ Turn<span class="key">[</span></button>
+          <button class="small" data-tap="bracket_right">Turn ↻<span class="key">]</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <details>
+    <summary>Keyboard shortcuts and tips</summary>
+    <table>
+      <tr><td><kbd>Arrows</kbd> <kbd>Enter</kbd></td><td>control wheel</td></tr>
+      <tr><td><kbd>M</kbd> <kbd>F</kbd> <kbd>P</kbd> <kbd>Del</kbd></td><td>MENU, Fn, playback, delete</td></tr>
+      <tr><td><kbd>H</kbd> / <kbd>Space</kbd></td><td>shutter half / full</td></tr>
+      <tr><td><kbd>R</kbd> <kbd>C</kbd> <kbd>A</kbd></td><td>movie, C1, AEL</td></tr>
+      <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>turn control wheel</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>0</kbd></td><td>mode dial: AUTO P A S M MR1 MR2 MR3 Movie S&amp;Q</td></tr>
+      <tr><td><kbd>-</kbd> <kbd>=</kbd></td><td>exposure compensation</td></tr>
+    </table>
+    <p>A click is a short press; hold the mouse button down for a long press. The emulator can
+      be slow, so wait until the screen updates before the next press.<span id="minhold" hidden></span></p>
+  </details>
+
+  <section class="modcard" id="modcard">
+    <div class="modhead">
+      <h2>Mod Loader v2 · <span id="moddev-state">waiting…</span></h2>
+      <div class="row">
+        <button class="small" id="mod-load" title="Load .mod file (or drag and drop onto the page)">＋ Load mod</button>
+        <button class="small" id="mod-watch-toggle" aria-expanded="false" title="Watch a local .mod file and reload on rebuild">◉ Watch build…</button>
+        <button class="small" id="mod-reload-all" title="Reload all watched mods">↻ Reload all</button>
+        <button class="small" id="mod-core" title="Push core.bin again">Core</button>
+        <button class="small" id="mod-rescan" title="Press MENU to rescan mods">Rescan</button>
+      </div>
+    </div>
+    <input id="modfile" type="file" accept=".mod" multiple hidden>
+    <div class="watchbar" id="watchbar" hidden>
+      <input id="watch-path" placeholder="Path to .mod (e.g. C:\...\MyMod.mod or /path/to/ActionTest.mod)">
+      <button class="small" id="watch-go">Watch</button>
+    </div>
+    <table class="modtbl">
+      <thead><tr><th>Mod</th><th>Status</th><th></th></tr></thead>
+      <tbody id="moddev-rows"><tr><td colspan="3" class="empty">No mods loaded. Use “Load mod” or drop .mod files here.</td></tr></tbody>
+    </table>
+    <details><summary>Events</summary><ol id="moddev-events"></ol></details>
+    <details id="logwrap"><summary>Loader log <button class="small" id="mod-log-refresh" type="button">Refresh</button></summary><pre id="loader-log">(empty)</pre></details>
+  </section>
+</main>
+
+<script>
+"use strict";
+const DIAL = [["AUTO","1"],["P","2"],["A","3"],["S","4"],["M","5"],
+              ["MR1","6"],["MR2","7"],["MR3","8"],["Movie","9"],["S&Q","0"]];
+const KEYMAP = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right",
+  Enter:"ret", m:"m", f:"f", p:"p", Delete:"delete", h:"h", " ":"spc", r:"r", c:"c", a:"a",
+  "[":"bracket_left", "]":"bracket_right", "-":"minus", "=":"equal", "+":"equal" };
+const TAP = new Set(["bracket_left","bracket_right","minus","equal","1","2","3","4","5","6","7","8","9","0"]);
+const $ = id => document.getElementById(id);
+let ev = 0, dialKey = "2";
+
+function post(path, body, type) {
+  const opts = { method: "POST", headers: { "X-A7C-Panel": "1" } };
+  if (body !== undefined) {
+    opts.body = body;
+    if (type) opts.headers["Content-Type"] = type;
+  }
+  return fetch(path, opts)
+    .then(r => r.json()).catch(() => ({ error: "no connection to panel" }));
+}
+function flash(text) { $("msg").textContent = text; setTimeout(() => { if ($("msg").textContent === text) $("msg").textContent = ""; }, 4000); }
+
+function buttonsFor(key) { return document.querySelectorAll(`[data-hold="${key}"],[data-tap="${key}"]`); }
+function press(key) {
+  if (TAP.has(key)) { tap(key); return; }
+  buttonsFor(key).forEach(b => b.classList.add("held"));
+  post("/key/down/" + key);
+}
+function release(key) {
+  if (TAP.has(key)) return;
+  buttonsFor(key).forEach(b => b.classList.remove("held"));
+  post("/key/up/" + key);
+}
+function tap(key) {
+  post("/key/tap/" + key);
+  if (key === "equal") setEv(ev + 1);
+  if (key === "minus") setEv(ev - 1);
+  if (/^[0-9]$/.test(key)) setDial(key);
+  buttonsFor(key).forEach(b => { b.classList.add("held"); setTimeout(() => b.classList.remove("held"), 150); });
+}
+function setEv(v) { ev = Math.max(-9, Math.min(9, v)); $("evval").textContent = (ev > 0 ? "+" : "") + (ev / 3).toFixed(1).replace(".0", ""); }
+function setDial(k) {
+  dialKey = k;
+  document.querySelectorAll("#dial button").forEach(b => b.classList.toggle("on", b.dataset.tap === k));
+}
+
+// dial buttons
+for (const [name, k] of DIAL) {
+  const b = document.createElement("button");
+  b.dataset.tap = k; b.textContent = name; b.title = "Key " + k;
+  $("dial").appendChild(b);
+}
+setDial(dialKey);
+
+// pointer handling: held keys follow the mouse/finger, tapped keys fire once
+document.querySelectorAll("[data-hold]").forEach(b => {
+  const k = b.dataset.hold;
+  let down = false;
+  b.addEventListener("pointerdown", e => { e.preventDefault(); b.setPointerCapture(e.pointerId); down = true; press(k); });
+  const up = () => { if (down) { down = false; release(k); } };
+  b.addEventListener("pointerup", up);
+  b.addEventListener("pointercancel", up);
+  b.addEventListener("lostpointercapture", up);
+});
+document.querySelectorAll("[data-tap]").forEach(b =>
+  b.addEventListener("click", () => tap(b.dataset.tap)));
+
+// keyboard
+const kbDown = new Set();
+function keyName(e) {
+  if (/^[0-9]$/.test(e.key)) return e.key;
+  return KEYMAP[e.key] || KEYMAP[e.key.toLowerCase()];
+}
+addEventListener("keydown", e => {
+  if (e.target && e.target.matches("input,textarea")) return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const k = keyName(e); if (!k) return;
+  e.preventDefault();
+  if (e.repeat || kbDown.has(k)) return;
+  kbDown.add(k); press(k);
+});
+addEventListener("keyup", e => {
+  const k = keyName(e); if (!k || !kbDown.has(k)) return;
+  kbDown.delete(k); release(k);
+});
+addEventListener("blur", () => { kbDown.forEach(release); kbDown.clear(); });
+
+// toolbar
+$("pause").onclick = async () => {
+  const paused = $("pause").dataset.paused === "1";
+  const r = await post(paused ? "/emu/resume" : "/emu/pause");
+  if (r.error) flash(r.error);
+};
+$("restart").onclick = async () => {
+  if (!confirm("Restart the emulator? It takes a few minutes before the display reappears.")) return;
+  await post("/emu/restart"); setEv(0); setDial("2"); flash("Restarting…");
+};
+$("shot").onclick = async () => {
+  const r = await post("/emu/screenshot"); flash(r.saved ? "Saved: " + r.saved : (r.error || "error"));
+};
+
+// screen
+let lastUrl = null, everVisible = false;
+async function frame() {
+  try {
+    const r = await fetch("/lcd.png", { cache: "no-store" });
+    if (r.ok) {
+      const blank = r.headers.get("X-A7C-Lcd") === "blank";
+      const url = URL.createObjectURL(await r.blob());
+      $("lcd").src = url;
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = url;
+      if (!blank) everVisible = true;
+      $("overlay").style.display = blank && !everVisible ? "flex" : "none";
+    } else {
+      $("overlay").style.display = "flex";
+    }
+  } catch (e) { $("overlay").style.display = "flex"; }
+  setTimeout(frame, 300);
+}
+frame();
+
+// status
+async function status() {
+  try {
+    const s = await (await fetch("/status", { cache: "no-store" })).json();
+    const st = s.running ? s.state : "stopped";
+    $("state").textContent = { running: "running", paused: "paused" }[st] || st;
+    $("dot").className = "dot " + (s.state || "");
+    const m = Math.floor(s.uptime / 60), sec = String(s.uptime % 60).padStart(2, "0");
+    $("uptime").textContent = s.running ? `${m}:${sec}` : "";
+    $("console").textContent = s.console || "";
+    $("console").title = s.console || "";
+    $("pause").textContent = s.state === "paused" ? "Resume" : "Pause";
+    $("pause").dataset.paused = s.state === "paused" ? "1" : "0";
+    $("minhold").textContent = (s.min_hold / 1000).toString();
+    if (!everVisible) {
+      $("ovtext").textContent = s.running
+        ? `Booting (${m}:${sec}). The display usually appears after 7–8 minutes.`
+        : "Emulator is not running.";
+      if (s.running && s.uptime > 0) $("overlay").querySelector("b").textContent = "Camera booting…";
+    }
+    if (!s.running) { everVisible = false; }
+  } catch (e) {
+    $("state").textContent = "no connection to panel";
+    $("dot").className = "dot";
+  }
+  setTimeout(status, 1000);
+}
+status();
+
+// moddev
+async function modAct(label, path, body, type) {
+  const r = await post(path, body, type);
+  flash(r.error ? r.error : label);
+  moddev();
+}
+async function uploadMods(files) {
+  for (const f of files) {
+    if (!f.name.endsWith(".mod")) { flash(f.name + " is not a .mod file"); continue; }
+    await modAct("Loaded " + f.name, "/mods/upload?name=" + encodeURIComponent(f.name),
+                 await f.arrayBuffer(), "application/octet-stream");
+  }
+}
+$("mod-load").onclick = () => $("modfile").click();
+$("modfile").onchange = () => { uploadMods($("modfile").files); $("modfile").value = ""; };
+$("mod-watch-toggle").onclick = () => {
+  const show = $("watchbar").hidden;
+  $("watchbar").hidden = !show;
+  $("mod-watch-toggle").setAttribute("aria-expanded", String(show));
+  if (show) $("watch-path").focus();
+};
+$("watch-go").onclick = () => {
+  const p = $("watch-path").value.trim();
+  if (p) modAct("Watching " + p, "/mods/watch", JSON.stringify({ path: p }), "application/json");
+};
+$("mod-reload-all").onclick = async () => {
+  const s = await (await fetch("/moddev", { cache: "no-store" })).json();
+  for (const m of s.mods || []) await modAct("Reloading " + m.name + "…", "/mods/reload/" + encodeURIComponent(m.name));
+};
+$("mod-core").onclick = () => modAct("Pushing core.bin…", "/loader/core");
+$("mod-rescan").onclick = () => modAct("Pressing MENU…", "/loader/rescan");
+$("mod-log-refresh").onclick = async e => {
+  e.stopPropagation();
+  try {
+    const d = await (await fetch("/moddev/log", { cache: "no-store" })).json();
+    $("loader-log").textContent = (d.loader_log && d.loader_log.length) ? d.loader_log.join("\n") : "(empty)";
+  } catch (err) { $("loader-log").textContent = "(fetch error)"; }
+};
+addEventListener("dragover", e => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); document.body.classList.add("drop"); } });
+addEventListener("dragleave", e => { if (e.relatedTarget === null) document.body.classList.remove("drop"); });
+addEventListener("drop", e => { document.body.classList.remove("drop"); if (e.dataTransfer?.files?.length) { e.preventDefault(); uploadMods(e.dataTransfer.files); } });
+
+async function moddev() {
+  try {
+    const s = await (await fetch("/moddev", { cache: "no-store" })).json();
+    $("moddev-state").textContent = (s.state || "unknown") + (s.queued ? ` (${s.queued} queued)` : "");
+    const tbody = $("moddev-rows");
+    tbody.replaceChildren();
+    if (!s.mods || !s.mods.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 3; td.className = "empty";
+      td.textContent = "No mods loaded. Use “Load mod” or drop .mod files here.";
+      tr.append(td); tbody.append(tr);
+    } else {
+      for (const m of s.mods) {
+        const tr = document.createElement("tr");
+        const n = document.createElement("td"); n.textContent = m.name; n.title = m.path;
+        const st = document.createElement("td"); st.textContent = m.last || "–";
+        const act = document.createElement("td"); act.style.whiteSpace = "nowrap";
+        const r = document.createElement("button"); r.className = "small"; r.textContent = "↻"; r.title = "Reload " + m.name;
+        r.onclick = () => modAct("Reloading " + m.name + "…", "/mods/reload/" + encodeURIComponent(m.name));
+        const d = document.createElement("button"); d.className = "small"; d.textContent = "✕"; d.title = "Remove " + m.name;
+        d.onclick = () => modAct("Removed " + m.name, "/mods/remove/" + encodeURIComponent(m.name));
+        act.append(r, " ", d);
+        tr.append(n, st, act);
+        tbody.append(tr);
+      }
+    }
+    const evList = $("moddev-events");
+    evList.replaceChildren(...(s.events || []).slice(-12).reverse().map(t => {
+      const li = document.createElement("li"); li.textContent = t; return li;
+    }));
+  } catch (e) {}
+  setTimeout(moddev, 1500);
+}
+moddev();
+</script>
+</body>
+</html>

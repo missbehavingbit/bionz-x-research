@@ -13,6 +13,7 @@ records = [
   "E0575-E0577",
   "E0592",
   "E9101-E9104",
+  "E9201",
   "0680-photonbin-6mp-and-mlv2-nested-submenus.md",
   "0681-ilce-6400a-standalone-sd-boot-and-exfat-reader.md",
   "E0688",
@@ -160,6 +161,13 @@ entities = ["mod.wifisync"]
 status = "open"
 text = "The 5 GHz SoftAP (bcmdhd + wpa_supplicant AP mode + dhcpd) and the on-camera Fsys reads have not been run on a physical camera; the Phase 1/2 gates remain open."
 evidence = ["E0698"]
+
+[[claim]]
+id = "C16"
+entities = ["mod.loader-v2"]
+status = "verified-offline"
+text = "Mod Loader v2 was ported to the ILCE-7C (mlv2 --target a7c) and verified in the ILCE-7C QEMU emulator (qemu-a7c) with slot-B lens-reply and 16 MiB hostwin shared-memory transfer (MLV2_RESULT=0 changed=1)."
+evidence = ["E9201"]
 
 [[frontier]]
 id = "F01"
